@@ -267,7 +267,7 @@ MODULE_SRCS = \\
 MODULE_INCS = \\
 \t${incs.join(' \\\n\t')}
 
-MODULE_LIBS = ${Array.from(libs).join(' ')}
+MODULE_LIBS =${Array.from(libs).length ? ` ${Array.from(libs).join(' ')}` : ''}
 `;
 
     const makefileModulesPath = path.join(ROOT_DIR, 'Makefile.modules');
@@ -336,4 +336,3 @@ if (cmd === 'catalog') {
 } else {
     console.log(`Usage: bun tools/modules.js [catalog | list | configure [--modules mod1,mod2 | --all]]`);
 }
-

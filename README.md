@@ -122,7 +122,6 @@ AthenaEnv is a complete JavaScript Runtime Environment for the PlayStation 2. It
   • Outline and dropshadow support  
   • Alignment support  
 
-* Pads: DS2/3/4 input support.  
   • Gamepad type recognition  
   • Pressure sentivity  
   • Rumble support  

@@ -4,8 +4,8 @@
 #include "../quickjs/quickjs.h"
 
 typedef struct {
-    const char *id;           /* Identifier, e.g. "system", "pad" */
-    const char *module_name;  /* QuickJS module name, e.g. "System", "Pads" */
+    const char *id;           /* Identifier, e.g. "system" */
+    const char *module_name;  /* QuickJS module name, e.g. "System" */
     const char *global_alias; /* Global alias for globalThis (or NULL if none) */
     JSModuleDef *(*init)(JSContext *ctx);
     void (*cleanup)(JSContext *ctx);

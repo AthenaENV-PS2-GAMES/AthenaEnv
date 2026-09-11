@@ -1,5 +1,5 @@
 /**
- * AthenaEnv v2 Type Definitions for VS Code IntelliSense (Pure JavaScript)
+ * AthenaEnv Type Definitions for VS Code IntelliSense (Pure JavaScript)
  * Generated based on selected modules.
  */
 
@@ -17,111 +17,25 @@ declare function setImmediate(handler: (...args: any[]) => void, ...args: any[])
 declare function clearImmediate(handle?: any): void;
 
 
-/* === Module: Gamepad Controller (Pads) (pad) === */
-declare interface Pad {
-    /** Controller port index (0 or 1) */
-    readonly port: number;
-
-    /** Current button bitmask pressed */
-    readonly btns: number;
-
-    /** Left analog stick X axis (-127 to 127) */
-    readonly lx: number;
-
-    /** Left analog stick Y axis (-127 to 127) */
-    readonly ly: number;
-
-    /** Right analog stick X axis (-127 to 127) */
-    readonly rx: number;
-
-    /** Right analog stick Y axis (-127 to 127) */
-    readonly ry: number;
-
-    /** Previous frame button bitmask */
-    readonly old_btns: number;
-
-    /** Previous frame left analog X */
-    readonly old_lx: number;
-
-    /** Previous frame left analog Y */
-    readonly old_ly: number;
-
-    /** Previous frame right analog X */
-    readonly old_rx: number;
-
-    /** Previous frame right analog Y */
-    readonly old_ry: number;
-
-    /** Polls hardware and updates internal button and stick states for the current frame */
-    update(): void;
-
-    /** Checks if a specific button is currently held down */
-    pressed(button: number): boolean;
-
-    /** Checks if a button was pressed down in this exact frame (rising edge) */
-    justPressed(button: number): boolean;
-}
-
-declare namespace Pads {
-    /** Initialize controller subsystems */
-    function init(): void;
-
-    /** Get the Pad controller instance for the given port (0 for Port 1, 1 for Port 2) */
-    function get(port?: number): Pad;
-
-    /** Returns controller type (e.g. TYPE_DIGITAL, TYPE_DUALSHOCK) */
-    function getType(port?: number): number;
-
-    /** Returns controller connection state (e.g. STATE_STABLE, STATE_DISCONN) */
-    function getState(port?: number): number;
-
-    /** Returns true if controller is connected and ready to send data */
-    function isActive(port?: number): boolean;
-
-    /** Returns an array of connected port numbers (e.g. [0, 1]) */
-    function getConnected(): number[];
-
-    /** Returns number of connected controllers */
-    function getConnectedCount(): number[];
-
-    /** Trigger vibration motors (rumble) */
-    function rumble(port: number, smallMotor: number, largeMotor: number): void;
-    function rumble(smallMotor: number, largeMotor: number): void;
-
-    /* Buttons */
-    const SELECT: number;
-    const START: number;
-    const UP: number;
-    const RIGHT: number;
-    const DOWN: number;
-    const LEFT: number;
-    const TRIANGLE: number;
-    const CIRCLE: number;
-    const CROSS: number;
-    const SQUARE: number;
-    const L1: number;
-    const R1: number;
-    const L2: number;
-    const R2: number;
-    const L3: number;
-    const R3: number;
-
-    /* Pad Types */
-    const TYPE_DIGITAL: number;
-    const TYPE_ANALOG: number;
-    const TYPE_DUALSHOCK: number;
-
-    /* States */
-    const STATE_DISCONN: number;
-    const STATE_STABLE: number;
-    const STATE_ERROR: number;
-}
-
-
 /* === Module: System Core (system) === */
 declare namespace System {
     /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
     const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in the current directory or in a path relative to bootPath. */
+    function listDir(path?: string): { name: string; size: number; dir: boolean }[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    function rename(source: string, destination: string): number;
 
     /** Returns raw CPU clock ticks */
     function getTicks(): number;
@@ -138,9 +52,64 @@ declare namespace System {
     /** Returns remaining available RAM in bytes */
     function getFreeMemory(): number;
 
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): {
+        core: number;
+        nativeStack: number;
+        allocs: number;
+        used: number;
+    };
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): {
+        implementation: number;
+        revision: number;
+        RAMSize: number;
+        BUSClock: number;
+        CPUClock: number;
+        MachineType: number;
+    };
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): { revision: number; id: number };
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a slot. */
+    function getMCInfo(slot?: number): {
+        type: number;
+        freemem: number;
+        format: number;
+    };
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): { name: string; desc: string }[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
     /** Force QuickJS garbage collection */
     function gc(): void;
 
     /** Exit application to the PS2 browser/OSDSYS */
     function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
 }

@@ -1,6 +1,21 @@
 declare namespace System {
     /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
     const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in the current directory or in a path relative to bootPath. */
+    function listDir(path?: string): { name: string; size: number; dir: boolean }[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    function rename(source: string, destination: string): number;
 
     /** Returns raw CPU clock ticks */
     function getTicks(): number;
@@ -17,9 +32,64 @@ declare namespace System {
     /** Returns remaining available RAM in bytes */
     function getFreeMemory(): number;
 
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): {
+        core: number;
+        nativeStack: number;
+        allocs: number;
+        used: number;
+    };
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): {
+        implementation: number;
+        revision: number;
+        RAMSize: number;
+        BUSClock: number;
+        CPUClock: number;
+        MachineType: number;
+    };
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): { revision: number; id: number };
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a slot. */
+    function getMCInfo(slot?: number): {
+        type: number;
+        freemem: number;
+        format: number;
+    };
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): { name: string; desc: string }[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
     /** Force QuickJS garbage collection */
     function gc(): void;
 
     /** Exit application to the PS2 browser/OSDSYS */
     function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
 }
