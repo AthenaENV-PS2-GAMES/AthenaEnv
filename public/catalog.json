@@ -1,8 +1,23 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-11T21:29:58.802Z",
+  "generatedAt": "2026-09-11T21:36:37.834Z",
   "modules": [
+    {
+      "id": "mutex",
+      "name": "Mutex",
+      "description": "Binary mutual-exclusion primitives backed by EE semaphores.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Mutex"
+    },
     {
       "id": "system",
       "name": "System Core",
