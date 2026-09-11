@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <libmc.h>
 #include <libcdvd.h>
 #include <timer.h>
@@ -22,10 +23,12 @@
 #include <memory.h>
 #include <dbgprintf.h>
 
-static bool system_dark_mode;
-
-static JSValue athena_system_get_boot_path(JSContext *ctx, JSValueConst this_val, int magic) {
-    return JS_NewString(ctx, boot_path);
+static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
+    if (argc != expected) {
+        JS_ThrowTypeError(ctx, "%s expects %d argument%s", name, expected, expected == 1 ? "" : "s");
+        return 0;
+    }
+    return 1;
 }
 
 static JSValue athena_system_list_dir(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
@@ -41,12 +44,16 @@ static JSValue athena_system_list_dir(JSContext *ctx, JSValue this_val, int argc
     } else {
         const char *requested = JS_ToCString(ctx, argv[0]);
         if (!requested) return JS_EXCEPTION;
+        int written;
         if (strchr(requested, ':')) {
-            snprintf(path, sizeof(path), "%s", requested);
+            written = snprintf(path, sizeof(path), "%s", requested);
         } else {
-            snprintf(path, sizeof(path), "%s%s", boot_path, requested);
+            written = snprintf(path, sizeof(path), "%s%s", boot_path, requested);
         }
         JS_FreeCString(ctx, requested);
+        if (written < 0 || (size_t)written >= sizeof(path)) {
+            return JS_ThrowRangeError(ctx, "System.listDir path is too long");
+        }
     }
 
     DIR *dir = opendir(path);
@@ -79,7 +86,7 @@ static int athena_system_path_arg(JSContext *ctx, JSValueConst value, const char
 }
 
 static JSValue athena_system_remove_directory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 1) return JS_ThrowTypeError(ctx, "System.removeDirectory(directory) requires one argument");
+    if (!athena_system_require_argc(ctx, argc, 1, "System.removeDirectory")) return JS_EXCEPTION;
     const char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
     int result = rmdir(path);
@@ -88,7 +95,7 @@ static JSValue athena_system_remove_directory(JSContext *ctx, JSValue this_val, 
 }
 
 static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 2) return JS_ThrowTypeError(ctx, "System.copyFile(source, destination) requires two arguments");
+    if (!athena_system_require_argc(ctx, argc, 2, "System.copyFile")) return JS_EXCEPTION;
     const char *source_path;
     const char *destination_path;
     if (!athena_system_path_arg(ctx, argv[0], &source_path)) return JS_EXCEPTION;
@@ -104,17 +111,23 @@ static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int arg
         if (destination >= 0) close(destination);
         JS_FreeCString(ctx, source_path);
         JS_FreeCString(ctx, destination_path);
-        return JS_ThrowInternalError(ctx, "Unable to open file for copy");
+        return JS_ThrowInternalError(ctx, "Unable to open file for copy: %s", strerror(errno));
     }
 
     char buffer[4096];
     ssize_t read_size;
     int result = 0;
     while ((read_size = read(source, buffer, sizeof(buffer))) > 0) {
-        if (write(destination, buffer, read_size) != read_size) {
-            result = -1;
-            break;
+        ssize_t written = 0;
+        while (written < read_size) {
+            ssize_t current = write(destination, buffer + written, (size_t)(read_size - written));
+            if (current <= 0) {
+                result = -1;
+                break;
+            }
+            written += current;
         }
+        if (result != 0) break;
     }
     if (read_size < 0) result = -1;
     close(source);
@@ -125,7 +138,7 @@ static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int arg
 }
 
 static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 2) return JS_ThrowTypeError(ctx, "System.moveFile(source, destination) requires two arguments");
+    if (!athena_system_require_argc(ctx, argc, 2, "System.moveFile")) return JS_EXCEPTION;
     const char *source;
     const char *destination;
     if (!athena_system_path_arg(ctx, argv[0], &source)) return JS_EXCEPTION;
@@ -140,36 +153,46 @@ static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int arg
 }
 
 static JSValue athena_system_delay(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.delay takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.delay")) return JS_EXCEPTION;
     nopdelay();
     return JS_UNDEFINED;
 }
 
 static JSValue athena_system_set_dark_mode(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 1) return JS_ThrowTypeError(ctx, "System.setDarkMode(enabled) requires one argument");
-    system_dark_mode = JS_ToBool(ctx, argv[0]);
+    if (!athena_system_require_argc(ctx, argc, 1, "System.setDarkMode")) return JS_EXCEPTION;
+    dark_mode = JS_ToBool(ctx, argv[0]);
     return JS_UNDEFINED;
 }
 
 static JSValue athena_system_exit_to_browser(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.exitToBrowser takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.exitToBrowser")) return JS_EXCEPTION;
     Exit(0);
     return JS_UNDEFINED;
 }
 
 static JSValue athena_system_get_mc_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     int slot = 0;
-    if (argc > 1) return JS_ThrowTypeError(ctx, "System.getMCInfo([slot]) accepts zero or one argument");
+    if (argc > 1) return JS_ThrowTypeError(ctx, "System.getMCInfo accepts zero or one argument");
     if (argc == 1 && JS_ToInt32(ctx, &slot, argv[0])) return JS_EXCEPTION;
 
     int type = 0;
     int free_space = 0;
     int format = 0;
     int result = 0;
-    mcGetInfo(slot, 0, &type, &free_space, &format);
+    int request = mcGetInfo(slot, 0, &type, &free_space, &format);
+    if (request < 0) {
+        return JS_ThrowInternalError(ctx,
+            "Unable to request memory-card information: %d", request);
+    }
     mcSync(0, NULL, &result);
-    if (result < 0) {
-        return JS_ThrowInternalError(ctx, "Unable to read memory-card information");
+    /*
+     * mcSync returns -1/-2 when a formatted/unformatted card is detected
+     * for the first time. Those are valid memory-card states, not failures.
+     * Actual access errors are reported with values below -2.
+     */
+    if (result < -2) {
+        return JS_ThrowInternalError(ctx,
+            "Unable to read memory-card information: %d", result);
     }
 
     JSValue info = JS_NewObject(ctx);
@@ -187,6 +210,10 @@ static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc
     int arg_count = 0;
     char **args = NULL;
     if (argc == 2) {
+        if (!JS_IsArray(ctx, argv[1])) {
+            JS_FreeCString(ctx, path);
+            return JS_ThrowTypeError(ctx, "System.loadELF args must be an array");
+        }
         JSValue length = JS_GetPropertyStr(ctx, argv[1], "length");
         if (JS_ToInt32(ctx, &arg_count, length)) {
             JS_FreeValue(ctx, length);
@@ -249,7 +276,7 @@ static JSValue athena_system_mount(JSContext *ctx, JSValue this_val, int argc, J
 }
 
 static JSValue athena_system_umount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 1) return JS_ThrowTypeError(ctx, "System.umount(device) requires one argument");
+    if (!athena_system_require_argc(ctx, argc, 1, "System.umount")) return JS_EXCEPTION;
     const char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
     int result = fileXioUmount(device);
@@ -273,7 +300,7 @@ static JSValue athena_system_devices(JSContext *ctx, JSValue this_val, int argc,
 }
 
 static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 1) return JS_ThrowTypeError(ctx, "System.getBDMInfo(device) requires one argument");
+    if (!athena_system_require_argc(ctx, argc, 1, "System.getBDMInfo")) return JS_EXCEPTION;
     const char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
     int fd = fileXioDopen(device);
@@ -303,7 +330,7 @@ static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int 
 }
 
 static JSValue athena_system_get_cpu_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getCPUInfo takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getCPUInfo")) return JS_EXCEPTION;
     unsigned int cop0 = GetCop0(15);
     JSValue info = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info, "implementation", JS_NewInt32(ctx, (cop0 >> 8) & 0xff));
@@ -316,7 +343,7 @@ static JSValue athena_system_get_cpu_info(JSContext *ctx, JSValue this_val, int 
 }
 
 static JSValue athena_system_get_gpu_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getGPUInfo takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getGPUInfo")) return JS_EXCEPTION;
     volatile uint64_t *gs_csr = (volatile uint64_t *)0x12001000;
     uint16_t revision = (uint16_t)(*gs_csr >> 16);
     JSValue info = JS_NewObject(ctx);
@@ -326,7 +353,7 @@ static JSValue athena_system_get_gpu_info(JSContext *ctx, JSValue this_val, int 
 }
 
 static JSValue athena_system_get_temperature(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getTemperature takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getTemperature")) return JS_EXCEPTION;
     unsigned char command[1] = { 0xef };
     unsigned char response[16] = { 0 };
     if (sceCdApplySCmd(0x03, command, sizeof(command), response) == 0 || response[0] == 0) {
@@ -337,7 +364,7 @@ static JSValue athena_system_get_temperature(JSContext *ctx, JSValue this_val, i
 }
 
 static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getMemoryStats takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getMemoryStats")) return JS_EXCEPTION;
     JSValue info = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info, "core", JS_NewUint32(ctx, (uint32_t)get_binary_size()));
     JS_SetPropertyStr(ctx, info, "nativeStack", JS_NewUint32(ctx, (uint32_t)get_stack_size()));
@@ -347,21 +374,19 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
 }
 
 static JSValue athena_system_get_ticks(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getTicks takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getTicks")) return JS_EXCEPTION;
     return JS_NewInt64(ctx, (int64_t)clock());
 }
 
 static JSValue athena_system_get_ms(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getMilliseconds takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getMilliseconds")) return JS_EXCEPTION;
     clock_t c = clock();
     double ms = ((double)c / (double)CLOCKS_PER_SEC) * 1000.0;
     return JS_NewFloat64(ctx, ms);
 }
 
 static JSValue athena_system_sleep(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc < 1) {
-        return JS_ThrowTypeError(ctx, "System.sleep(milliseconds) requires 1 argument");
-    }
+    if (!athena_system_require_argc(ctx, argc, 1, "System.sleep")) return JS_EXCEPTION;
     int32_t ms = 0;
     if (JS_ToInt32(ctx, &ms, argv[0])) {
         return JS_EXCEPTION;
@@ -373,12 +398,12 @@ static JSValue athena_system_sleep(JSContext *ctx, JSValue this_val, int argc, J
 }
 
 static JSValue athena_system_get_used_memory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getUsedMemory takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getUsedMemory")) return JS_EXCEPTION;
     return JS_NewUint32(ctx, (uint32_t)get_used_memory());
 }
 
 static JSValue athena_system_get_free_memory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.getFreeMemory takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.getFreeMemory")) return JS_EXCEPTION;
     uint32_t total = GetMemorySize();
     uint32_t used = (uint32_t)get_used_memory();
     uint32_t free_mem = (total > used) ? (total - used) : 0;
@@ -386,12 +411,13 @@ static JSValue athena_system_get_free_memory(JSContext *ctx, JSValue this_val, i
 }
 
 static JSValue athena_system_gc(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    if (argc != 0) return JS_ThrowTypeError(ctx, "System.gc takes no arguments");
+    if (!athena_system_require_argc(ctx, argc, 0, "System.gc")) return JS_EXCEPTION;
     JS_RunGC(JS_GetRuntime(ctx));
     return JS_UNDEFINED;
 }
 
 static JSValue athena_system_exit(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+    if (!athena_system_require_argc(ctx, argc, 0, "System.exit")) return JS_EXCEPTION;
     dbgprintf("[AthenaCore] System.exit called\n");
     Exit(0);
     return JS_UNDEFINED;
@@ -423,8 +449,8 @@ static const JSCFunctionListEntry system_module_funcs[] = {
     JS_CFUNC_DEF("getFreeMemory", 0, athena_system_get_free_memory),
     JS_CFUNC_DEF("gc", 0, athena_system_gc),
     JS_CFUNC_DEF("exit", 0, athena_system_exit),
-    JS_CGETSET_MAGIC_DEF("bootPath", athena_system_get_boot_path, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("boot_path", athena_system_get_boot_path, NULL, 0),
+    JS_PROP_STRING_DEF("bootPath", boot_path, JS_PROP_ENUMERABLE),
+    JS_PROP_STRING_DEF("boot_path", boot_path, JS_PROP_ENUMERABLE),
 };
 
 static int athena_system_module_init(JSContext *ctx, JSModuleDef *m) {

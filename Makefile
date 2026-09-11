@@ -72,6 +72,7 @@ all: $(DIR_GUARD) $(EE_OBJS)
 	$(EE_STRIP) $(EE_BIN)
 	ps2-packer $(EE_BIN) $(EE_BIN_PKD) > /dev/null 2>&1 || true
 
+debug: EE_CFLAGS += -DDEBUG
 debug: $(DIR_GUARD) $(EE_OBJS)
 	$(EE_CXX) -T$(EE_LINKFILE) $(EE_OPTFLAGS) -o $(EE_BIN_DIR)tmp.elf $(EE_OBJS) $(EE_LDFLAGS) $(EXTRA_LDFLAGS) -Wno-write-strings $(EE_LIBS) $(EE_SRC_DIR)dummy-exports.c
 	sh ./build-exports.sh

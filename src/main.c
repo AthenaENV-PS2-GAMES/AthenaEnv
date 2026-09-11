@@ -27,6 +27,7 @@
 #include <excepHandler.h>
 
 char boot_path[255] = { 0 };
+bool dark_mode = true;
 char default_script[128] = "main.js";
 char default_cfg[128] = "athena.ini";
 
@@ -128,8 +129,11 @@ int main(int argc, char **argv) {
 
     getcwd(boot_path, sizeof(boot_path));
 
-    // Initialize serial/console debug output
+    // EE_SIO requires the SIF/IOP boot environment to be available.
     dbginit();
+    dbgprintf("[AthenaCore] Entered main(argc=%d)\n", argc);
+    dbgprintf("[AthenaCore] Memory manager initialized\n");
+    dbgprintf("[AthenaCore] IOP modules registered\n");
 
     dbgprintf("\n========================================\n");
     dbgprintf("       AthenaEnv Core (Minimal)      \n");
@@ -247,7 +251,7 @@ int main(int argc, char **argv) {
         printf("\n[AthenaCore Error]: %s\n", err_msg);
 
         // Render On-Screen Crash Screen on TV
-        athena_display_crash_screen("JavaScript Uncaught Exception", err_msg);
+        athena_display_crash_screen("JavaScript Uncaught Exception", err_msg, dark_mode);
 
         // Infinite loop to keep console output visible
         while (1) {

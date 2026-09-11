@@ -173,14 +173,14 @@ void installExceptionHandlers(void)
     }
 }
 
-void athena_display_crash_screen(const char *title, const char *err_msg)
+void athena_display_crash_screen(const char *title, const char *err_msg, bool dark_mode)
 {
     FlushCache(0);
     FlushCache(2);
 
     init_scr();
-    scr_setbgcolor(0x00400020);
-    scr_setcursorcolor(0x00400020);
+    scr_setbgcolor(dark_mode ? 0x00400020 : 0x00E0E0E0);
+    scr_setcursorcolor(dark_mode ? 0x00400020 : 0x00E0E0E0);
     scr_clear();
 
     scr_printf("\n");

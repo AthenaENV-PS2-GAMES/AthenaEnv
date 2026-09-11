@@ -17,6 +17,7 @@
 #define countof(x) (sizeof(x) / sizeof((x)[0]))
 
 extern char boot_path[255];
+extern bool dark_mode;
 
 void poweroffHandler(void *arg);
 
@@ -28,4 +29,3 @@ void set_default_script(const char* path);
 JSModuleDef *athena_push_module(JSContext* ctx, JSModuleInitFunc *func, const JSCFunctionListEntry *func_list, int len, const char* module_name);
 
 #endif
-

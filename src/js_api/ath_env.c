@@ -85,8 +85,9 @@ static int qjs_handle_fh(JSContext *ctx, FILE *f, const char *filename) {
 
     buf[bufoff++] = 0;
 
-    // Register std and console helpers
+    dbgprintf("[AthenaCore] Adding QuickJS std helpers\n");
     js_std_add_helpers(ctx, 0, NULL);
+    dbgprintf("[AthenaCore] QuickJS std helpers added\n");
 
     // Bootstrap global namespaces
     {
@@ -102,15 +103,19 @@ static int qjs_handle_fh(JSContext *ctx, FILE *f, const char *filename) {
             "globalThis.clearInterval = os.clearInterval;\n"
             "globalThis.clearImmediate = os.clearImmediate;\n";
 
+        dbgprintf("[AthenaCore] Evaluating base bootstrap\n");
         rc = qjs_eval_buf(ctx, base_bootstrap, strlen(base_bootstrap), "<bootstrap-base>", JS_EVAL_TYPE_MODULE);
+        dbgprintf("[AthenaCore] Base bootstrap returned %d\n", rc);
         if (rc != 0) { 
             free(buf);
             return retval; 
         }
 
+        dbgprintf("[AthenaCore] Evaluating module bootstrap\n");
         const char *modules_bootstrap = athena_get_modules_bootstrap_script();
         if (modules_bootstrap && modules_bootstrap[0] != '\0') {
             rc = qjs_eval_buf(ctx, modules_bootstrap, strlen(modules_bootstrap), "<bootstrap-modules>", JS_EVAL_TYPE_MODULE);
+            dbgprintf("[AthenaCore] Module bootstrap returned %d\n", rc);
             if (rc != 0) {
                 free(buf);
                 return retval;
@@ -197,10 +202,13 @@ const char* run_script(const char* script, bool isBuffer)
 
     dbgprintf("[AthenaCore] Executing entry script: %s\n", script);
     int s = qjs_handle_file(ctx, script);
+    dbgprintf("[AthenaCore] Entry script evaluation returned %d\n", s);
 
     if (s >= 0) {
         // Run event loop (timers, promises, microtasks)
+        dbgprintf("[AthenaCore] Starting QuickJS event loop\n");
         s = js_std_loop(ctx);
+        dbgprintf("[AthenaCore] QuickJS event loop returned %d\n", s);
     }
 
     if (s < 0) { 
@@ -225,10 +233,13 @@ const char* run_script(const char* script, bool isBuffer)
             JS_FreeValue(ctx, stack_val);
         }
         
+        dbgprintf("[AthenaCore] Destroying QuickJS runtime after error\n");
         destroy_vm(ctx);
         return error_buf; 
     }
     
+    dbgprintf("[AthenaCore] Destroying QuickJS runtime\n");
     destroy_vm(ctx);
+    dbgprintf("[AthenaCore] QuickJS runtime destroyed\n");
     return NULL;
 }
