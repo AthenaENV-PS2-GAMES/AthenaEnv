@@ -59,8 +59,8 @@ declare namespace System {
     /** Returns the console temperature in Celsius when supported. */
     function getTemperature(): number | undefined;
 
-    /** Returns memory-card information for a slot. */
-    function getMCInfo(slot?: number): {
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): {
         type: number;
         freemem: number;
         format: number;

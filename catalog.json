@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-11T16:00:51.935Z",
+  "generatedAt": "2026-09-11T21:19:32.662Z",
   "modules": [
     {
       "id": "system",
@@ -19,6 +19,21 @@
         "ee_libs": []
       },
       "global_alias": "System"
+    },
+    {
+      "id": "timer",
+      "name": "Timer",
+      "description": "Pauseable elapsed-time timers backed by the EE clock.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Timer"
     }
   ]
 }

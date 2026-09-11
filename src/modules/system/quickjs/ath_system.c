@@ -22,6 +22,7 @@
 #include "ath_system.h"
 #include <memory.h>
 #include <dbgprintf.h>
+#include "../native/system.h"
 
 static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -89,7 +90,7 @@ static JSValue athena_system_remove_directory(JSContext *ctx, JSValue this_val, 
     if (!athena_system_require_argc(ctx, argc, 1, "System.removeDirectory")) return JS_EXCEPTION;
     const char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
-    int result = rmdir(path);
+    int result = athena_system_remove_directory_native(path);
     JS_FreeCString(ctx, path);
     return JS_NewInt32(ctx, result);
 }
@@ -104,34 +105,7 @@ static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int arg
         return JS_EXCEPTION;
     }
 
-    int source = open(source_path, O_RDONLY, 0);
-    int destination = open(destination_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (source < 0 || destination < 0) {
-        if (source >= 0) close(source);
-        if (destination >= 0) close(destination);
-        JS_FreeCString(ctx, source_path);
-        JS_FreeCString(ctx, destination_path);
-        return JS_ThrowInternalError(ctx, "Unable to open file for copy: %s", strerror(errno));
-    }
-
-    char buffer[4096];
-    ssize_t read_size;
-    int result = 0;
-    while ((read_size = read(source, buffer, sizeof(buffer))) > 0) {
-        ssize_t written = 0;
-        while (written < read_size) {
-            ssize_t current = write(destination, buffer + written, (size_t)(read_size - written));
-            if (current <= 0) {
-                result = -1;
-                break;
-            }
-            written += current;
-        }
-        if (result != 0) break;
-    }
-    if (read_size < 0) result = -1;
-    close(source);
-    close(destination);
+    int result = athena_system_copy_file_native(source_path, destination_path);
     JS_FreeCString(ctx, source_path);
     JS_FreeCString(ctx, destination_path);
     return JS_NewInt32(ctx, result);
@@ -146,7 +120,7 @@ static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int arg
         JS_FreeCString(ctx, source);
         return JS_EXCEPTION;
     }
-    int result = rename(source, destination);
+    int result = athena_system_move_file_native(source, destination);
     JS_FreeCString(ctx, source);
     JS_FreeCString(ctx, destination);
     return JS_NewInt32(ctx, result);
@@ -154,7 +128,7 @@ static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int arg
 
 static JSValue athena_system_delay(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.delay")) return JS_EXCEPTION;
-    nopdelay();
+    athena_system_delay_native();
     return JS_UNDEFINED;
 }
 
@@ -171,34 +145,24 @@ static JSValue athena_system_exit_to_browser(JSContext *ctx, JSValue this_val, i
 }
 
 static JSValue athena_system_get_mc_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
-    int slot = 0;
+    int32_t port = 0;
     if (argc > 1) return JS_ThrowTypeError(ctx, "System.getMCInfo accepts zero or one argument");
-    if (argc == 1 && JS_ToInt32(ctx, &slot, argv[0])) return JS_EXCEPTION;
-
-    int type = 0;
-    int free_space = 0;
-    int format = 0;
-    int result = 0;
-    int request = mcGetInfo(slot, 0, &type, &free_space, &format);
-    if (request < 0) {
-        return JS_ThrowInternalError(ctx,
-            "Unable to request memory-card information: %d", request);
+    if (argc == 1 && JS_ToInt32(ctx, &port, argv[0])) return JS_EXCEPTION;
+    if (port < 0 || port > 1) {
+        return JS_ThrowRangeError(ctx, "System.getMCInfo port must be 0 or 1");
     }
-    mcSync(0, NULL, &result);
-    /*
-     * mcSync returns -1/-2 when a formatted/unformatted card is detected
-     * for the first time. Those are valid memory-card states, not failures.
-     * Actual access errors are reported with values below -2.
-     */
-    if (result < -2) {
+
+    AthenaMemoryCardInfo memory_card;
+    int result = athena_system_get_memory_card_info(port, &memory_card);
+    if (result < 0) {
         return JS_ThrowInternalError(ctx,
             "Unable to read memory-card information: %d", result);
     }
 
     JSValue info = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, info, "type", JS_NewInt32(ctx, type));
-    JS_SetPropertyStr(ctx, info, "freemem", JS_NewInt32(ctx, free_space));
-    JS_SetPropertyStr(ctx, info, "format", JS_NewInt32(ctx, format));
+    JS_SetPropertyStr(ctx, info, "type", JS_NewInt32(ctx, memory_card.type));
+    JS_SetPropertyStr(ctx, info, "freemem", JS_NewInt32(ctx, memory_card.free_space));
+    JS_SetPropertyStr(ctx, info, "format", JS_NewInt32(ctx, memory_card.format));
     return info;
 }
 
@@ -269,7 +233,7 @@ static JSValue athena_system_mount(JSContext *ctx, JSValue this_val, int argc, J
         JS_FreeCString(ctx, blockdev);
         return JS_EXCEPTION;
     }
-    int result = fileXioMount(mountpoint, blockdev, mode);
+    int result = athena_system_mount_native(mountpoint, blockdev, mode);
     JS_FreeCString(ctx, mountpoint);
     JS_FreeCString(ctx, blockdev);
     return JS_NewInt32(ctx, result);
@@ -279,7 +243,7 @@ static JSValue athena_system_umount(JSContext *ctx, JSValue this_val, int argc, 
     if (!athena_system_require_argc(ctx, argc, 1, "System.umount")) return JS_EXCEPTION;
     const char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
-    int result = fileXioUmount(device);
+    int result = athena_system_umount_native(device);
     JS_FreeCString(ctx, device);
     return JS_NewInt32(ctx, result);
 }
@@ -375,14 +339,12 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
 
 static JSValue athena_system_get_ticks(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.getTicks")) return JS_EXCEPTION;
-    return JS_NewInt64(ctx, (int64_t)clock());
+    return JS_NewInt64(ctx, (int64_t)athena_system_get_ticks_native());
 }
 
 static JSValue athena_system_get_ms(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.getMilliseconds")) return JS_EXCEPTION;
-    clock_t c = clock();
-    double ms = ((double)c / (double)CLOCKS_PER_SEC) * 1000.0;
-    return JS_NewFloat64(ctx, ms);
+    return JS_NewFloat64(ctx, athena_system_get_milliseconds_native());
 }
 
 static JSValue athena_system_sleep(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
@@ -391,23 +353,18 @@ static JSValue athena_system_sleep(JSContext *ctx, JSValue this_val, int argc, J
     if (JS_ToInt32(ctx, &ms, argv[0])) {
         return JS_EXCEPTION;
     }
-    if (ms > 0) {
-        usleep((useconds_t)((int64_t)ms * 1000));
-    }
+    athena_system_sleep_native(ms);
     return JS_UNDEFINED;
 }
 
 static JSValue athena_system_get_used_memory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.getUsedMemory")) return JS_EXCEPTION;
-    return JS_NewUint32(ctx, (uint32_t)get_used_memory());
+    return JS_NewUint32(ctx, athena_system_get_used_memory_native());
 }
 
 static JSValue athena_system_get_free_memory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.getFreeMemory")) return JS_EXCEPTION;
-    uint32_t total = GetMemorySize();
-    uint32_t used = (uint32_t)get_used_memory();
-    uint32_t free_mem = (total > used) ? (total - used) : 0;
-    return JS_NewUint32(ctx, free_mem);
+    return JS_NewUint32(ctx, athena_system_get_free_memory_native());
 }
 
 static JSValue athena_system_gc(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {

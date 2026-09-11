@@ -18,3 +18,5 @@ bin/brew_data.json
 
 src/exports.c
 *.erl
+
+path.md

@@ -7,7 +7,8 @@
   "required": true,
   "default": true,
   "sources": [
-    "ath_system.c"
+    "native/system.c",
+    "quickjs/ath_system.c"
   ],
   "includes": [
     "."
@@ -23,7 +24,7 @@
     "module_name": "System",
     "global_alias": "System",
     "init_func": "athena_system_init",
-    "header": "ath_system.h"
+    "header": "quickjs/ath_system.h"
   },
   "types": "system.d.ts"
 }

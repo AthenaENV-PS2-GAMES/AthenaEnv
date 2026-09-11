@@ -79,8 +79,8 @@ declare namespace System {
     /** Returns the console temperature in Celsius when supported. */
     function getTemperature(): number | undefined;
 
-    /** Returns memory-card information for a slot. */
-    function getMCInfo(slot?: number): {
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): {
         type: number;
         freemem: number;
         format: number;
@@ -112,4 +112,32 @@ declare namespace System {
 
     /** Alias for exiting to the PS2 browser/OSDSYS. */
     function exitToBrowser(): void;
+}
+
+
+/* === Module: Timer (timer) === */
+declare namespace Timer {
+    /** Creates a running timer and returns its opaque handle. */
+    function new(): number;
+
+    /** Returns elapsed clock ticks, or the frozen value while paused. */
+    function getTime(timer: number): number;
+
+    /** Sets the elapsed time in clock ticks. */
+    function setTime(timer: number, value: number): void;
+
+    /** Pauses the timer without resetting its elapsed time. */
+    function pause(timer: number): void;
+
+    /** Resumes a paused timer. */
+    function resume(timer: number): void;
+
+    /** Resets elapsed time to zero. */
+    function reset(timer: number): void;
+
+    /** Returns whether the timer is currently running. */
+    function isPlaying(timer: number): boolean;
+
+    /** Releases the timer handle. */
+    function destroy(timer: number): void;
 }
