@@ -1,8 +1,20 @@
-#include <stdint.h>
 #include <time.h>
 
 #include <ath_env.h>
 #include "../native/timer.h"
+
+static JSClassID athena_timer_class_id;
+static bool athena_timer_class_registered;
+
+static void athena_timer_finalizer(JSRuntime *rt, JSValue value) {
+    AthenaTimer *timer = JS_GetOpaque(value, athena_timer_class_id);
+    if (timer) athena_timer_core_destroy(timer);
+}
+
+static JSClassDef athena_timer_class = {
+    "AthenaTimer",
+    .finalizer = athena_timer_finalizer,
+};
 
 static int timer_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -14,17 +26,7 @@ static int timer_require_argc(JSContext *ctx, int argc, int expected, const char
 }
 
 static AthenaTimer *timer_from_value(JSContext *ctx, JSValueConst value) {
-    uint32_t handle;
-    if (JS_ToUint32(ctx, &handle, value)) return NULL;
-    if (handle == 0) {
-        JS_ThrowTypeError(ctx, "Timer handle must be non-zero");
-        return NULL;
-    }
-    return (AthenaTimer *)(uintptr_t)handle;
-}
-
-static JSValue timer_handle(JSContext *ctx, AthenaTimer *timer) {
-    return JS_NewUint32(ctx, (uint32_t)(uintptr_t)timer);
+    return JS_GetOpaque2(ctx, value, athena_timer_class_id);
 }
 
 static JSValue athena_timer_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -32,7 +34,14 @@ static JSValue athena_timer_new(JSContext *ctx, JSValueConst this_val, int argc,
 
     AthenaTimer *timer = athena_timer_core_create();
     if (!timer) return JS_ThrowInternalError(ctx, "Unable to allocate timer");
-    return timer_handle(ctx, timer);
+
+    JSValue object = JS_NewObjectClass(ctx, athena_timer_class_id);
+    if (JS_IsException(object)) {
+        athena_timer_core_destroy(timer);
+        return object;
+    }
+    JS_SetOpaque(object, timer);
+    return object;
 }
 
 static JSValue athena_timer_get_time(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -93,6 +102,7 @@ static JSValue athena_timer_destroy(JSContext *ctx, JSValueConst this_val, int a
     AthenaTimer *timer = timer_from_value(ctx, argv[0]);
     if (!timer) return JS_EXCEPTION;
     athena_timer_core_destroy(timer);
+    JS_SetOpaque((JSValue)argv[0], NULL);
     return JS_UNDEFINED;
 }
 
@@ -108,6 +118,13 @@ static const JSCFunctionListEntry timer_module_funcs[] = {
 };
 
 static int athena_timer_module_init(JSContext *ctx, JSModuleDef *m) {
+    if (!athena_timer_class_registered) {
+        JS_NewClassID(&athena_timer_class_id);
+        if (JS_NewClass(JS_GetRuntime(ctx), athena_timer_class_id, &athena_timer_class) < 0) {
+            return -1;
+        }
+        athena_timer_class_registered = true;
+    }
     return JS_SetModuleExportList(ctx, m, timer_module_funcs, countof(timer_module_funcs));
 }
 

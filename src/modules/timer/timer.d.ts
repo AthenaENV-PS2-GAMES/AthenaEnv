@@ -1,25 +1,25 @@
 declare namespace Timer {
-    /** Creates a running timer and returns its opaque handle. */
-    function new(): number;
+    /** Creates a running timer object. */
+    function new(): object;
 
     /** Returns elapsed clock ticks, or the frozen value while paused. */
-    function getTime(timer: number): number;
+    function getTime(timer: object): number;
 
     /** Sets the elapsed time in clock ticks. */
-    function setTime(timer: number, value: number): void;
+    function setTime(timer: object, value: number): void;
 
     /** Pauses the timer without resetting its elapsed time. */
-    function pause(timer: number): void;
+    function pause(timer: object): void;
 
     /** Resumes a paused timer. */
-    function resume(timer: number): void;
+    function resume(timer: object): void;
 
     /** Resets elapsed time to zero. */
-    function reset(timer: number): void;
+    function reset(timer: object): void;
 
     /** Returns whether the timer is currently running. */
-    function isPlaying(timer: number): boolean;
+    function isPlaying(timer: object): boolean;
 
-    /** Releases the timer handle. */
-    function destroy(timer: number): void;
+    /** Releases the native timer immediately; the object must not be reused. */
+    function destroy(timer: object): void;
 }

@@ -39,7 +39,7 @@ void athena_timer_core_reset(AthenaTimer *timer) {
 }
 
 void athena_timer_core_set_time(AthenaTimer *timer, clock_t value) {
-    timer->tick = timer->playing ? clock() + value : value;
+    timer->tick = timer->playing ? clock() - value : value;
 }
 
 bool athena_timer_core_is_playing(const AthenaTimer *timer) {

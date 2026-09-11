@@ -42,7 +42,7 @@ test("Timer exports are available", function() {
 
 test("new timer starts running", function() {
     const timer = Timer.new();
-    if (typeof timer !== "number" || timer === 0) throw new Error("invalid timer handle");
+    if (typeof timer !== "object" || timer === null) throw new Error("invalid timer object");
     if (!Timer.isPlaying(timer)) throw new Error("timer is not running");
     Timer.destroy(timer);
 });
@@ -73,6 +73,24 @@ expectThrow("new rejects arguments", function() {
 
 expectThrow("getTime rejects missing arguments", function() {
     Timer.getTime();
+});
+
+expectThrow("timer rejects values from another type", function() {
+    Timer.getTime({});
+});
+
+test("setTime preserves elapsed-time semantics", function() {
+    const timer = Timer.new();
+    Timer.setTime(timer, 1000);
+    const elapsed = Timer.getTime(timer);
+    if (elapsed < 1000) throw new Error("setTime produced an invalid elapsed value");
+    Timer.destroy(timer);
+});
+
+expectThrow("destroy rejects an already destroyed timer", function() {
+    const timer = Timer.new();
+    Timer.destroy(timer);
+    Timer.destroy(timer);
 });
 
 console.log("Result: " + passed + " passed, " + failed + " failed");

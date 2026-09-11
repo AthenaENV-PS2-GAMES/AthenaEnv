@@ -54,6 +54,27 @@ O `System` segue o mesmo padrao: `native/system.c/.h` contem operacoes nativas
 de arquivos, tempo, memoria e servicos do console; `quickjs/ath_system.c/.h`
 contem a validacao de argumentos, conversao de valores e exports QuickJS.
 
+Para objetos nativos com estado, nao exponha ponteiros como numeros JavaScript.
+Use uma classe QuickJS com `JS_SetOpaque`, `JS_GetOpaque2` e um finalizer. O
+metodo de destruicao explicita deve limpar o opaque antes de liberar o estado,
+para que o finalizer nao faca double-free:
+
+```c
+static void object_finalizer(JSRuntime *rt, JSValue value) {
+    NativeObject *object = JS_GetOpaque(value, object_class_id);
+    if (object) native_object_destroy(object);
+}
+
+NativeObject *object = native_object_create();
+JSValue value = JS_NewObjectClass(ctx, object_class_id);
+JS_SetOpaque(value, object);
+```
+
+O adaptador deve rejeitar objetos de outra classe com `JS_GetOpaque2`. Isso
+evita ponteiros arbitrarios, use-after-free, double-free e confusao entre
+handles de modulos diferentes. A API TypeScript deve documentar esses valores
+como objetos opacos, nunca como `number`.
+
 O `module.json` deve descrever o modulo para a automacao. Consulte os
 manifestos existentes antes de adicionar campos novos e mantenha o nome usado
 no manifesto igual ao nome importado pelos scripts:
