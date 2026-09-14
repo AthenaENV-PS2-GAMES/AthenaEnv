@@ -26,7 +26,12 @@ static int timer_require_argc(JSContext *ctx, int argc, int expected, const char
 }
 
 static AthenaTimer *timer_from_value(JSContext *ctx, JSValueConst value) {
-    return JS_GetOpaque2(ctx, value, athena_timer_class_id);
+    AthenaTimer *timer = JS_GetOpaque2(ctx, value, athena_timer_class_id);
+    if (!timer) {
+        JS_ThrowTypeError(ctx, "Timer has already been destroyed");
+        return NULL;
+    }
+    return timer;
 }
 
 static JSValue athena_timer_new(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
