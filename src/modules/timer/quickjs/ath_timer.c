@@ -112,8 +112,6 @@ static JSValue athena_timer_destroy(JSContext *ctx, JSValueConst this_val, int a
 }
 
 static const JSCFunctionListEntry timer_module_funcs[] = {
-    /* TODO(gil-coverage): complete dedicated timer callback/finalizer
-     * coverage in a later step. */
     JS_CFUNC_DEF("new", 0, athena_timer_new),
     JS_CFUNC_DEF("getTime", 1, athena_timer_get_time),
     JS_CFUNC_DEF("setTime", 2, athena_timer_set_time),

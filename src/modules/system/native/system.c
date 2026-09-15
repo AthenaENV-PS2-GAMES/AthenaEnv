@@ -1,4 +1,5 @@
 #include <fcntl.h>
+#include <dirent.h>
 #include <libmc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +16,59 @@
 #include <timer.h>
 
 #include "system.h"
+
+int athena_system_list_dir_native(const char *path,
+    AthenaDirectoryEntry **entries, size_t *count) {
+    DIR *dir = opendir(path);
+    if (!dir) return -1;
+
+    AthenaDirectoryEntry *result = NULL;
+    size_t result_count = 0;
+    size_t capacity = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+
+        char entry_path[512];
+        struct stat info;
+        snprintf(entry_path, sizeof(entry_path), "%s/%s", path, entry->d_name);
+        if (stat(entry_path, &info) != 0) continue;
+
+        if (result_count == capacity) {
+            size_t new_capacity = capacity == 0 ? 8 : capacity * 2;
+            if (new_capacity < capacity ||
+                new_capacity > ((size_t)-1 / sizeof(*result))) {
+                closedir(dir);
+                free(result);
+                return -1;
+            }
+            AthenaDirectoryEntry *resized = realloc(result,
+                new_capacity * sizeof(*result));
+            if (!resized) {
+                closedir(dir);
+                free(result);
+                return -1;
+            }
+            result = resized;
+            capacity = new_capacity;
+        }
+
+        strncpy(result[result_count].name, entry->d_name,
+            sizeof(result[result_count].name) - 1);
+        result[result_count].name[sizeof(result[result_count].name) - 1] = '\0';
+        result[result_count].size = (uint32_t)info.st_size;
+        result[result_count].dir = S_ISDIR(info.st_mode);
+        result_count++;
+    }
+    closedir(dir);
+    *entries = result;
+    *count = result_count;
+    return 0;
+}
+
+void athena_system_free_directory_entries(AthenaDirectoryEntry *entries) {
+    free(entries);
+}
 
 int athena_system_remove_directory_native(const char *path) {
     return rmdir(path);

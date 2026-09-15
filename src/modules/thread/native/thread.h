@@ -28,6 +28,7 @@ void athena_thread_core_destroy(AthenaThread *thread);
 int athena_thread_core_is_current(const AthenaThread *thread);
 int athena_thread_core_stop_requested(void);
 AthenaThread *athena_thread_core_get_by_id(int id);
+int athena_thread_core_is_system_id(int id);
 int athena_thread_core_wait(AthenaThread *thread);
 void athena_thread_core_wait_all(void);
 void athena_thread_core_finalize(AthenaThread *thread);

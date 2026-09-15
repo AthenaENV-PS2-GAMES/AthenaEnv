@@ -23,6 +23,15 @@ typedef struct {
 static AthenaTaskRecord s_tasks[ATHENA_MAX_TASKS];
 static bool s_manager_initialized = false;
 
+static AthenaTaskRecord *athena_thread_find_task(int id) {
+    if (id < 0) return NULL;
+    for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
+        if (s_tasks[i].active && s_tasks[i].id == id)
+            return &s_tasks[i];
+    }
+    return NULL;
+}
+
 struct AthenaThread {
     int id;
     int priority;
@@ -176,12 +185,14 @@ int athena_thread_core_start(AthenaThread *thread) {
 
 int athena_thread_core_stop(AthenaThread *thread) {
     if (!thread || thread->id < 0) return -1;
+    if (athena_thread_core_is_system_id(thread->id)) return -1;
     atomic_store_explicit(&thread->stop_requested, true, memory_order_release);
     return 0;
 }
 
 void athena_thread_core_destroy(AthenaThread *thread) {
     if (!thread) return;
+    if (athena_thread_core_is_system_id(thread->id)) return;
     atomic_store_explicit(&thread->stop_requested, true, memory_order_release);
     if (!atomic_load_explicit(&thread->running, memory_order_acquire))
         athena_thread_core_finalize(thread);
@@ -204,12 +215,13 @@ int athena_thread_core_stop_requested(void) {
 }
 
 AthenaThread *athena_thread_core_get_by_id(int id) {
-    if (id < 0) return NULL;
-    for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
-        if (s_tasks[i].active && s_tasks[i].id == id)
-            return s_tasks[i].thread;
-    }
-    return NULL;
+    AthenaTaskRecord *task = athena_thread_find_task(id);
+    return task ? task->thread : NULL;
+}
+
+int athena_thread_core_is_system_id(int id) {
+    AthenaTaskRecord *task = athena_thread_find_task(id);
+    return task && task->is_system;
 }
 
 int athena_thread_core_wait(AthenaThread *thread) {
@@ -302,18 +314,9 @@ int athena_thread_core_get_status(const AthenaThread *thread) {
 int athena_thread_core_kill_by_id(int id) {
     if (id < 0) return -1;
 
-    for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
-        if (s_tasks[i].active && s_tasks[i].id == id) {
-            /* TODO(gil-coverage): item 3.4 must reject system threads here. */
-            if (s_tasks[i].thread) {
-                atomic_store_explicit(&s_tasks[i].thread->stop_requested, true,
-                                      memory_order_release);
-                return 0;
-            }
-            return -1;
-        }
-    }
-    return -1;
+    AthenaTaskRecord *task = athena_thread_find_task(id);
+    if (!task || task->is_system || !task->thread) return -1;
+    return athena_thread_core_stop(task->thread);
 }
 
 int athena_thread_core_get_tasks(AthenaTaskInfo *out_tasks, int max_count) {

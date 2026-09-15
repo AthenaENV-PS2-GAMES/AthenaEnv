@@ -8,6 +8,7 @@
 #include <ath_gil.h>
 #include <athena_module.h>
 #include <memory.h>
+#include "../modules/thread/native/thread.h"
 
 #define TRUE 1
 #define JSFILE_NOTFOUND -5656

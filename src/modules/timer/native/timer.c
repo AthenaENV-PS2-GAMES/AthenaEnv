@@ -47,5 +47,6 @@ bool athena_timer_core_is_playing(const AthenaTimer *timer) {
 }
 
 void athena_timer_core_destroy(AthenaTimer *timer) {
+    if (!timer) return;
     free(timer);
 }

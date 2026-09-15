@@ -24,7 +24,6 @@
 #include <memory.h>
 #include <dbgprintf.h>
 #include "../native/system.h"
-#include "../../thread/native/thread.h"
 
 static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -59,27 +58,24 @@ static JSValue athena_system_list_dir(JSContext *ctx, JSValue this_val, int argc
         }
     }
 
-    DIR *dir = opendir(path);
-    if (!dir) return JS_ThrowInternalError(ctx, "Unable to open directory: %s", path);
+    AthenaDirectoryEntry *entries = NULL;
+    size_t entry_count = 0;
+    athena_js_gil_unlock();
+    int native_result = athena_system_list_dir_native(path, &entries, &entry_count);
+    athena_js_gil_lock();
+    if (native_result < 0) {
+        return JS_ThrowInternalError(ctx, "Unable to open directory: %s", path);
+    }
 
     JSValue result = JS_NewArray(ctx);
-    struct dirent *entry;
-    uint32_t index = 0;
-    while ((entry = readdir(dir)) != NULL) {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
-
-        char entry_path[512];
-        struct stat info;
-        snprintf(entry_path, sizeof(entry_path), "%s/%s", path, entry->d_name);
-        if (stat(entry_path, &info) != 0) continue;
-
+    for (size_t i = 0; i < entry_count; i++) {
         JSValue item = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, item, "name", JS_NewString(ctx, entry->d_name));
-        JS_SetPropertyStr(ctx, item, "size", JS_NewUint32(ctx, (uint32_t)info.st_size));
-        JS_SetPropertyStr(ctx, item, "dir", JS_NewBool(ctx, S_ISDIR(info.st_mode)));
-        JS_SetPropertyUint32(ctx, result, index++, item);
+        JS_SetPropertyStr(ctx, item, "name", JS_NewString(ctx, entries[i].name));
+        JS_SetPropertyStr(ctx, item, "size", JS_NewUint32(ctx, entries[i].size));
+        JS_SetPropertyStr(ctx, item, "dir", JS_NewBool(ctx, entries[i].dir));
+        JS_SetPropertyUint32(ctx, result, (uint32_t)i, item);
     }
-    closedir(dir);
+    athena_system_free_directory_entries(entries);
     return result;
 }
 
@@ -92,7 +88,9 @@ static JSValue athena_system_remove_directory(JSContext *ctx, JSValue this_val, 
     if (!athena_system_require_argc(ctx, argc, 1, "System.removeDirectory")) return JS_EXCEPTION;
     const char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
+    athena_js_gil_unlock();
     int result = athena_system_remove_directory_native(path);
+    athena_js_gil_lock();
     JS_FreeCString(ctx, path);
     return JS_NewInt32(ctx, result);
 }
@@ -107,7 +105,9 @@ static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int arg
         return JS_EXCEPTION;
     }
 
+    athena_js_gil_unlock();
     int result = athena_system_copy_file_native(source_path, destination_path);
+    athena_js_gil_lock();
     JS_FreeCString(ctx, source_path);
     JS_FreeCString(ctx, destination_path);
     return JS_NewInt32(ctx, result);
@@ -122,7 +122,9 @@ static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int arg
         JS_FreeCString(ctx, source);
         return JS_EXCEPTION;
     }
+    athena_js_gil_unlock();
     int result = athena_system_move_file_native(source, destination);
+    athena_js_gil_lock();
     JS_FreeCString(ctx, source);
     JS_FreeCString(ctx, destination);
     return JS_NewInt32(ctx, result);
@@ -157,7 +159,9 @@ static JSValue athena_system_get_mc_info(JSContext *ctx, JSValue this_val, int a
     }
 
     AthenaMemoryCardInfo memory_card;
+    athena_js_gil_unlock();
     int result = athena_system_get_memory_card_info(port, &memory_card);
+    athena_js_gil_lock();
     if (result < 0) {
         return JS_ThrowInternalError(ctx,
             "Unable to read memory-card information: %d", result);
@@ -175,7 +179,7 @@ static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc
     const char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
 
-    int arg_count = 0;
+    int32_t arg_count = 0;
     char **args = NULL;
     if (argc == 2) {
         if (!JS_IsArray(ctx, argv[1])) {
@@ -199,12 +203,12 @@ static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc
             JS_FreeCString(ctx, path);
             return JS_ThrowOutOfMemory(ctx);
         }
-        for (int i = 0; i < arg_count; i++) {
+        for (int32_t i = 0; i < arg_count; i++) {
             JSValue item = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
             args[i] = (char *)JS_ToCString(ctx, item);
             JS_FreeValue(ctx, item);
             if (!args[i]) {
-                for (int j = 0; j < i; j++) JS_FreeCString(ctx, args[j]);
+                for (int32_t j = 0; j < i; j++) JS_FreeCString(ctx, args[j]);
                 free(args);
                 JS_FreeCString(ctx, path);
                 return JS_EXCEPTION;
@@ -213,7 +217,9 @@ static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc
         args[arg_count] = NULL;
     }
 
+    athena_js_gil_unlock();
     int result = LoadELFFromFileNoReset(path, arg_count, args);
+    athena_js_gil_lock();
     if (args) {
         for (int i = 0; i < arg_count; i++) JS_FreeCString(ctx, args[i]);
         free(args);
@@ -231,13 +237,15 @@ static JSValue athena_system_mount(JSContext *ctx, JSValue this_val, int argc, J
         JS_FreeCString(ctx, mountpoint);
         return JS_EXCEPTION;
     }
-    int mode = 0;
+    int32_t mode = 0;
     if (argc == 3 && JS_ToInt32(ctx, &mode, argv[2])) {
         JS_FreeCString(ctx, mountpoint);
         JS_FreeCString(ctx, blockdev);
         return JS_EXCEPTION;
     }
+    athena_js_gil_unlock();
     int result = athena_system_mount_native(mountpoint, blockdev, mode);
+    athena_js_gil_lock();
     JS_FreeCString(ctx, mountpoint);
     JS_FreeCString(ctx, blockdev);
     return JS_NewInt32(ctx, result);
@@ -247,14 +255,18 @@ static JSValue athena_system_umount(JSContext *ctx, JSValue this_val, int argc, 
     if (!athena_system_require_argc(ctx, argc, 1, "System.umount")) return JS_EXCEPTION;
     const char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
+    athena_js_gil_unlock();
     int result = athena_system_umount_native(device);
+    athena_js_gil_lock();
     JS_FreeCString(ctx, device);
     return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_system_devices(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     struct fileXioDevice devices[FILEXIO_MAX_DEVICES];
+    athena_js_gil_unlock();
     int count = fileXioGetDeviceList(devices, FILEXIO_MAX_DEVICES);
+    athena_js_gil_lock();
     if (count <= 0) return JS_NewArray(ctx);
 
     JSValue result = JS_NewArray(ctx);
@@ -271,8 +283,10 @@ static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int 
     if (!athena_system_require_argc(ctx, argc, 1, "System.getBDMInfo")) return JS_EXCEPTION;
     const char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
+    athena_js_gil_unlock();
     int fd = fileXioDopen(device);
     if (fd < 0) {
+        athena_js_gil_lock();
         JS_FreeCString(ctx, device);
         return JS_UNDEFINED;
     }
@@ -280,6 +294,7 @@ static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int 
     char driver[10] = { 0 };
     int result = fileXioIoctl2(fd, USBMASS_IOCTL_GET_DRIVERNAME, NULL, 0, driver, sizeof(driver) - 1);
     fileXioDclose(fd);
+    athena_js_gil_lock();
     if (result < 0) {
         JS_FreeCString(ctx, device);
         return JS_UNDEFINED;
@@ -324,7 +339,10 @@ static JSValue athena_system_get_temperature(JSContext *ctx, JSValue this_val, i
     if (!athena_system_require_argc(ctx, argc, 0, "System.getTemperature")) return JS_EXCEPTION;
     unsigned char command[1] = { 0xef };
     unsigned char response[16] = { 0 };
-    if (sceCdApplySCmd(0x03, command, sizeof(command), response) == 0 || response[0] == 0) {
+    athena_js_gil_unlock();
+    int command_result = sceCdApplySCmd(0x03, command, sizeof(command), response);
+    athena_js_gil_lock();
+    if (command_result == 0 || response[0] == 0) {
         return JS_UNDEFINED;
     }
     uint16_t raw = ((uint16_t)response[1] << 8) | response[2];

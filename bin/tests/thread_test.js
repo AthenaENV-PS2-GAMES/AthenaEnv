@@ -149,6 +149,55 @@ test("Mutex.lock releases the runtime gate while blocked", function() {
     Mutex.destroy(mutex);
 });
 
+test("Mutex.destroy rejects an in-use semaphore", function() {
+    const mutex = Mutex.new();
+    let waiting = false;
+    if (Mutex.lock(mutex) < 0) throw new Error("main thread failed to lock mutex");
+
+    const thread = Thread.new(function() {
+        waiting = true;
+        Mutex.lock(mutex);
+        Mutex.unlock(mutex);
+    }, "Mutex Lifetime Worker");
+    if (Thread.start(thread) < 0) {
+        Mutex.unlock(mutex);
+        Mutex.destroy(mutex);
+        throw new Error("failed to start mutex lifetime worker");
+    }
+    System.sleep(25);
+    if (!waiting) throw new Error("mutex lifetime worker did not start");
+
+    let rejected = false;
+    try {
+        Mutex.destroy(mutex);
+    } catch (error) {
+        rejected = true;
+    }
+    if (!rejected) throw new Error("destroy accepted while mutex was in use");
+
+    if (Mutex.unlock(mutex) < 0) throw new Error("main thread failed to unlock mutex");
+    Thread.destroy(thread);
+    Mutex.destroy(mutex);
+});
+
+test("Timer operations remain valid until explicit destruction", function() {
+    const timer = Timer.new();
+    Timer.pause(timer);
+    Timer.reset(timer);
+    Timer.resume(timer);
+    if (typeof Timer.getTime(timer) !== "number")
+        throw new Error("timer did not return elapsed time");
+    Timer.destroy(timer);
+
+    let rejected = false;
+    try {
+        Timer.getTime(timer);
+    } catch (error) {
+        rejected = true;
+    }
+    if (!rejected) throw new Error("destroyed timer remained accessible");
+});
+
 test("Thread.kill cooperatively stops an active worker", function() {
     let started = false;
     const thread = Thread.new(function() {
@@ -241,6 +290,56 @@ test("Thread.list returns array of tasks", function() {
     if (typeof first.name !== "string") throw new Error("task name missing in list entry");
     if (typeof first.status !== "number") throw new Error("task status missing in list entry");
     if (typeof first.stack !== "number") throw new Error("task stack missing in list entry");
+});
+
+test("System threads cannot be killed", function() {
+    const list = Thread.list();
+    let systemId = -1;
+    for (let i = 0; i < list.length; i++) {
+        if (list[i].name.indexOf("System:") === 0 ||
+            list[i].name.indexOf("AthenaEnv:") === 0 ||
+            list[i].name.indexOf("Kernel:") === 0) {
+            systemId = list[i].id;
+            break;
+        }
+    }
+    if (systemId < 0) throw new Error("no system thread was reported");
+    if (Thread.kill(systemId) >= 0)
+        throw new Error("system thread kill was accepted");
+});
+
+test("System native queries release and reacquire the runtime gate", function() {
+    let completed = false;
+    let worker_error = null;
+    let device_count = -1;
+    let bdm_info = null;
+    const thread = Thread.new(function() {
+        try {
+            const devices = System.devices();
+            if (!Array.isArray(devices)) throw new Error("System.devices did not return an array");
+            device_count = devices.length;
+            bdm_info = System.getBDMInfo("mass0:");
+            completed = true;
+        } catch (error) {
+            worker_error = error;
+        }
+    }, "System Query Worker");
+
+    if (Thread.start(thread) < 0) throw new Error("failed to start system query worker");
+    const main_ticks = System.getTicks();
+    System.sleep(10);
+    if (System.getTicks() < main_ticks) {
+        Thread.destroy(thread);
+        throw new Error("main thread clock moved backwards");
+    }
+
+    Thread.destroy(thread);
+    if (worker_error !== null) throw worker_error;
+    if (!completed) throw new Error("system query worker did not complete");
+    if (device_count < 0) throw new Error("system device result was not retained");
+    if (bdm_info !== undefined && typeof bdm_info !== "object") {
+        throw new Error("unexpected BDM information result");
+    }
 });
 
 expectThrow("Thread.new rejects missing arguments", function() {

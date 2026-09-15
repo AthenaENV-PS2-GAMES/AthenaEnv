@@ -7,7 +7,9 @@ static bool athena_mutex_class_registered;
 
 static void athena_mutex_finalizer(JSRuntime *rt, JSValue value) {
     AthenaMutex *mutex = JS_GetOpaque(value, athena_mutex_class_id);
-    if (mutex) athena_mutex_core_destroy(mutex);
+    if (mutex) {
+        athena_mutex_core_request_destroy(mutex);
+    }
 }
 
 static JSClassDef athena_mutex_class = {
@@ -69,7 +71,8 @@ static JSValue athena_mutex_destroy(JSContext *ctx, JSValueConst this_val, int a
     if (!mutex_require_argc(ctx, argc, 1, "Mutex.destroy")) return JS_EXCEPTION;
     AthenaMutex *mutex = mutex_from_value(ctx, argv[0]);
     if (!mutex) return JS_EXCEPTION;
-    athena_mutex_core_destroy(mutex);
+    if (athena_mutex_core_destroy(mutex) < 0)
+        return JS_ThrowInternalError(ctx, "Mutex is still in use");
     JS_SetOpaque((JSValue)argv[0], NULL);
     return JS_UNDEFINED;
 }

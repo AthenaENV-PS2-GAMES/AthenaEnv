@@ -2,7 +2,18 @@
 #define ATH_NATIVE_SYSTEM_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <time.h>
+
+typedef struct {
+    char name[256];
+    uint32_t size;
+    int dir;
+} AthenaDirectoryEntry;
+
+int athena_system_list_dir_native(const char *path,
+    AthenaDirectoryEntry **entries, size_t *count);
+void athena_system_free_directory_entries(AthenaDirectoryEntry *entries);
 
 typedef struct {
     int type;

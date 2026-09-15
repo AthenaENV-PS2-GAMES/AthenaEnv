@@ -267,6 +267,8 @@ static JSValue athena_thread_kill(JSContext *ctx, JSValueConst this_val, int arg
 
     int32_t id;
     if (JS_ToInt32(ctx, &id, argv[0]) < 0) return JS_EXCEPTION;
+    if (athena_thread_core_is_system_id(id))
+        return JS_NewInt32(ctx, -1);
 
     AthenaThread *thread = athena_thread_core_get_by_id(id);
     int result = athena_thread_core_kill_by_id(id);
