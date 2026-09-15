@@ -1,4 +1,5 @@
 #include <ath_env.h>
+#include <ath_gil.h>
 #include "../native/mutex.h"
 
 static JSClassID athena_mutex_class_id;
@@ -51,7 +52,10 @@ static JSValue athena_mutex_lock(JSContext *ctx, JSValueConst this_val, int argc
     if (!mutex_require_argc(ctx, argc, 1, "Mutex.lock")) return JS_EXCEPTION;
     AthenaMutex *mutex = mutex_from_value(ctx, argv[0]);
     if (!mutex) return JS_EXCEPTION;
-    return JS_NewInt32(ctx, athena_mutex_core_lock(mutex));
+    athena_js_gil_unlock();
+    int result = athena_mutex_core_lock(mutex);
+    athena_js_gil_lock();
+    return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_mutex_unlock(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

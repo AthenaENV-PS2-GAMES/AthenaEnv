@@ -36,6 +36,7 @@ JSModuleDef *js_init_module_std(JSContext *ctx, const char *module_name);
 JSModuleDef *js_init_module_os(JSContext *ctx, const char *module_name);
 void js_std_add_helpers(JSContext *ctx, int argc, char **argv);
 int js_std_loop(JSContext *ctx);
+void js_std_set_interrupt_handler(JSRuntime *rt);
 void js_std_init_handlers(JSRuntime *rt);
 void js_std_free_handlers(JSRuntime *rt);
 void js_std_dump_error(JSContext *ctx);

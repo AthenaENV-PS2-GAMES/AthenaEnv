@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-11T21:50:44.859Z",
+  "generatedAt": "2026-09-14T19:21:24.892Z",
   "modules": [
     {
       "id": "mutex",
@@ -34,6 +34,21 @@
         "ee_libs": []
       },
       "global_alias": "System"
+    },
+    {
+      "id": "thread",
+      "name": "Thread",
+      "description": "Multi-threading and task management primitives backed by the EE kernel scheduler.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Thread"
     },
     {
       "id": "timer",

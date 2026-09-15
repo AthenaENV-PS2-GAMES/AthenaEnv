@@ -5,6 +5,7 @@
 #include <errno.h>
 
 #include <ath_env.h>
+#include <ath_gil.h>
 #include <athena_module.h>
 #include <memory.h>
 
@@ -181,19 +182,36 @@ const char* run_script(const char* script, bool isBuffer)
     size_t memoryLimit = (GetMemorySize() - get_used_memory()) >> 1;
 
     dbgprintf("\n[AthenaCore] Starting QuickJS runtime...\n");
+    /*
+     * Item 3.0 checklist:
+     * - Main-thread gate entry covers runtime/context setup, qjs_handle_file,
+     *   error handling, js_std_loop, and destroy_vm in this function.
+     * - The gate, main-thread protection, and worker protection are one
+     *   functional commit/PR and must not be merged independently.
+     * - No main-thread JS_* path below runs without the gate while the worker
+     *   requires it.
+     */
+    athena_js_gil_init();
+    athena_js_gil_lock();
+
     JSRuntime *rt = JS_NewRuntime(); 
     if (!rt) { 
+        athena_js_gil_unlock();
+        athena_js_gil_destroy();
         return "AthenaError: Runtime creation failed"; 
     }
     
     js_std_set_worker_new_context_func(JS_NewCustomContext);
     js_std_init_handlers(rt);
+    js_std_set_interrupt_handler(rt);
 
     JS_SetMemoryLimit(rt, memoryLimit);
     JS_SetGCThreshold(rt, memoryLimit - 2097152); // 2MB margin for GC
 
     JSContext *ctx = JS_NewCustomContext(rt); 
     if (!ctx) { 
+        athena_js_gil_unlock();
+        athena_js_gil_destroy();
         JS_FreeRuntime(rt);
         return "AthenaError: Context creation failed"; 
     }
@@ -234,12 +252,22 @@ const char* run_script(const char* script, bool isBuffer)
         }
         
         dbgprintf("[AthenaCore] Destroying QuickJS runtime after error\n");
+        athena_js_gil_unlock();
+        athena_thread_core_wait_all();
+        athena_js_gil_lock();
         destroy_vm(ctx);
+        athena_js_gil_unlock();
+        athena_js_gil_destroy();
         return error_buf; 
     }
     
     dbgprintf("[AthenaCore] Destroying QuickJS runtime\n");
+    athena_js_gil_unlock();
+    athena_thread_core_wait_all();
+    athena_js_gil_lock();
     destroy_vm(ctx);
+    athena_js_gil_unlock();
+    athena_js_gil_destroy();
     dbgprintf("[AthenaCore] QuickJS runtime destroyed\n");
     return NULL;
 }

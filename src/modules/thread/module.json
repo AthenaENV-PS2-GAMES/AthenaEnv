@@ -1,0 +1,28 @@
+{
+  "id": "thread",
+  "name": "Thread",
+  "description": "Multi-threading and task management primitives backed by the EE kernel scheduler.",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/thread.c",
+    "quickjs/ath_thread.c"
+  ],
+  "includes": [
+    "."
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "Thread",
+    "global_alias": "Thread",
+    "init_func": "athena_thread_init",
+    "header": "quickjs/ath_thread.h"
+  },
+  "types": "thread.d.ts"
+}

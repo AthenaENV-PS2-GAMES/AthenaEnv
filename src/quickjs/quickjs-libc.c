@@ -43,6 +43,9 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 
+#include <ath_gil.h>
+#include "../modules/thread/native/thread.h"
+
 #include <ath_env.h>
 
 #include "cutils.h"
@@ -689,7 +692,13 @@ static JSValue js_std_refcount(JSContext *ctx, JSValueConst this_val, int argc, 
 
 static int interrupt_handler(JSRuntime *rt, void *opaque)
 {
-    return (os_pending_signals >> SIGINT) & 1;
+    return ((os_pending_signals >> SIGINT) & 1) ||
+           athena_thread_core_stop_requested();
+}
+
+void js_std_set_interrupt_handler(JSRuntime *rt)
+{
+    JS_SetInterruptHandler(rt, interrupt_handler, NULL);
 }
 
 static int get_bool_option(JSContext *ctx, BOOL *pbool,
@@ -729,18 +738,14 @@ static JSValue js_evalScript(JSContext *ctx, JSValueConst this_val,
     str = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!str)
         return JS_EXCEPTION;
-    if (!ts->recv_pipe && ++ts->eval_script_recurse == 1) {
-        /* install the interrupt handler */
-        JS_SetInterruptHandler(JS_GetRuntime(ctx), interrupt_handler, NULL);
-    }
+    if (!ts->recv_pipe)
+        ts->eval_script_recurse++;
     flags = JS_EVAL_TYPE_GLOBAL; 
     if (backtrace_barrier)
         flags |= JS_EVAL_FLAG_BACKTRACE_BARRIER;
     ret = JS_Eval(ctx, str, len, "<evalScript>", flags);
     JS_FreeCString(ctx, str);
     if (!ts->recv_pipe && --ts->eval_script_recurse == 0) {
-        /* remove the interrupt handler */
-        JS_SetInterruptHandler(JS_GetRuntime(ctx), NULL, NULL);
         os_pending_signals &= ~((uint64_t)1 << SIGINT);
         /* convert the uncatchable "interrupted" error into a normal error
            so that it can be caught by the REPL */
@@ -3608,6 +3613,8 @@ int js_std_loop(JSContext *ctx)
                 }
                 break;
             }
+            athena_js_gil_unlock();
+            athena_js_gil_lock();
         }
 
         if (err < 0) {

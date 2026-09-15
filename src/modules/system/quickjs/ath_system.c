@@ -19,10 +19,12 @@
 #include <system.h>
 
 #include <ath_env.h>
+#include <ath_gil.h>
 #include "ath_system.h"
 #include <memory.h>
 #include <dbgprintf.h>
 #include "../native/system.h"
+#include "../../thread/native/thread.h"
 
 static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -128,7 +130,9 @@ static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int arg
 
 static JSValue athena_system_delay(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 0, "System.delay")) return JS_EXCEPTION;
+    athena_js_gil_unlock();
     athena_system_delay_native();
+    athena_js_gil_lock();
     return JS_UNDEFINED;
 }
 
@@ -353,7 +357,9 @@ static JSValue athena_system_sleep(JSContext *ctx, JSValue this_val, int argc, J
     if (JS_ToInt32(ctx, &ms, argv[0])) {
         return JS_EXCEPTION;
     }
+    athena_js_gil_unlock();
     athena_system_sleep_native(ms);
+    athena_js_gil_lock();
     return JS_UNDEFINED;
 }
 

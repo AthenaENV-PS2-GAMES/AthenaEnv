@@ -48,7 +48,7 @@ APP_CORE = main.o memory.o ee_tools.o module_system.o iop_manager.o strUtils.o s
 
 INI_READER = readini/src/readini.o
 
-JS_ENGINE = js_api/ath_env.o
+JS_ENGINE = js_api/ath_env.o js_api/ath_gil.o
 
 IOP_MODULES = iomanx.o filexio.o sio2man.o mcman.o mcserv.o padman.o \
               usbd.o bdm.o bdmfs_fatfs.o usbmass_bd.o cdfs.o \
