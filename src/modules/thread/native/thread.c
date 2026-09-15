@@ -44,6 +44,8 @@ struct AthenaThread {
     atomic_bool running;
     atomic_bool started;
     int completion_semaphore;
+    void *owner;
+    AthenaThreadOwnerInvalidator owner_invalidate;
 };
 
 void athena_thread_manager_init(void) {
@@ -144,6 +146,8 @@ AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func,
         .option = 0
     };
     thread->completion_semaphore = CreateSema(&completion);
+    thread->owner = NULL;
+    thread->owner_invalidate = NULL;
     if (thread->completion_semaphore < 0) {
         DeleteThread(thread->id);
         free(thread->stack);
@@ -228,9 +232,18 @@ int athena_thread_core_wait(AthenaThread *thread) {
     if (!thread || athena_thread_core_is_current(thread)) return -1;
     if (!atomic_load_explicit(&thread->started, memory_order_acquire))
         return 0;
-    if (atomic_load_explicit(&thread->running, memory_order_acquire))
-        return WaitSema(thread->completion_semaphore);
+    if (atomic_load_explicit(&thread->running, memory_order_acquire)) {
+        int result = WaitSema(thread->completion_semaphore);
+        if (result < 0) return result;
+    }
     return 0;
+}
+
+void athena_thread_core_set_owner(AthenaThread *thread,
+    void *owner, AthenaThreadOwnerInvalidator invalidate) {
+    if (!thread) return;
+    thread->owner = owner;
+    thread->owner_invalidate = invalidate;
 }
 
 void athena_thread_core_finalize(AthenaThread *thread) {
@@ -239,6 +252,8 @@ void athena_thread_core_finalize(AthenaThread *thread) {
         return;
 
     if (thread->id >= 0) {
+        if (thread->owner_invalidate)
+            thread->owner_invalidate(thread->owner);
         DeleteThread(thread->id);
         for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
             if (s_tasks[i].active && s_tasks[i].id == thread->id) {

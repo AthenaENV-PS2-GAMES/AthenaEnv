@@ -252,7 +252,14 @@ test("Thread.kill cooperatively stops an active worker", function() {
 
     const id = Thread.getId(thread);
     if (Thread.kill(id) < 0) throw new Error("Thread.kill failed");
-    Thread.destroy(thread);
+
+    const list = Thread.list();
+    for (let i = 0; i < list.length; i++) {
+        if (list[i].id === id) throw new Error("killed thread remained in Thread.list");
+    }
+    expectThrow("killed thread wrapper is invalidated", function() {
+        Thread.getId(thread);
+    });
 });
 
 test("Long native sleep can finish while the main thread remains active", function() {

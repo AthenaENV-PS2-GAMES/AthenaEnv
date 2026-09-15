@@ -19,6 +19,7 @@ typedef struct {
 } AthenaTaskInfo;
 
 typedef void (*AthenaThreadFunc)(void *arg);
+typedef void (*AthenaThreadOwnerInvalidator)(void *owner);
 
 /* Native thread lifecycle */
 AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func, void *arg, size_t stack_size, int priority);
@@ -33,6 +34,8 @@ int athena_thread_core_wait(AthenaThread *thread);
 void athena_thread_core_wait_all(void);
 void athena_thread_core_finalize(AthenaThread *thread);
 void athena_thread_core_worker_finished(AthenaThread *thread);
+void athena_thread_core_set_owner(AthenaThread *thread,
+    void *owner, AthenaThreadOwnerInvalidator invalidate);
 
 /* Native thread properties */
 int athena_thread_core_get_id(const AthenaThread *thread);

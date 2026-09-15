@@ -15,6 +15,11 @@ typedef struct {
     JSValue func;
 } AthenaThreadJsObject;
 
+static void athena_thread_invalidate_owner(void *owner) {
+    AthenaThreadJsObject *obj = (AthenaThreadJsObject *)owner;
+    if (obj) obj->thread = NULL;
+}
+
 static void athena_thread_worker(void *arg) {
     AthenaThreadJsObject *obj = (AthenaThreadJsObject *)arg;
     if (!obj || !obj->ctx) {
@@ -167,6 +172,7 @@ static JSValue athena_thread_new(JSContext *ctx, JSValueConst this_val, int argc
     }
 
     JS_SetOpaque(js_val, obj);
+    athena_thread_core_set_owner(obj->thread, obj, athena_thread_invalidate_owner);
     return js_val;
 }
 
@@ -276,6 +282,8 @@ static JSValue athena_thread_kill(JSContext *ctx, JSValueConst this_val, int arg
         athena_js_gil_unlock();
         result = athena_thread_core_wait(thread);
         athena_js_gil_lock();
+        if (result >= 0)
+            athena_thread_core_finalize(thread);
     }
     return JS_NewInt32(ctx, result);
 }

@@ -2216,6 +2216,11 @@ static int js_os_poll(JSContext *ctx)
         }
     }
     */
+    if (tvp && min_delay > 0) {
+        athena_js_gil_unlock();
+        usleep((useconds_t)min_delay * 1000);
+        athena_js_gil_lock();
+    }
     done:
     return 0;
 }
