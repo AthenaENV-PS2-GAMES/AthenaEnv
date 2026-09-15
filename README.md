@@ -1297,6 +1297,14 @@ const mutex = new Mutex();
 * Thread.list() - List all system threads (OS level, not JavaScript itself). List[Object[id, name, status, stack_size]]
 * Thread.kill(id) - Force kill a thread from an internal ID.
 
+QuickJS runtime access is serialized across Athena threads. Blocking native
+operations such as mutex waits, sleeps, filesystem queries, and device/RPC
+calls release this runtime gate while they are blocked and reacquire it before
+creating or consuming JavaScript values. Thread cancellation is cooperative;
+system-owned threads cannot be terminated through `Thread.kill()`. A
+CPU-bound JavaScript loop that never reaches a native call or completed
+event-loop boundary can still hold the runtime gate until it is interrupted.
+
 **Construction:**
 ```js
 const thread = new Thread(() => console.log("Hello from a thread!"), "Thread: Hello World!"); // Thread name is an optional parameter with 64 characters maximum size, useful to be tracked from Thread.list()

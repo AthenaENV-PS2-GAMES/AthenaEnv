@@ -79,54 +79,66 @@ static JSValue athena_system_list_dir(JSContext *ctx, JSValue this_val, int argc
     return result;
 }
 
-static int athena_system_path_arg(JSContext *ctx, JSValueConst value, const char **path) {
-    *path = JS_ToCString(ctx, value);
+static int athena_system_path_arg(JSContext *ctx, JSValueConst value, char **path) {
+    const char *value_string = JS_ToCString(ctx, value);
+    if (!value_string) {
+        *path = NULL;
+        return 0;
+    }
+    size_t length = strlen(value_string) + 1;
+    *path = malloc(length);
+    if (*path) {
+        memcpy(*path, value_string, length);
+    } else {
+        JS_ThrowOutOfMemory(ctx);
+    }
+    JS_FreeCString(ctx, value_string);
     return *path != NULL;
 }
 
 static JSValue athena_system_remove_directory(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 1, "System.removeDirectory")) return JS_EXCEPTION;
-    const char *path;
+    char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
     athena_js_gil_unlock();
     int result = athena_system_remove_directory_native(path);
     athena_js_gil_lock();
-    JS_FreeCString(ctx, path);
+    free(path);
     return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_system_copy_file(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 2, "System.copyFile")) return JS_EXCEPTION;
-    const char *source_path;
-    const char *destination_path;
+    char *source_path;
+    char *destination_path;
     if (!athena_system_path_arg(ctx, argv[0], &source_path)) return JS_EXCEPTION;
     if (!athena_system_path_arg(ctx, argv[1], &destination_path)) {
-        JS_FreeCString(ctx, source_path);
+        free(source_path);
         return JS_EXCEPTION;
     }
 
     athena_js_gil_unlock();
     int result = athena_system_copy_file_native(source_path, destination_path);
     athena_js_gil_lock();
-    JS_FreeCString(ctx, source_path);
-    JS_FreeCString(ctx, destination_path);
+    free(source_path);
+    free(destination_path);
     return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_system_move_file(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 2, "System.moveFile")) return JS_EXCEPTION;
-    const char *source;
-    const char *destination;
+    char *source;
+    char *destination;
     if (!athena_system_path_arg(ctx, argv[0], &source)) return JS_EXCEPTION;
     if (!athena_system_path_arg(ctx, argv[1], &destination)) {
-        JS_FreeCString(ctx, source);
+        free(source);
         return JS_EXCEPTION;
     }
     athena_js_gil_unlock();
     int result = athena_system_move_file_native(source, destination);
     athena_js_gil_lock();
-    JS_FreeCString(ctx, source);
-    JS_FreeCString(ctx, destination);
+    free(source);
+    free(destination);
     return JS_NewInt32(ctx, result);
 }
 
@@ -176,41 +188,48 @@ static JSValue athena_system_get_mc_info(JSContext *ctx, JSValue this_val, int a
 
 static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (argc < 1 || argc > 2) return JS_ThrowTypeError(ctx, "System.loadELF(path[, args]) accepts one or two arguments");
-    const char *path;
+    char *path;
     if (!athena_system_path_arg(ctx, argv[0], &path)) return JS_EXCEPTION;
 
     int32_t arg_count = 0;
     char **args = NULL;
     if (argc == 2) {
         if (!JS_IsArray(ctx, argv[1])) {
-            JS_FreeCString(ctx, path);
+            free(path);
             return JS_ThrowTypeError(ctx, "System.loadELF args must be an array");
         }
         JSValue length = JS_GetPropertyStr(ctx, argv[1], "length");
         if (JS_ToInt32(ctx, &arg_count, length)) {
             JS_FreeValue(ctx, length);
-            JS_FreeCString(ctx, path);
+            free(path);
             return JS_EXCEPTION;
         }
         JS_FreeValue(ctx, length);
         if (arg_count < 0 ||
             (size_t)arg_count > (((size_t)-1 / sizeof(char *)) - 1)) {
-            JS_FreeCString(ctx, path);
+            free(path);
             return JS_ThrowTypeError(ctx, "System.loadELF args length must be non-negative and fit in memory");
         }
         args = malloc(sizeof(char *) * (arg_count + 1));
         if (!args) {
-            JS_FreeCString(ctx, path);
+            free(path);
             return JS_ThrowOutOfMemory(ctx);
         }
         for (int32_t i = 0; i < arg_count; i++) {
             JSValue item = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
-            args[i] = (char *)JS_ToCString(ctx, item);
+            const char *item_string = JS_ToCString(ctx, item);
+            args[i] = NULL;
+            if (item_string) {
+                size_t item_length = strlen(item_string) + 1;
+                args[i] = malloc(item_length);
+                if (args[i]) memcpy(args[i], item_string, item_length);
+                JS_FreeCString(ctx, item_string);
+            }
             JS_FreeValue(ctx, item);
             if (!args[i]) {
-                for (int32_t j = 0; j < i; j++) JS_FreeCString(ctx, args[j]);
+                for (int32_t j = 0; j < i; j++) free(args[j]);
                 free(args);
-                JS_FreeCString(ctx, path);
+                free(path);
                 return JS_EXCEPTION;
             }
         }
@@ -221,44 +240,44 @@ static JSValue athena_system_load_elf(JSContext *ctx, JSValue this_val, int argc
     int result = LoadELFFromFileNoReset(path, arg_count, args);
     athena_js_gil_lock();
     if (args) {
-        for (int i = 0; i < arg_count; i++) JS_FreeCString(ctx, args[i]);
+        for (int32_t i = 0; i < arg_count; i++) free(args[i]);
         free(args);
     }
-    JS_FreeCString(ctx, path);
+    free(path);
     return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_system_mount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (argc < 2 || argc > 3) return JS_ThrowTypeError(ctx, "System.mount(mountpoint, blockdev[, mode])");
-    const char *mountpoint;
-    const char *blockdev;
+    char *mountpoint;
+    char *blockdev;
     if (!athena_system_path_arg(ctx, argv[0], &mountpoint)) return JS_EXCEPTION;
     if (!athena_system_path_arg(ctx, argv[1], &blockdev)) {
-        JS_FreeCString(ctx, mountpoint);
+        free(mountpoint);
         return JS_EXCEPTION;
     }
     int32_t mode = 0;
     if (argc == 3 && JS_ToInt32(ctx, &mode, argv[2])) {
-        JS_FreeCString(ctx, mountpoint);
-        JS_FreeCString(ctx, blockdev);
+        free(mountpoint);
+        free(blockdev);
         return JS_EXCEPTION;
     }
     athena_js_gil_unlock();
     int result = athena_system_mount_native(mountpoint, blockdev, mode);
     athena_js_gil_lock();
-    JS_FreeCString(ctx, mountpoint);
-    JS_FreeCString(ctx, blockdev);
+    free(mountpoint);
+    free(blockdev);
     return JS_NewInt32(ctx, result);
 }
 
 static JSValue athena_system_umount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 1, "System.umount")) return JS_EXCEPTION;
-    const char *device;
+    char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
     athena_js_gil_unlock();
     int result = athena_system_umount_native(device);
     athena_js_gil_lock();
-    JS_FreeCString(ctx, device);
+    free(device);
     return JS_NewInt32(ctx, result);
 }
 
@@ -281,13 +300,13 @@ static JSValue athena_system_devices(JSContext *ctx, JSValue this_val, int argc,
 
 static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
     if (!athena_system_require_argc(ctx, argc, 1, "System.getBDMInfo")) return JS_EXCEPTION;
-    const char *device;
+    char *device;
     if (!athena_system_path_arg(ctx, argv[0], &device)) return JS_EXCEPTION;
     athena_js_gil_unlock();
     int fd = fileXioDopen(device);
     if (fd < 0) {
         athena_js_gil_lock();
-        JS_FreeCString(ctx, device);
+        free(device);
         return JS_UNDEFINED;
     }
 
@@ -296,7 +315,7 @@ static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int 
     fileXioDclose(fd);
     athena_js_gil_lock();
     if (result < 0) {
-        JS_FreeCString(ctx, device);
+        free(device);
         return JS_UNDEFINED;
     }
 
@@ -308,7 +327,7 @@ static JSValue athena_system_get_bdm_info(JSContext *ctx, JSValue this_val, int 
         device_index = device[4] - '0';
     }
     JS_SetPropertyStr(ctx, info, "index", JS_NewInt32(ctx, device_index));
-    JS_FreeCString(ctx, device);
+    free(device);
     return info;
 }
 

@@ -198,6 +198,42 @@ test("Timer operations remain valid until explicit destruction", function() {
     if (!rejected) throw new Error("destroyed timer remained accessible");
 });
 
+test("Timer operations remain serialized across workers", function() {
+    const timer = Timer.new();
+    let completed = false;
+    let worker_error = null;
+    const thread = Thread.new(function() {
+        try {
+            for (let i = 0; i < 5; i++) {
+                Timer.reset(timer);
+                Timer.resume(timer);
+                if (typeof Timer.getTime(timer) !== "number") {
+                    throw new Error("worker timer query was not numeric");
+                }
+                Timer.pause(timer);
+            }
+            completed = true;
+        } catch (error) {
+            worker_error = error;
+        }
+    }, "Timer Worker");
+
+    if (Thread.start(thread) < 0) {
+        Timer.destroy(timer);
+        throw new Error("failed to start timer worker");
+    }
+    Thread.destroy(thread);
+    if (worker_error !== null) {
+        Timer.destroy(timer);
+        throw worker_error;
+    }
+    if (!completed) {
+        Timer.destroy(timer);
+        throw new Error("timer worker did not complete");
+    }
+    Timer.destroy(timer);
+});
+
 test("Thread.kill cooperatively stops an active worker", function() {
     let started = false;
     const thread = Thread.new(function() {
@@ -312,9 +348,13 @@ test("System native queries release and reacquire the runtime gate", function() 
     let completed = false;
     let worker_error = null;
     let device_count = -1;
+    let directory_count = -1;
     let bdm_info = null;
     const thread = Thread.new(function() {
         try {
+            const entries = System.listDir();
+            if (!Array.isArray(entries)) throw new Error("System.listDir did not return an array");
+            directory_count = entries.length;
             const devices = System.devices();
             if (!Array.isArray(devices)) throw new Error("System.devices did not return an array");
             device_count = devices.length;
@@ -336,6 +376,7 @@ test("System native queries release and reacquire the runtime gate", function() 
     Thread.destroy(thread);
     if (worker_error !== null) throw worker_error;
     if (!completed) throw new Error("system query worker did not complete");
+    if (directory_count < 0) throw new Error("system directory result was not retained");
     if (device_count < 0) throw new Error("system device result was not retained");
     if (bdm_info !== undefined && typeof bdm_info !== "object") {
         throw new Error("unexpected BDM information result");
