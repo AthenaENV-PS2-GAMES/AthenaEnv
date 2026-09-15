@@ -149,6 +149,88 @@ test("Mutex.lock releases the runtime gate while blocked", function() {
     Mutex.destroy(mutex);
 });
 
+test("Thread.kill cooperatively stops an active worker", function() {
+    let started = false;
+    const thread = Thread.new(function() {
+        started = true;
+        while (true) {
+            System.sleep(1);
+        }
+    }, "Kill Worker");
+
+    if (Thread.start(thread) < 0) throw new Error("failed to start kill worker");
+    System.sleep(50);
+    if (!started) {
+        Thread.destroy(thread);
+        throw new Error("kill worker did not execute");
+    }
+
+    const id = Thread.getId(thread);
+    if (Thread.kill(id) < 0) throw new Error("Thread.kill failed");
+    Thread.destroy(thread);
+});
+
+test("Long native sleep can finish while the main thread remains active", function() {
+    let completed = false;
+    const thread = Thread.new(function() {
+        System.sleep(100);
+        completed = true;
+    }, "Long Sleep Worker");
+
+    if (Thread.start(thread) < 0) throw new Error("failed to start sleep worker");
+    System.sleep(10);
+    if (completed) {
+        Thread.destroy(thread);
+        throw new Error("sleep worker completed too early");
+    }
+
+    Thread.destroy(thread);
+    if (!completed) throw new Error("sleep worker did not finish before destroy returned");
+});
+
+test("Multiple active workers can be stopped and finalized", function() {
+    const workers = [];
+    for (let i = 0; i < 3; i++) {
+        const worker = Thread.new(function() {
+            while (true) {
+                System.sleep(1);
+            }
+        }, "Concurrent Worker " + i);
+        if (Thread.start(worker) < 0) {
+            for (let j = 0; j < workers.length; j++) {
+                Thread.stop(workers[j]);
+                Thread.destroy(workers[j]);
+            }
+            Thread.destroy(worker);
+            throw new Error("failed to start concurrent worker " + i);
+        }
+        workers.push(worker);
+    }
+
+    System.sleep(50);
+    for (let i = 0; i < workers.length; i++) {
+        if (Thread.stop(workers[i]) < 0) throw new Error("failed to stop worker " + i);
+    }
+    for (let i = 0; i < workers.length; i++) {
+        Thread.destroy(workers[i]);
+    }
+});
+
+test("Runtime shutdown waits for an active worker", function() {
+    let started = false;
+    const thread = Thread.new(function() {
+        started = true;
+        while (true) {
+            System.sleep(1);
+        }
+    }, "Shutdown Worker");
+
+    if (Thread.start(thread) < 0) throw new Error("failed to start shutdown worker");
+    System.sleep(25);
+    if (!started) throw new Error("shutdown worker did not execute");
+    /* Leave the worker active so run_script() exercises wait_all(). */
+});
+
 test("Thread.list returns array of tasks", function() {
     const list = Thread.list();
     if (!Array.isArray(list)) throw new Error("Thread.list did not return an array");

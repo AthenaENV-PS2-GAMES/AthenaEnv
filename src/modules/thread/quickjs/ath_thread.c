@@ -274,8 +274,6 @@ static JSValue athena_thread_kill(JSContext *ctx, JSValueConst this_val, int arg
         athena_js_gil_unlock();
         result = athena_thread_core_wait(thread);
         athena_js_gil_lock();
-        if (result == 0)
-            athena_thread_core_finalize(thread);
     }
     return JS_NewInt32(ctx, result);
 }
