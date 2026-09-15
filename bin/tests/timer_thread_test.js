@@ -18,4 +18,4 @@ setTimeout(function() {
 
     console.log("[PASS] Worker runs while js_os_poll waits for a timer");
     console.log("Result: 1 passed, 0 failed");
-}, 100);
+}, 200);

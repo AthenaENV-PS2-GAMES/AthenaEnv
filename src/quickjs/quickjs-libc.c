@@ -2217,8 +2217,14 @@ static int js_os_poll(JSContext *ctx)
     }
     */
     if (tvp && min_delay > 0) {
+        int sleep_delay = min_delay > 16 ? 16 : min_delay;
         athena_js_gil_unlock();
-        usleep((useconds_t)min_delay * 1000);
+        usleep((useconds_t)sleep_delay * 1000);
+        athena_js_gil_lock();
+    } else if (!list_empty(&ts->os_rw_handlers) ||
+               !list_empty(&ts->port_list)) {
+        athena_js_gil_unlock();
+        usleep(16000);
         athena_js_gil_lock();
     }
     done:

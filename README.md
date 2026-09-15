@@ -1304,6 +1304,13 @@ creating or consuming JavaScript values. Thread cancellation is cooperative;
 system-owned threads cannot be terminated through `Thread.kill()`. A
 CPU-bound JavaScript loop that never reaches a native call or completed
 event-loop boundary can still hold the runtime gate until it is interrupted.
+When the event loop waits for timers, the PS2 port releases the gate and sleeps
+in 16 ms slices so external interruption and main-thread timers are re-evaluated
+promptly. QuickJS timer ownership remains with the event-loop thread; scripts
+should schedule timers from the main thread rather than from `Thread` workers.
+The port does not define QuickJS's optional
+`USE_WORKER` feature; the native `Thread` module is the supported worker
+mechanism.
 
 **Construction:**
 ```js
