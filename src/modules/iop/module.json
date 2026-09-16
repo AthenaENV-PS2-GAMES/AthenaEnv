@@ -1,0 +1,27 @@
+{
+  "id": "iop",
+  "name": "IOP",
+  "description": "IOP module discovery, loading, reset, and memory statistics.",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "quickjs/ath_iop.c"
+  ],
+  "includes": [
+    "."
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "IOP",
+    "global_alias": "IOP",
+    "init_func": "athena_iop_init",
+    "header": "quickjs/ath_iop.h"
+  },
+  "types": "iop.d.ts"
+}

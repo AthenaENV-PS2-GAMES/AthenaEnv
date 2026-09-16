@@ -27,6 +27,10 @@ const uint8_t default_incompatibility_id_mask[4] = {
 };
 
 module_entry *iopman_register_module(char* name, void *data, uint32_t size, uint8_t dependencies[4], void *init_func, void *end_func) {
+    if (registry_entries >= MODULE_REGISTRY_SIZE || !name || !dependencies) {
+        return NULL;
+    }
+
     module_registry[registry_entries].id = registry_entries;
 
     module_registry[registry_entries].name = name;
@@ -43,18 +47,27 @@ module_entry *iopman_register_module(char* name, void *data, uint32_t size, uint
 }
 
 void iopman_add_incompatible_module(module_entry *module, module_entry *incompatibility) {
+    if (!module || !incompatibility || module == incompatibility) {
+        return;
+    }
+
     for (uint8_t i = 0; i < 4; i++) {
         if (module->incompatibilities[i] == EMPTY_ENTRY) {
             module->incompatibilities[i] = incompatibility->id;
-            for (uint8_t j = 0; j < 4; i++) {
+            for (uint8_t j = 0; j < 4; j++) {
                 if (incompatibility->incompatibilities[j] == EMPTY_ENTRY) {
                     incompatibility->incompatibilities[j] = module->id;
                     return;
                 }
             }
+            dbgprintf("AthenaEnv: IOP incompatibility table is full for '%s'\n",
+                incompatibility->name);
             return;
         }
     }
+
+    dbgprintf("AthenaEnv: IOP incompatibility table is full for '%s'\n",
+        module->name);
 }
 
 static module_entry *incompatible_module = NULL;
@@ -63,20 +76,53 @@ module_entry *iopman_get_incompatible_module() {
     return incompatible_module;
 }
 
-int iopman_load_module(module_entry *module, int arglen, char *args) {
+static int iopman_load_module_internal(module_entry *module, int arglen,
+    char *args, bool loading[MODULE_REGISTRY_SIZE]) {
+    if (!module || module->id >= registry_entries) {
+        return MODULE_STATUS_ERROR;
+    }
+
     if (module->started)
         return MODULE_STATUS_LOADED;
 
-    incompatible_module = NULL;
-    for (uint8_t i = 0; i < 4; i++) {
-        if (module->dependencies[i] != EMPTY_ENTRY)
-            iopman_load_module(&module_registry[module->dependencies[i]], 0, NULL);
+    if (loading[module->id]) {
+        dbgprintf("AthenaEnv: IOP dependency cycle at '%s'\n", module->name);
+        return MODULE_STATUS_ERROR;
+    }
+    loading[module->id] = true;
 
-        if (module->incompatibilities[i] != EMPTY_ENTRY) {
-            if (module_registry[module->incompatibilities[i]].started) {
-                incompatible_module = &module_registry[module->incompatibilities[i]];
-                return MODULE_STATUS_INCOMPATIBILITY;
-            }
+    for (uint8_t i = 0; i < 4; i++) {
+        uint8_t incompatibility_id = module->incompatibilities[i];
+        if (incompatibility_id == EMPTY_ENTRY) {
+            continue;
+        }
+        if (incompatibility_id >= registry_entries) {
+            loading[module->id] = false;
+            return MODULE_STATUS_ERROR;
+        }
+        if (module_registry[incompatibility_id].started) {
+            incompatible_module = &module_registry[incompatibility_id];
+            loading[module->id] = false;
+            return MODULE_STATUS_INCOMPATIBILITY;
+        }
+    }
+
+    for (uint8_t i = 0; i < 4; i++) {
+        uint8_t dependency_id = module->dependencies[i];
+        int dependency_result;
+        if (dependency_id == EMPTY_ENTRY) {
+            continue;
+        }
+        if (dependency_id >= registry_entries) {
+            loading[module->id] = false;
+            return MODULE_STATUS_ERROR;
+        }
+        dependency_result = iopman_load_module_internal(
+            &module_registry[dependency_id], 0, NULL, loading);
+        if (dependency_result == MODULE_STATUS_ERROR ||
+            dependency_result == MODULE_STATUS_INCOMPATIBILITY) {
+            loading[module->id] = false;
+            return dependency_result;
         }
     }
 
@@ -91,8 +137,10 @@ int iopman_load_module(module_entry *module, int arglen, char *args) {
     int id = 0, ret = 0;
 
     if (module->prepare) {
-        if (module->prepare(module))
+        if (module->prepare(module)) {
+            loading[module->id] = false;
             return MODULE_STATUS_ERROR;
+        }
     }
         
     if (!module->size) {
@@ -102,16 +150,28 @@ int iopman_load_module(module_entry *module, int arglen, char *args) {
         id = SifExecModuleBuffer(module->data, module->size, arg_length, arg_data, &ret);
     }
 
-    module->started = (id > 0 && ret != 1);
+    bool success = (id > 0 && ret != 1);
+    module->started = success;
 
-    if (module->init && id > 0) 
+    if (module->init && success)
         module->init(module);
 
-    return !(id > 0);
+    loading[module->id] = false;
+    return success ? MODULE_STATUS_LOADED : MODULE_STATUS_ERROR;
+}
+
+int iopman_load_module(module_entry *module, int arglen, char *args) {
+    bool loading[MODULE_REGISTRY_SIZE] = { false };
+    incompatible_module = NULL;
+    return iopman_load_module_internal(module, arglen, args, loading);
 }
 
 module_entry *iopman_search_module(const char *name) {
-    for (int i = 0; i < registry_entries; i++) {
+    if (!name) {
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < registry_entries; i++) {
         if (!strcmp(module_registry[i].name, name)) {
             return &module_registry[i];
         }
@@ -136,7 +196,8 @@ module_entry *iopman_get_modules(uint32_t *top) {
 }
 
 void iopman_reset() {
-    for (int i = 0; i < registry_entries; i++) {
+    incompatible_module = NULL;
+    for (uint32_t i = 0; i < registry_entries; i++) {
         if (module_registry[i].started) {
             if (module_registry[i].end) {
                 module_registry[i].end(&module_registry[i]);
@@ -162,7 +223,11 @@ void iopman_reset() {
 }
 
 void iopman_modules_apply(iopman_func func) {
-    for (int i = 0; i < registry_entries; i++) {
+    if (!func) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < registry_entries; i++) {
         func(&module_registry[i]);
     }
 }

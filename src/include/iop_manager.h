@@ -5,6 +5,8 @@
 #include <stdbool.h>
 
 #define EMPTY_ENTRY 0xFF
+#define IOP_FREERAM_ADDR ((void *)(1 * 1024 * 1024))
+#define IOP_TOTAL_RAM (2 * 1024 * 1024)
 
 #define iopman_define_module(module)               \
     extern unsigned char module##_irx[] __attribute__((aligned(16))); \
@@ -51,6 +53,8 @@ module_entry *iopman_register_module(char* name, void *data, uint32_t size, uint
 
 #define iopman_register_module_file(name, path, dependencies, init_func, end_func)               \
     iopman_register_module(name, (void*)path, 0, dependencies, init_func, end_func)
+
+#define iopman_dependency(dep) ((dep) ? (dep)->id : EMPTY_ENTRY)
 
 #define iopman_set_module_args(module, arg_len, arg) \
     module->arglen = arg_len; \
