@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-16T13:39:02.611Z",
+  "generatedAt": "2026-09-16T17:07:42.453Z",
   "modules": [
     {
       "id": "iop",
@@ -17,6 +17,23 @@
         "ee_libs": []
       },
       "global_alias": "IOP"
+    },
+    {
+      "id": "matrix4",
+      "name": "Matrix4",
+      "description": "Four-by-four transformation matrix type.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "vector"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Matrix4"
     },
     {
       "id": "mutex",
@@ -79,6 +96,21 @@
         "ee_libs": []
       },
       "global_alias": "Timer"
+    },
+    {
+      "id": "vector",
+      "name": "Vector",
+      "description": "Vector2, Vector3 and Vector4 PS2-aligned math types.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Vector"
     }
   ]
 }

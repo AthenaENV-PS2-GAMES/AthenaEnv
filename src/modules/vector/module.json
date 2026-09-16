@@ -1,0 +1,28 @@
+{
+  "id": "vector",
+  "name": "Vector",
+  "description": "Vector2, Vector3 and Vector4 PS2-aligned math types.",
+  "category": "Math",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/vector_math.c",
+    "quickjs/ath_vector.c"
+  ],
+  "includes": [
+    "."
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "Vector",
+    "global_alias": "Vector",
+    "init_func": "athena_vector_init",
+    "header": "quickjs/ath_vector.h"
+  },
+  "types": "vector.d.ts"
+}
