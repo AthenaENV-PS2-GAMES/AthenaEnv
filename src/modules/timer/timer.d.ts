@@ -1,25 +1,47 @@
+/**
+ * Manual native timer objects.
+ *
+ * Timer values are represented in the module's native clock-tick units.
+ * These timers are distinct from the global event-loop functions such as
+ * `setTimeout`.
+ *
+ * Example:
+ * ```js
+ * const timer = Timer.new();
+ * Timer.pause(timer);
+ * Timer.setTime(timer, 0);
+ * Timer.resume(timer);
+ * console.log(Timer.isPlaying(timer));
+ * Timer.destroy(timer);
+ * ```
+ */
 declare namespace Timer {
-    /** Creates a running timer object. */
-    function new(): object;
+    /** Opaque handle returned by `Timer.new()`. */
+    interface Handle {
+        readonly __brand: 'Timer';
+    }
 
-    /** Returns elapsed clock ticks, or the frozen value while paused. */
-    function getTime(timer: object): number;
+    /** Creates a running timer. */
+    function new(): Handle;
 
-    /** Sets the elapsed time in clock ticks. */
-    function setTime(timer: object, value: number): void;
+    /** Returns elapsed native clock ticks, frozen while paused. */
+    function getTime(timer: Handle): number;
 
-    /** Pauses the timer without resetting its elapsed time. */
-    function pause(timer: object): void;
+    /** Replaces the elapsed time in native clock ticks. */
+    function setTime(timer: Handle, value: number): void;
+
+    /** Pauses without resetting the elapsed time. */
+    function pause(timer: Handle): void;
 
     /** Resumes a paused timer. */
-    function resume(timer: object): void;
+    function resume(timer: Handle): void;
 
-    /** Resets elapsed time to zero. */
-    function reset(timer: object): void;
+    /** Sets elapsed time to zero while preserving the timer object. */
+    function reset(timer: Handle): void;
 
-    /** Returns whether the timer is currently running. */
-    function isPlaying(timer: object): boolean;
+    /** Returns true when the timer is actively advancing. */
+    function isPlaying(timer: Handle): boolean;
 
-    /** Releases the native timer immediately; the object must not be reused. */
-    function destroy(timer: object): void;
+    /** Releases the native timer. Do not use `timer` afterwards. */
+    function destroy(timer: Handle): void;
 }

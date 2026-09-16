@@ -1,13 +1,37 @@
+/**
+ * Native EE mutex primitives.
+ *
+ * Mutexes protect native/application data shared by callbacks or threads.
+ * They do not make arbitrary QuickJS runtime access thread-safe; JavaScript
+ * execution must still follow AthenaEnv's runtime-gate rules.
+ *
+ * Example:
+ * ```js
+ * const lock = Mutex.new();
+ * Mutex.lock(lock);
+ * try {
+ *     // Update shared native/application state.
+ * } finally {
+ *     Mutex.unlock(lock);
+ *     Mutex.destroy(lock);
+ * }
+ * ```
+ */
 declare namespace Mutex {
-    /** Creates an unlocked mutex object. */
-    function new(): object;
+    /** Opaque handle returned by `Mutex.new()`. */
+    interface Handle {
+        readonly __brand: 'Mutex';
+    }
 
-    /** Blocks until the mutex is acquired and returns the EE result code. */
-    function lock(mutex: object): number;
+    /** Creates an unlocked native mutex. */
+    function new(): Handle;
 
-    /** Releases the mutex and returns the EE result code. */
-    function unlock(mutex: object): number;
+    /** Blocks until acquired and returns the native EE result code. */
+    function lock(mutex: Handle): number;
 
-    /** Releases the native mutex immediately. */
-    function destroy(mutex: object): void;
+    /** Releases the mutex and returns the native EE result code. */
+    function unlock(mutex: Handle): number;
+
+    /** Releases the native mutex. Do not use `mutex` afterwards. */
+    function destroy(mutex: Handle): void;
 }

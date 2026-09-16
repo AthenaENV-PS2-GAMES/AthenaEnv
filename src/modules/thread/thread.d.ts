@@ -1,49 +1,76 @@
+/**
+ * EE thread management.
+ *
+ * Thread callbacks execute on native EE worker threads. Keep callbacks short,
+ * avoid direct QuickJS runtime access from native workers, and use the
+ * documented AthenaEnv synchronization boundaries.
+ *
+ * Example:
+ * ```js
+ * const worker = Thread.new(() => {
+ *     System.delay();
+ * }, 'worker', 16384, 16);
+ * Thread.start(worker);
+ * console.log(Thread.getStatus(worker));
+ * Thread.destroy(worker);
+ * ```
+ */
 declare namespace Thread {
+    /** Opaque handle returned by `Thread.new()`. */
+    interface Handle {
+        readonly __brand: 'Thread';
+    }
+
+    /** Snapshot of one tracked native thread. */
     interface TaskInfo {
+        /** Native EE thread ID. */
         id: number;
+        /** Thread name. */
         name: string;
+        /** Native status code. */
         status: number;
+        /** Configured stack size in bytes. */
         stack: number;
     }
 
     /**
-     * Creates a new thread.
-     * @param callback Function to execute in the thread.
-     * @param name Optional thread name (maximum 63 characters).
-     * @param stackSize Optional thread stack size in bytes (default 16384).
-     * @param priority Optional thread priority from 1 to 127 (default 16).
+     * Creates a native EE thread.
+     * @param callback Function executed by the new thread.
+     * @param name Optional name, limited to 63 characters.
+     * @param stackSize Stack size in bytes; defaults to 16384.
+     * @param priority EE priority from 1 to 127; defaults to 16.
      */
     function new(
         callback: () => void,
         name?: string,
         stackSize?: number,
         priority?: number
-    ): object;
+    ): Handle;
 
-    /** Starts thread execution and returns the EE result code. */
-    function start(thread: object): number;
+    /** Starts execution and returns the native EE result code. */
+    function start(thread: Handle): number;
 
-    /** Stops / terminates thread execution and returns the EE result code. */
-    function stop(thread: object): number;
+    /** Requests thread termination and returns the native EE result code. */
+    function stop(thread: Handle): number;
 
     /** Returns the native EE thread ID. */
-    function getId(thread: object): number;
+    function getId(thread: Handle): number;
 
-    /** Returns the thread name. */
-    function getName(thread: object): string;
+    /** Returns the current thread name. */
+    function getName(thread: Handle): string;
 
-    /** Sets the thread name. */
-    function setName(thread: object, name: string): void;
+    /** Replaces the thread name. */
+    function setName(thread: Handle, name: string): void;
 
-    /** Returns the current thread status code. */
-    function getStatus(thread: object): number;
+    /** Returns the native EE status code. */
+    function getStatus(thread: Handle): number;
 
-    /** Releases the native thread immediately; the object must not be reused. */
-    function destroy(thread: object): void;
+    /** Releases the thread handle. Stop it first; do not reuse the object. */
+    function destroy(thread: Handle): void;
 
-    /** Lists all active and tracked threads in the system. */
+    /** Returns all active/tracked threads. */
     function list(): TaskInfo[];
 
-    /** Force terminates a thread by its native ID. */
+    /** Force-terminates a native thread by ID. */
     function kill(id: number): number;
 }
