@@ -21,7 +21,7 @@
 extern "C" {
 #endif
 
-#define TRANSFER_REQUEST_MASK 0x80000000
+#define TRANSFER_REQUEST_MASK GRAPHICS_TRANSFER_REQUEST_MASK
 
 void texture_upload(GSCONTEXT *gsGlobal, GSSURFACE *Texture);
 

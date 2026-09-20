@@ -92,6 +92,22 @@ struct gsSurface
 };
 typedef struct gsSurface GSSURFACE;
 
+#define GRAPHICS_BIND_RESIDENT (-1)
+#define GRAPHICS_BIND_ERROR    (-2)
+#define GRAPHICS_TRANSFER_REQUEST_MASK 0x80000000u
+
+int graphics_surface_init(GSSURFACE *surface);
+void graphics_surface_release(GSSURFACE *surface);
+int graphics_surface_bind(GSSURFACE *surface, bool async);
+int graphics_surface_lock_and_bind(GSSURFACE *surface, bool async);
+int graphics_surface_lock(GSSURFACE *surface);
+int graphics_surface_unlock(GSSURFACE *surface);
+bool graphics_surface_is_locked(const GSSURFACE *surface);
+void graphics_surface_invalidate(GSSURFACE *surface);
+int graphics_surface_copy_block(
+	GSSURFACE *source, int source_x, int source_y,
+	GSSURFACE *destination, int destination_x, int destination_y);
+
 void athena_calculate_tbw(GSSURFACE *Texture);
 
 void athena_set_tw_th(const GSSURFACE *Texture, int *tw, int *th);

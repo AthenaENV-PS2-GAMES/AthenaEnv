@@ -10,7 +10,6 @@
 #include <graphics.h>
 #include <athena_math.h>
 #include <dbgprintf.h>
-#include <texture_manager.h>
 
 #include <owl_packet.h>
 
@@ -143,7 +142,7 @@ void draw_triangle_gouraud_list(float x, float y, prim_gouraud_triangle *list, i
 }
 
 void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triangle *list, int list_size) {
-    int texture_id = texture_manager_bind(gsGlobal, source, true);
+    int texture_id = graphics_surface_bind(source, true);
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, (texture_id != -1? 11 : 7)+(list_size*3));
 
@@ -176,13 +175,13 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 
 	owl_add_tag(packet, 
 		GS_TEX0_1+gsGlobal->PrimContext, 
-		GS_SETREG_TEX0((source->Vram & ~TRANSFER_REQUEST_MASK)/256, 
+		GS_SETREG_TEX0((source->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->TBW, 
 					  source->PSM,
 					  tw, th, 
 					  gsGlobal->PrimAlphaEnable, 
 					  COLOR_MODULATE,
-					  (source->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
+					  (source->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->ClutPSM, 
 					  0, 0, 
 					  source->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
@@ -208,7 +207,7 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 }
 
 void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_tex_gouraud_triangle *list, int list_size) {
-    int texture_id = texture_manager_bind(gsGlobal, source, true);
+    int texture_id = graphics_surface_bind(source, true);
 
 	uint32_t packet_list_size = ceilf(list_size*4.5f);
 
@@ -243,13 +242,13 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 
 	owl_add_tag(packet, 
 		GS_TEX0_1+gsGlobal->PrimContext, 
-		GS_SETREG_TEX0((source->Vram & ~TRANSFER_REQUEST_MASK)/256, 
+		GS_SETREG_TEX0((source->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->TBW, 
 					  source->PSM,
 					  tw, th, 
 					  gsGlobal->PrimAlphaEnable, 
 					  COLOR_MODULATE,
-					  (source->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
+					  (source->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->ClutPSM, 
 					  0, 0, 
 					  source->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
@@ -286,7 +285,7 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 
 void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list, int list_size)
 {
-    int texture_id = texture_manager_bind(gsGlobal, source, true);
+    int texture_id = graphics_surface_bind(source, true);
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_id != -1? (10+(list_size*3)) : (6+(list_size*3)));
 
@@ -319,13 +318,13 @@ void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list,
 
 	owl_add_tag(packet, 
 		GS_TEX0_1+gsGlobal->PrimContext, 
-		GS_SETREG_TEX0((source->Vram & ~TRANSFER_REQUEST_MASK)/256, 
+		GS_SETREG_TEX0((source->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->TBW, 
 					  source->PSM,
 					  tw, th, 
 					  gsGlobal->PrimAlphaEnable, 
 					  COLOR_MODULATE,
-					  (source->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
+					  (source->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->ClutPSM, 
 					  0, 0, 
 					  source->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
@@ -369,7 +368,7 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 		flush_gs_texcache();
 	}
 
-    int texture_id = texture_manager_bind(gsGlobal, source, true);
+    int texture_id = graphics_surface_bind(source, true);
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_id != -1? 13 : 9);
 
@@ -402,13 +401,13 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 
 	owl_add_tag(packet, 
 		GS_TEX0_1+gsGlobal->PrimContext, 
-		GS_SETREG_TEX0((source->Vram & ~TRANSFER_REQUEST_MASK)/256, 
+		GS_SETREG_TEX0((source->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->TBW, 
 					  source->PSM,
 					  tw, th, 
 					  gsGlobal->PrimAlphaEnable, 
 					  COLOR_MODULATE,
-					  (source->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
+					  (source->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->ClutPSM, 
 					  0, 0, 
 					  source->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
@@ -438,7 +437,7 @@ void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float h
 	x += width/2;
 	y += height/2;
 
-    int texture_id = texture_manager_bind(gsGlobal, source, true);
+    int texture_id = graphics_surface_bind(source, true);
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_id != -1? 19 : 15);
 
@@ -471,13 +470,13 @@ void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float h
 
 	owl_add_tag(packet, 
 		GS_TEX0_1+gsGlobal->PrimContext, 
-		GS_SETREG_TEX0((source->Vram & ~TRANSFER_REQUEST_MASK)/256, 
+		GS_SETREG_TEX0((source->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->TBW, 
 					  source->PSM,
 					  tw, th, 
 					  gsGlobal->PrimAlphaEnable, 
 					  COLOR_MODULATE,
-					  (source->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
+					  (source->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK)/256,
 					  source->ClutPSM, 
 					  0, 0, 
 					  source->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)

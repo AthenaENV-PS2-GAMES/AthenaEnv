@@ -4,6 +4,7 @@
 #include <malloc.h>
 #include <math.h>
 #include <fcntl.h>
+#include <string.h>
 
 #include <time.h>
 
@@ -300,6 +301,96 @@ uint32_t athena_vram_surface_size(int width, int height, int psm)
 	heightBlocks = (-heightAlign) & (heightBlocks + heightAlign - 1);
 
 	return widthBlocks * heightBlocks * 256;
+}
+
+int graphics_surface_init(GSSURFACE *surface)
+{
+	if (!surface)
+		return GRAPHICS_BIND_ERROR;
+
+	memset(surface, 0, sizeof(*surface));
+	surface->PSM = GS_PSM_CT32;
+	surface->ClutPSM = GS_PSM_CT32;
+	surface->Filter = GS_FILTER_NEAREST;
+	surface->Delayed = true;
+	return 0;
+}
+
+void graphics_surface_release(GSSURFACE *surface)
+{
+	if (!surface)
+		return;
+
+	texture_manager_free(surface);
+	surface->Vram = 0;
+	surface->VramClut = 0;
+}
+
+int graphics_surface_bind(GSSURFACE *surface, bool async)
+{
+	int result;
+
+	if (!surface || surface->Width == 0 || surface->Height == 0)
+		return GRAPHICS_BIND_ERROR;
+
+	graphics_service_init();
+	result = texture_manager_bind(gsGlobal, surface, async);
+	return result;
+}
+
+int graphics_surface_lock_and_bind(GSSURFACE *surface, bool async)
+{
+	int result = graphics_surface_bind(surface, async);
+
+	if (result >= 0 || result == GRAPHICS_BIND_RESIDENT)
+		graphics_surface_lock(surface);
+
+	return result;
+}
+
+int graphics_surface_lock(GSSURFACE *surface)
+{
+	if (!surface)
+		return 0;
+	return texture_manager_lock(surface);
+}
+
+int graphics_surface_unlock(GSSURFACE *surface)
+{
+	if (!surface)
+		return 0;
+	return texture_manager_unlock(surface);
+}
+
+bool graphics_surface_is_locked(const GSSURFACE *surface)
+{
+	if (!surface)
+		return false;
+	return texture_manager_is_locked((GSSURFACE *)surface) != 0;
+}
+
+void graphics_surface_invalidate(GSSURFACE *surface)
+{
+	if (surface)
+		texture_manager_invalidate(surface);
+}
+
+int graphics_surface_copy_block(
+	GSSURFACE *source, int source_x, int source_y,
+	GSSURFACE *destination, int destination_x, int destination_y)
+{
+	if (!source || !destination || source == destination ||
+		source->Vram == 0 || destination->Vram == 0 ||
+		source_x < 0 || source_y < 0 ||
+		destination_x < 0 || destination_y < 0 ||
+		destination->Width == 0 || destination->Height == 0 ||
+		(uint32_t)source_x + destination->Width > source->Width ||
+		(uint32_t)source_y + destination->Height > source->Height)
+		return GRAPHICS_BIND_ERROR;
+
+	gs_copy_block(source, source_x, source_y, destination,
+		destination_x, destination_y);
+	return 0;
 }
 
 void athena_calculate_tbw(GSSURFACE *Texture)
@@ -1366,7 +1457,7 @@ void setup_buffer_textures() {
 	draw_buffer.PageAligned = true;
 	draw_buffer.Filter = GS_FILTER_NEAREST;
 
-	texture_manager_lock_and_bind(gsGlobal, &draw_buffer, false);
+	graphics_surface_lock_and_bind(&draw_buffer, false);
 
    	display_buffer.Width = gsGlobal->Width;
 	display_buffer.Height = gsGlobal->Height;
@@ -1381,7 +1472,7 @@ void setup_buffer_textures() {
 	display_buffer.Filter = GS_FILTER_NEAREST;
 
 	if (gsGlobal->DoubleBuffering) {
-		texture_manager_lock_and_bind(gsGlobal, &display_buffer, false);
+		graphics_surface_lock_and_bind(&display_buffer, false);
 	}
 
    	depth_buffer.Width = gsGlobal->Width;
@@ -1397,7 +1488,7 @@ void setup_buffer_textures() {
 	depth_buffer.Filter = GS_FILTER_NEAREST;
 
 	if (gsGlobal->ZBuffering) {
-		texture_manager_lock_and_bind(gsGlobal, &depth_buffer, false);
+		graphics_surface_lock_and_bind(&depth_buffer, false);
 	}
 
 	gsGlobal->ScreenBuffer[0] = draw_buffer.Vram;

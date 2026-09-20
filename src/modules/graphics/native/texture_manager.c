@@ -536,12 +536,12 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		csize   = athena_vram_surface_size(cwidth, cheight, tex->ClutPSM);
 	}
 	if (tsize == UINT32_MAX || csize == UINT32_MAX)
-		return -1;
+		return GRAPHICS_BIND_ERROR;
 
 	if (block == NULL) {
 		block = _blockAlloc(tsize + csize, tex->PageAligned);
 		if (block == NULL)
-			return -1;
+			return GRAPHICS_BIND_ERROR;
 		block->tex = tex;
 		block->iUseCount = 0;
 		block->iUseCountPrev = 1;
@@ -613,7 +613,8 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 	}
 
 	if (async)
-		return (ttransfer|ctransfer)? texture_manager_push(tex) : -1;
+		return (ttransfer|ctransfer) ? texture_manager_push(tex) :
+			GRAPHICS_BIND_RESIDENT;
 
 	return (ttransfer|ctransfer);
 }
@@ -665,7 +666,7 @@ int texture_manager_lock_and_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool asyn
 {
 	int result = texture_manager_bind(gsGlobal, tex, async);
 	
-	if (result >= 0) {
+	if (result >= 0 || result == GRAPHICS_BIND_RESIDENT) {
 		texture_manager_lock(tex);
 	}
 	
