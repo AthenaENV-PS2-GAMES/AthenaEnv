@@ -1,8 +1,43 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-16T17:21:22.838Z",
+  "generatedAt": "2026-09-20T17:42:16.376Z",
   "modules": [
+    {
+      "id": "color",
+      "name": "Color",
+      "description": "RGBA color construction and component manipulation.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Color"
+    },
+    {
+      "id": "graphics",
+      "name": "Graphics",
+      "description": "PS2 GS initialization, frame control, colors, and 2D primitives.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": [
+          "-L$(PS2DEV)/gsKit/lib",
+          "-ldmakit"
+        ]
+      },
+      "global_alias": null
+    },
     {
       "id": "iop",
       "name": "IOP",
@@ -49,6 +84,23 @@
         "ee_libs": []
       },
       "global_alias": "Mutex"
+    },
+    {
+      "id": "screen",
+      "name": "Screen",
+      "description": "Screen mode, frame control, GS parameters, and display synchronization.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Screen"
     },
     {
       "id": "system",

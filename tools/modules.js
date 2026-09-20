@@ -246,6 +246,16 @@ const char *athena_get_modules_bootstrap_script(void) {
 
     for (const m of configuredModules) {
         incs.push(`-Isrc/modules/${m._dirName}`);
+        if (m.includes && Array.isArray(m.includes)) {
+            for (const include of m.includes) {
+                if (include === '.') continue;
+                if (include.startsWith('$') || include.startsWith('/')) {
+                    incs.push(`-I${include}`);
+                } else {
+                    incs.push(`-Isrc/modules/${m._dirName}/${include}`);
+                }
+            }
+        }
         if (m.sources && Array.isArray(m.sources)) {
             for (const src of m.sources) {
                 srcs.push(`src/modules/${m._dirName}/${src}`);
@@ -253,7 +263,7 @@ const char *athena_get_modules_bootstrap_script(void) {
         }
         if (m.dependencies?.ee_libs && Array.isArray(m.dependencies.ee_libs)) {
             for (const lib of m.dependencies.ee_libs) {
-                libs.add(lib);
+                libs.add(lib.startsWith('-') ? lib : `-l${lib}`);
             }
         }
     }

@@ -1,0 +1,30 @@
+{
+  "id": "color",
+  "name": "Color",
+  "description": "RGBA color construction and component manipulation.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "quickjs/ath_color.c"
+  ],
+  "includes": [
+    ".",
+    "../graphics"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "Color",
+    "global_alias": "Color",
+    "init_func": "athena_color_init",
+    "header": "quickjs/ath_color.h"
+  },
+  "types": "color.d.ts"
+}

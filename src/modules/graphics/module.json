@@ -1,0 +1,30 @@
+{
+  "id": "graphics",
+  "name": "Graphics",
+  "description": "PS2 GS initialization, frame control, colors, and 2D primitives.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/graphics.c",
+    "native/owl_draw.c",
+    "native/owl_packet.c",
+    "native/texture_manager.c",
+    "native/vif.c"
+  ],
+  "includes": [
+    ".",
+    "$(PS2DEV)/gsKit/include",
+    "$(PS2SDK)/ports/include/freetype2"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": [
+      "-L$(PS2DEV)/gsKit/lib",
+      "-ldmakit"
+    ]
+  },
+  "types": null
+}
