@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <time.h>
+#include <dbgprintf.h>
 
 #ifdef ATHENA_HAS_BEARSSL
 #include <bearssl.h>

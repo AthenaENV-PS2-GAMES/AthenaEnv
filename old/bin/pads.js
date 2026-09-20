@@ -39,8 +39,8 @@ const r3 = new Image("pads/r3.png");
 var rumble = false;
 var pad = Pads.get(0);
 
-Screen.display(() => {
-
+while(true) {
+    Screen.clear();
     const connectedCount = Pads.getConnectedCount();
     const connectedPorts = Pads.getConnected();
     const isActivePort0 = Pads.isActive(0);
@@ -111,7 +111,7 @@ Screen.display(() => {
     Draw.rect(220.0f, 280.0f, 75, 75, dark_gray);
     Draw.rect(380.0f, 280.0f, 75, 75, dark_gray);
 
-    if(((pad.btns & Pads.R2) && (pad.btns & Pads.L2)) && !((pad.old_btns & Pads.R2) && !(pad.old_btns & Pads.L2))){
+    if(((pad.btns & Pads.R2) && (pad.btns & Pads.L2)) && ((pad.old_btns & Pads.R2) && !(pad.old_btns & Pads.L2))){
         rumble? Pads.rumble(0 ,0) : Pads.rumble(1 ,255);
         rumble ^= 1;
     }
@@ -121,4 +121,5 @@ Screen.display(() => {
     }
 
     font.print(10, 10, Screen.getFPS(360) + " FPS");
-});
+    Screen.flip();
+}

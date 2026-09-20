@@ -1,6 +1,8 @@
 # Building native modules
 Native modules are needed when you need more performance, low-level hardware access or any other reason for it. Of course you need some experience with PS2SDK and C/C++ coding.  
-  
+
+For the pure-C framework API (usable without QuickJS), see [C_API.md](C_API.md).
+
 First let's setup our environment in order to expose Athena methods and structures. Open your terminal init file (.bashrc, .profile etc) and add the environment variables below. REMEMBER: Change the dummy path (/path/to/athena/repo/) to where do you store Athena repo.
 ```bash
 export ATHENAENV_SRC=/path/to/athena/repo/AthenaEnv/src

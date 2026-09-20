@@ -408,15 +408,47 @@ static inline bool is_add_s(uint32_t instr, uint32_t *fd, uint32_t *fs, uint32_t
 int mips_emitter_peephole_optimize(MipsEmitter *em) {
 
     if (!em || !em->buffer.code) return -1;
-    
+
     uint32_t *code = em->buffer.code;
     size_t count = em->buffer.count;
     size_t start = em->buffer.function_start;
-    
+
     int optimized_count = 0;
     int pass = 0;
     bool changed = true;
-    
+
+    /* Instructions that some branch/jump can land on directly.
+     *
+     * Every two-instruction pattern below fuses code[i] and code[i+1] and
+     * then NOPs out code[i+1]. That is only valid when code[i+1] is
+     * reachable ONLY by falling through from code[i]. If a branch targets
+     * code[i+1], control can arrive there without ever executing code[i],
+     * and deleting code[i+1] silently drops work that path depends on.
+     *
+     * This was a real miscompile: a bool-producing comparison emits
+     *     BC1T L_true / <false: ADDIU $sX,$zero,0> / L_true: ADDIU $sX,$zero,1
+     *     L_end: ADDU $v0,$sX,$zero        <- the return move, and a label
+     * Pattern 7a fused the true-arm's ADDIU with that move into
+     * "ADDIU $v0,$zero,1" and NOPed the move - so the FALSE path, which
+     * jumps straight to L_end, never copied its result into $v0 and
+     * returned whatever the caller happened to leave there. Direct calls
+     * from JS usually saw a zeroed $v0 and looked correct; a native ->
+     * native call left garbage, making every false compare read as true.
+     *
+     * Labels are already bound to instruction indices by this point
+     * (fixups are only resolved later, in mips_emitter_finalize), so the
+     * bound label offsets are exactly the set of reachable-by-branch
+     * instructions. */
+    bool *is_branch_target = (bool *)calloc(count + 1, sizeof(bool));
+    if (!is_branch_target) return -1;
+    for (int li = 0; li < MAX_LABELS; li++) {
+        if (em->labels[li].resolved && em->labels[li].offset >= 0 &&
+            (size_t)em->labels[li].offset < count) {
+            is_branch_target[em->labels[li].offset] = true;
+        }
+    }
+    #define PEEPHOLE_CAN_FUSE_NEXT(idx) (!is_branch_target[(idx) + 1])
+
     /* Run multiple passes until no more optimizations */
     while (changed && pass < 5) {
         changed = false;
@@ -439,8 +471,10 @@ int mips_emitter_peephole_optimize(MipsEmitter *em) {
                 continue;
             }
             
-            /* Two-instruction patterns */
-            if (i + 1 < count) {
+            /* Two-instruction patterns. Every one of these deletes code[i+1],
+             * so they're all invalid when something can branch directly to
+             * code[i+1] - see PEEPHOLE_CAN_FUSE_NEXT above. */
+            if (i + 1 < count && PEEPHOLE_CAN_FUSE_NEXT(i)) {
                 uint32_t instr2 = code[i + 1];
                 
                 /* Pattern 2: Consecutive NOPs (not in delay slot) -> keep one
@@ -580,7 +614,14 @@ int mips_emitter_peephole_optimize(MipsEmitter *em) {
                 
                 /* Pattern 11: Safe instruction + BEQ/BNE + NOP -> BEQ/BNE + Safe instruction
                  * Fill branch delay slots with useful instructions */
-                if (i >= start + 1 && i + 1 < count) {
+                /* Additionally requires that nothing branches to the branch
+                 * itself (code[i]) or to the instruction being relocated
+                 * (code[i-1]): the delay slot executes as part of the
+                 * branch, so a path jumping straight to code[i] would
+                 * suddenly also execute the relocated instruction, and a
+                 * path jumping to code[i-1] would find it NOPed out. */
+                if (i >= start + 1 && i + 1 < count &&
+                    !is_branch_target[i] && !is_branch_target[i - 1]) {
                     uint32_t branch_instr = code[i];
                     uint32_t delay_slot = code[i + 1];
                     
@@ -680,7 +721,9 @@ int mips_emitter_peephole_optimize(MipsEmitter *em) {
             }
         }
     }
-    
+
+    #undef PEEPHOLE_CAN_FUSE_NEXT
+    free(is_branch_target);
     return optimized_count;
 }
 

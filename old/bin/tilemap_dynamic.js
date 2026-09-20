@@ -1,3 +1,5 @@
+// {"name": "Tilemap Dynamic", "author": "Daniel Santos", "version": "07112026", "icon": "render_icon.png", "file": "tilemap_dynamic.js"}
+
 const pad = Pads.get();
 
 const TILE_SIZE = 16;

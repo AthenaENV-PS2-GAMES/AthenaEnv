@@ -1144,11 +1144,19 @@ typedef struct {
     int arg_count;
     int var_count;
     int stack_size;
+    JSValueConst *cpool;
+    int cpool_count;
+    int closure_var_count;
 } JSFunctionBytecodeInfo;
 
 /* Returns 0 on success, -1 if not a bytecode function, -2 on other errors */
 int JS_GetFunctionBytecodeInfo(JSContext *ctx, JSValueConst func_val, 
                                JSFunctionBytecodeInfo *info);
+
+/* Returns the current value held by closure variable `idx` of a bytecode
+ * function (not duplicated), or JS_UNDEFINED if unavailable. */
+JSValueConst JS_GetFunctionClosureVarValue(JSContext *ctx, JSValueConst func_val,
+                                           int idx);
 
 #undef js_unlikely
 #undef js_force_inline

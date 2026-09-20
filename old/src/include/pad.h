@@ -1,3 +1,4 @@
+#include <tamtypes.h>
 #include <libpad.h>
 
 extern int waitPadReady(int port, int slot);

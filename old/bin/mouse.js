@@ -1,8 +1,6 @@
 // {"name": "Mouse demo", "author": "Daniel Santos", "version": "04102023", "file": "mouse.js"}
 
-import * as Mouse from "athena_mouse.erl"
-
-IOP.loadModule(System.boot_path + "/iop/ps2mouse.irx");
+IOP.loadModule("ps2mouse");
 
 Mouse.init();
 

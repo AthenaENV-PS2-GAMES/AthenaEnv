@@ -45,6 +45,9 @@
 
 #include <graphics.h>
 #include <ath_env.h>
+#ifdef ATHENA_GRAPHICS
+#include <athena/screen.h>
+#endif
 
 #include "cutils.h"
 #include "list.h"
@@ -405,23 +408,27 @@ void js_destroy_input_events(JSContext *ctx);
 static JSValue js_reload(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
-    uint8_t *buf;
     const char *filename;
-    JSValue ret;
-    size_t buf_len;
-    
+
     filename = JS_ToCString(ctx, argv[0]);
     if (!filename)
         return JS_EXCEPTION;
 
-    JSValue val = JS_GetPropertyStr(ctx, this_val, "reload");
-	JS_FreeValue(ctx, val);
-    JS_FreeValue(ctx, val);
-
-    JS_FreeValue(ctx, this_val);
-    
     set_default_script(filename);
     JS_FreeCString(ctx, filename);
+
+    /* This function never returns to the interpreter (it longjmp()s out
+       below), so JS_CallInternal()'s normal post-call cleanup for this
+       frame -- freeing its own reference to the callee (this function
+       itself) and to this_val -- never runs, leaking both by exactly one
+       ref and making JS_FreeRuntime() abort on list_empty(&rt->gc_obj_list).
+       Compensate manually: this_val needs one free, and the callee needs
+       two -- one for the property lookup below that fetches it, one for
+       the interpreter's own still-held reference to it. */
+    JSValue self_ref = JS_GetPropertyStr(ctx, this_val, "reload");
+    JS_FreeValue(ctx, self_ref);
+    JS_FreeValue(ctx, self_ref);
+    JS_FreeValue(ctx, this_val);
 
     js_destroy_render_loop(ctx);
     js_destroy_input_events(ctx);
@@ -3608,7 +3615,6 @@ void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
 
 static JSValueConst render_loop_func = JS_UNDEFINED;
 static JSValueConst global_obj_ref = JS_UNDEFINED;
-static uint64_t clear_color = GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00);
 
 void js_set_render_loop_func(JSContext *ctx, JSValueConst func) {
     if (func == JS_UNDEFINED || func == JS_NULL) {
@@ -3616,11 +3622,14 @@ void js_set_render_loop_func(JSContext *ctx, JSValueConst func) {
         return;
     }
 
+    if (render_loop_func != JS_UNDEFINED)
+        JS_FreeValue(ctx, render_loop_func);
+
     render_loop_func = func;
 }
 
 void js_set_clear_color(uint64_t color) {
-    clear_color = color;
+    athena_screen_set_clear_color((Color)color);
 }
 
 typedef struct {
@@ -3679,6 +3688,11 @@ void js_destroy_input_events(JSContext *ctx) {
     }
 
     totalPadEvents = 0;
+
+    /* inputEventHandler points at an AthenaPad allocated in the JSContext
+       being torn down (via Pads.get().setEventHandler()) -- js_std_loop()
+       dereferences it every frame, so it must not outlive the context. */
+    inputEventHandler = NULL;
 }
 
 int js_std_loop(JSContext *ctx)
@@ -3701,7 +3715,7 @@ int js_std_loop(JSContext *ctx)
         }
 
         if (render_loop_func != JS_UNDEFINED) {
-            clearScreen(clear_color);
+            clearScreen(athena_screen_get_clear_color());
             ret = JS_Call(ctx, render_loop_func, JS_UNDEFINED, 0, NULL);
             flipScreen();
 

@@ -1,4 +1,4 @@
-// {"name": "Skinning demo", "author": "Daniel Santos", "version": "04072023", "icon": "render_icon.png", "file": "skinning.js"}
+// {"name": "Shadows demo", "author": "Daniel Santos", "version": "04072023", "icon": "render_icon.png", "file": "shadows.js"}
 
 const font = new Font("default");
 font.scale = 0.6f;
@@ -53,6 +53,10 @@ const gltf_skin = new RenderData("Twerk.gltf");
 gltf_skin.accurate_clipping = true;
 gltf_skin.face_culling = Render.CULL_FACE_BACK;
 gltf_skin.pipeline = Render.PL_DEFAULT;
+// Skinned meshes animate via bone matrices in the VU, not by touching
+// positions/normals/etc, and this mesh isn't used with ODE trimesh
+// collision -- safe to reclaim its float source now that setup is done.
+gltf_skin.freeze();
 
 const skin_object = new RenderObject(gltf_skin);
 skin_object.rotation = {x:Math.PI/2, y:0.0, z:0.0};
@@ -84,7 +88,8 @@ Screen.setParam(Screen.DEPTH_TEST_ENABLE, false);
 Screen.switchContext();
 
 const scene = new RenderData("scene.gltf");
-scene.face_culling = Render.CULL_FACE_NONE;
+scene.face_culling = Render.CULL_FACE_BACK;
+scene.accurate_clipping = true;
 scene.pipeline = Render.PL_DEFAULT;
 
 scene.getTexture(0).filter = LINEAR;
@@ -92,17 +97,82 @@ scene.getTexture(0).filter = LINEAR;
 const scene_object = new RenderObject(scene);
 // ODE space for projector raycasts against the scene
 
+// NOT calling scene.freeze() here: ODE.GeomRenderObject builds its trimesh
+// collision straight off scene's positions and keeps reading that pointer
+// on every query, not just at setup -- freezing (which frees it) would
+// leave the collision geometry dangling.
 const scene_collision = ODE.GeomRenderObject(space, scene_object);
 
 const box = new RenderData("box_bump.gltf");
-box.face_culling = Render.CULL_FACE_NONE;
+box.face_culling = Render.CULL_FACE_BACK;
 
 //box.getTexture(0).filter = LINEAR;
 //box.getTexture(1).filter = LINEAR;
 
+// Not used with ODE trimesh collision in this demo -- safe to freeze.
+box.freeze();
+
 const box_object = new RenderObject(box);
 box_object.position = {x:2.0, y:0.2, z:2.0};
 box_object.scale = {x:0.2, y:0.2, z:0.2};
+
+// --- Tristrip + face culling test ------------------------------------------
+// A vertical ribbon built as ONE triangle strip: consecutive triangles share
+// two vertices, so their winding alternates. That alternation is what face
+// culling has to keep in step with -- if the parity is wrong, half the quads
+// vanish and the ribbon comes out STRIPED. Right, it is all-or-nothing: solid
+// from the front, gone once you orbit past its edge.
+//
+// SQUARE toggles culling, CIRCLE toggles accurate clipping (the two live in
+// different VU paths, and each has its own copy of the parity flip).
+const RIBBON_QUADS = 8;
+const ribbon_vertices = (RIBBON_QUADS + 1) * 2;
+
+const ribbon_positions = new Float32Array(ribbon_vertices * 4);
+const ribbon_colors = new Float32Array(ribbon_vertices * 4);
+
+for (let i = 0; i <= RIBBON_QUADS; i++) {
+    const x = -4.0f + (8.0f * i) / RIBBON_QUADS;
+
+    // Top vertex before bottom, so the first triangle comes out counter-
+    // clockwise towards +Z, where the camera starts: front-facing.
+    const top = i * 8;
+    const bottom = top + 4;
+
+    ribbon_positions[top]        = x;    ribbon_positions[top + 1]    = 4.0f;
+    ribbon_positions[top + 2]    = -3.0f; ribbon_positions[top + 3]   = 1.0f;
+
+    ribbon_positions[bottom]     = x;    ribbon_positions[bottom + 1] = 1.0f;
+    ribbon_positions[bottom + 2] = -3.0f; ribbon_positions[bottom + 3] = 1.0f;
+
+    // Alternating column colors: makes it obvious which quads survived.
+    const warm = (i % 2) === 0;
+    ribbon_colors[top]        = warm? 0.95f : 0.15f;
+    ribbon_colors[top + 1]    = 0.35f;
+    ribbon_colors[top + 2]    = warm? 0.15f : 0.95f;
+    ribbon_colors[top + 3]    = 1.0f;
+
+    ribbon_colors[bottom]     = warm? 0.95f : 0.15f;
+    ribbon_colors[bottom + 1] = 0.35f;
+    ribbon_colors[bottom + 2] = warm? 0.15f : 0.95f;
+    ribbon_colors[bottom + 3] = 1.0f;
+}
+
+// No normals and no texcoords: PL_NO_LIGHTS reads neither, and leaving them out
+// keeps the strip down to what the culling test actually needs.
+const ribbon_list = Render.vertexList(ribbon_positions, undefined, undefined, ribbon_colors);
+
+// Third argument is what marks it as a strip.
+const ribbon = new RenderData(ribbon_list, null, true);
+ribbon.pipeline = Render.PL_NO_LIGHTS;
+ribbon.texture_mapping = false;
+ribbon.accurate_clipping = false;
+ribbon.face_culling = Render.CULL_FACE_BACK;
+
+const ribbon_object = new RenderObject(ribbon);
+
+let ribbon_culling = true;
+let ribbon_clipping = false;
 
 Camera.position(0.0f, 0.0f, 20.0f);
 
@@ -185,6 +255,16 @@ while(true) {
         switch_anim ^= 1;
     }
 
+    if (pad.justPressed(Pads.SQUARE)) {
+        ribbon_culling = !ribbon_culling;
+        ribbon.face_culling = ribbon_culling? Render.CULL_FACE_BACK : Render.CULL_FACE_NONE;
+    }
+
+    if (pad.justPressed(Pads.CIRCLE)) {
+        ribbon_clipping = !ribbon_clipping;
+        ribbon.accurate_clipping = ribbon_clipping;
+    }
+
     Screen.setParam(Screen.DEPTH_TEST_ENABLE, false);
 
     sky.draw(0, 0);
@@ -215,7 +295,7 @@ while(true) {
         Camera.update();
     }
     gltf_skin.texture_mapping = false;
-    gltf_skin.shade_model = Render.SHADE_FLAT;
+    gltf_skin.shade_model = 0;
     gltf_skin.pipeline = Render.PL_NO_LIGHTS;
     skin_object.render();
     // Restore main camera and context
@@ -230,6 +310,8 @@ while(true) {
 
     scene_object.render();
 
+    ribbon_object.render();
+
     // Projector follows the skinned character on XZ, projected on ground (y=0)
     projSkin.position = { x: skin_object.position.x, y: 0.0f, z: skin_object.position.z };
     projSkin.setLightOffset(1.0);
@@ -238,7 +320,7 @@ while(true) {
     world.stepWithContacts(space, jgroup, 0.01f);
 
     gltf_skin.texture_mapping = true;
-    gltf_skin.shade_model = Render.SHADE_GOURAUD;
+    gltf_skin.shade_model = 1;
     gltf_skin.pipeline = Render.PL_DEFAULT;
     skin_object.render();
 
@@ -265,7 +347,7 @@ while(true) {
         Camera.update();
     }
     box.texture_mapping = false;
-    box.shade_model = Render.SHADE_FLAT;
+    box.shade_model = 0;
     box.pipeline = Render.PL_NO_LIGHTS;
     box_object.scale = {x:0.23, y:0.23, z:0.23};
     box_object.render();
@@ -285,7 +367,7 @@ while(true) {
     world.stepWithContacts(space, jgroup, 0.01f);
 
     box.texture_mapping = true;
-    box.shade_model = Render.SHADE_GOURAUD;
+    box.shade_model = 1;
     box.pipeline = Render.PL_DEFAULT;
     box_object.scale = {x:0.2, y:0.2, z:0.2};
     box_object.render();
@@ -294,6 +376,9 @@ while(true) {
 
     font.print(10, 10, Screen.getFPS(360) + " FPS | " + free_mem + " | Free VRAM: " + free_vram + "KB");
     font.print(10, 25, gltf_skin.size + " Vertices");
+    font.print(10, 40, "Tristrip ribbon: " + RIBBON_QUADS + " quads | SQUARE cull: " + (ribbon_culling? "BACK" : "NONE")
+                       + " | CIRCLE clip: " + (ribbon_clipping? "ACCURATE" : "FAST"));
+    font.print(10, 55, "solid or gone = ok, striped = wrong parity");
 
     Screen.flip();
 }

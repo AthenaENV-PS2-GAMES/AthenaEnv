@@ -154,41 +154,26 @@ NativeString* native_string_replace(const NativeString *str, const NativeString 
     if (!str || !find || !replace || find->length == 0) {
         return native_string_clone(str);
     }
-    
-    // Count occurrences
-    int count = 0;
-    const char *pos = str->data;
-    while ((pos = strstr(pos, find->data)) != NULL) {
-        count++;
-        pos += find->length;
-    }
-    
-    if (count == 0) return native_string_clone(str);
-    
-    // Calculate new length
-    size_t new_len = str->length + count * (replace->length - find->length);
+
+    /* JS String.prototype.replace(string, string) replaces only the first match */
+    const char *pos = strstr(str->data, find->data);
+    if (!pos) return native_string_clone(str);
+
+    size_t prefix_len = (size_t)(pos - str->data);
+    size_t suffix_len = str->length - prefix_len - find->length;
+    size_t new_len = prefix_len + replace->length + suffix_len;
+
     NativeString *result = native_string_new(new_len + 1);
     if (!result) return NULL;
-    
-    // Perform replacement
-    const char *src = str->data;
+
     char *dst = result->data;
-    
-    while ((pos = strstr(src, find->data)) != NULL) {
-        size_t prefix_len = pos - src;
-        memcpy(dst, src, prefix_len);
-        dst += prefix_len;
-        
-        memcpy(dst, replace->data, replace->length);
-        dst += replace->length;
-        
-        src = pos + find->length;
-    }
-    
-    // Copy remaining
-    strcpy(dst, src);
+    memcpy(dst, str->data, prefix_len);
+    dst += prefix_len;
+    memcpy(dst, replace->data, replace->length);
+    dst += replace->length;
+    memcpy(dst, pos + find->length, suffix_len + 1);
     result->length = new_len;
-    
+
     return result;
 }
 

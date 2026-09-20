@@ -6,7 +6,7 @@
 #include <elf-loader.h>
 #include <libcdvd.h>
 #include <timer.h>
-#include <debug.h>
+#include <dbgprintf.h>
 
 #include <ath_env.h>
 #include <system.h>
@@ -26,205 +26,106 @@
 #include <macros.h>
 #include <n32_call.h>
 
+#include <athena/system_facade.h>
 #include <erl.h>
 
 #define MAX_DIR_FILES 512
 
-static JSValue athena_dir(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_dir(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
     if (argc != 0 && argc != 1) return JS_ThrowSyntaxError(ctx, "Argument error: System.listDir([path]) takes zero or one argument.");
 
-    JSValue arr = JS_NewArray(ctx);
-
-    const char *temp_path = "";
-    char path[255], tpath[384];
-
-    getcwd((char *)path, 256);
-    dbgprintf("current dir %s\n",(char *)path);
-
+    const char *temp_path = NULL;
     if (argc != 0)
-    {
         temp_path = JS_ToCString(ctx, argv[0]);
-        // append the given path to the boot_path
 
-            strcpy ((char *)path, boot_path);
+    AthenaDirListing *listing = athena_system_list_dir(temp_path);
+    if (temp_path)
+        JS_FreeCString(ctx, temp_path);
 
-            if (strchr(temp_path, ':'))
-               // workaround in case of temp_path is containing
-               // a device name again
-               strcpy ((char *)path, temp_path);
-            else
-               strcat ((char *)path, temp_path);
+    JSValue arr = JS_NewArray(ctx);
+    if (!listing)
+        return arr;
+
+    for (int i = 0; i < listing->count; i++) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_DefinePropertyValueStr(ctx, obj, "name", JS_NewString(ctx, listing->entries[i].name), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "size", JS_NewUint32(ctx, listing->entries[i].size), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, obj, "dir", JS_NewBool(ctx, listing->entries[i].is_dir), JS_PROP_C_W_E);
+        JS_DefinePropertyValueUint32(ctx, arr, i, obj, JS_PROP_C_W_E);
     }
 
-    //strcpy(path, __ps2_normalize_path(path));
-    dbgprintf("\nchecking path : %s\n",path);
-
-    int i = 0;
-
-    DIR *d;
-    struct dirent *dir;
-
-    struct stat     statbuf;
-    if (strncmp(path, "hdd", 3) == 0 && strlen(path) <= 5)
-    {
-        iox_dirent_t dirent;
-        int fd, ret = 0;
-        if ((fd = fileXioDopen(strncpy(tpath, path, 5))) >= 0) {
-            while (fileXioDread(fd, &dirent) > 0) {
-                if (dirent.stat.attr & APA_FLAG_SUB)
-                    continue;
-                if (strcmp(dirent.name, "__empty") == 0)
-                    continue;
-
-                JSValue obj = JS_NewObject(ctx);
-
-				if (dirent.stat.mode != APA_TYPE_HDL) {
-					strcpy(tpath, dirent.name);
-				} else {
-					snprintf(tpath, sizeof(tpath), "%s.iso", dirent.name);
-				}
-				JS_DefinePropertyValueStr(ctx, obj, "name", JS_NewString(ctx, tpath), JS_PROP_C_W_E);
-				JS_DefinePropertyValueStr(ctx, obj, "size", JS_NewUint32(ctx, (512 * dirent.stat.size * (dirent.stat.private_0 + 1))), JS_PROP_C_W_E);
-                JS_DefinePropertyValueStr(ctx, obj, "dir", JS_NewBool(ctx, (dirent.stat.mode == APA_TYPE_PFS)), JS_PROP_C_W_E);
-
-                JS_DefinePropertyValueUint32(ctx, arr, i++, obj, JS_PROP_C_W_E);
-            }
-        }
-        fileXioDclose(fd);
-    } else {
-        d = opendir(path);
-
-        if (d) {
-            while ((dir = readdir(d)) != NULL) {
-
-                strcpy(tpath, path);
-                strcat(tpath, "/");
-                strcat(tpath, dir->d_name);
-                stat(tpath, &statbuf);
-
-                JSValue obj = JS_NewObject(ctx);
-
-                JS_DefinePropertyValueStr(ctx, obj, "name", JS_NewString(ctx, dir->d_name), JS_PROP_C_W_E);
-                JS_DefinePropertyValueStr(ctx, obj, "size", JS_NewUint32(ctx, statbuf.st_size), JS_PROP_C_W_E);
-                JS_DefinePropertyValueStr(ctx, obj, "dir", JS_NewBool(ctx, (dir->d_type == DT_DIR)), JS_PROP_C_W_E);
-
-                JS_DefinePropertyValueUint32(ctx, arr, i++, obj, JS_PROP_C_W_E);
-            }
-            closedir(d);
-        }
-    }
-
+    athena_system_dir_listing_free(listing);
     return arr;
 }
 
-static JSValue athena_removeDir(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_removeDir(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	const char *path = JS_ToCString(ctx, argv[0]);
 	if(!path) return JS_ThrowSyntaxError(ctx, "Argument error: System.removeDirectory(directory) takes a directory name as string as argument.");
-	rmdir(path);
-
+	athena_system_remove_dir(path);
+	JS_FreeCString(ctx, path);
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_movefile(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
-{
-	const char *path = JS_ToCString(ctx, argv[0]);
-	if(!path) return JS_ThrowSyntaxError(ctx, "Argument error: System.removeFile(filename) takes a filename as string as argument.");
-		const char *oldName = JS_ToCString(ctx, argv[0]);
-	const char *newName = JS_ToCString(ctx, argv[1]);
-	if(!oldName || !newName)
-		return JS_ThrowSyntaxError(ctx, "Argument error: System.rename(source, destination) takes two filenames as strings as arguments.");
-
-	char buf[BUFSIZ];
-    size_t size;
-
-	int source = open(oldName, O_RDONLY, 0);
-    int dest = open(newName, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-	while ((size = read(source, buf, BUFSIZ)) > 0) {
-	   write(dest, buf, size);
-    }
-
-    close(source);
-    close(dest);
-
-	remove(oldName);
-
-	return JS_UNDEFINED;
-}
-
-static JSValue athena_rename(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_movefile(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	const char *oldName = JS_ToCString(ctx, argv[0]);
 	const char *newName = JS_ToCString(ctx, argv[1]);
 	if(!oldName || !newName)
 		return JS_ThrowSyntaxError(ctx, "Argument error: System.rename(source, destination) takes two filenames as strings as arguments.");
 
-	char buf[BUFSIZ];
-    size_t size;
-
-	int source = open(oldName, O_RDONLY, 0);
-    int dest = open(newName, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-	while ((size = read(source, buf, BUFSIZ)) > 0) {
-	   write(dest, buf, size);
-    }
-
-    close(source);
-    close(dest);
-
-	remove(oldName);
-
+	athena_system_move_file(oldName, newName);
+	JS_FreeCString(ctx, oldName);
+	JS_FreeCString(ctx, newName);
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_copyfile(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_rename(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+{
+	const char *oldName = JS_ToCString(ctx, argv[0]);
+	const char *newName = JS_ToCString(ctx, argv[1]);
+	if(!oldName || !newName)
+		return JS_ThrowSyntaxError(ctx, "Argument error: System.rename(source, destination) takes two filenames as strings as arguments.");
+
+	athena_system_move_file(oldName, newName);
+	JS_FreeCString(ctx, oldName);
+	JS_FreeCString(ctx, newName);
+	return JS_UNDEFINED;
+}
+
+static JSValue js_copyfile(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	const char *ogfile = JS_ToCString(ctx, argv[0]);
 	const char *newfile = JS_ToCString(ctx, argv[1]);
 	if(!ogfile || !newfile)
 		return JS_ThrowSyntaxError(ctx, "Argument error: System.copyFile(source, destination) takes two filenames as strings as arguments.");
 
-	char buf[BUFSIZ];
-    size_t size;
-
-	int source = open(ogfile, O_RDONLY, 0);
-    int dest = open(newfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-	while ((size = read(source, buf, BUFSIZ)) > 0) {
-	   write(dest, buf, size);
-    }
-
-    close(source);
-    close(dest);
-
+	athena_system_copy_file(ogfile, newfile);
+	JS_FreeCString(ctx, ogfile);
+	JS_FreeCString(ctx, newfile);
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_sleep(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_sleep(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	if (argc != 1) return JS_ThrowSyntaxError(ctx, "milliseconds expected.");
 	int sec;
 	JS_ToInt32(ctx, &sec, argv[0]);
-	sleep(sec);
+	athena_system_sleep(sec);
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_delay(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_delay(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	nopdelay();
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_exit(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_exit(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	if (argc != 0) return JS_ThrowSyntaxError(ctx, "System.exitToBrowser");
-	asm volatile(
-            "li $3, 0x04;"
-            "syscall;"
-            "nop;"
-        );
+	athena_system_poweroff();
 	return JS_UNDEFINED;
 }
 
@@ -242,7 +143,7 @@ void recursive_mkdir(char *dir) {
 	}
 }
 
-static JSValue athena_getmcinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv){
+static JSValue js_getmcinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv){
 	int mcslot, type, freespace, format, result;
 	mcslot = 0;
 	if(argc == 1) JS_ToInt32(ctx, &mcslot, argv[0]);
@@ -259,11 +160,12 @@ static JSValue athena_getmcinfo(JSContext *ctx, JSValue this_val, int argc, JSVa
 	return obj;
 }
 
-static JSValue athena_loadELF(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_loadELF(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
  	JSValue val;
 	int n = 0;
 	char **args = NULL;
 	const char *path = JS_ToCString(ctx, argv[0]);
+	bool reset_iop = false;
 
 	if(argc > 1) {
 		if (!JS_IsArray(ctx, argv[1])) {
@@ -282,12 +184,11 @@ static JSValue athena_loadELF(JSContext *ctx, JSValue this_val, int argc, JSValu
 		}
 	}
 
-	if (argc > 2) {
-		if (JS_ToBool(ctx, argv[2]))
-			LoadELFFromFile(path, n, args);
-	}
+	if (argc > 2)
+		reset_iop = JS_ToBool(ctx, argv[2]) != 0;
 
-	LoadELFFromFileNoReset(path, n, args);
+	athena_system_load_elf(path, n, args, reset_iop);
+	JS_FreeCString(ctx, path);
 
 	return JS_UNDEFINED;
 }
@@ -314,7 +215,7 @@ DiscType DiscTypes[] = {
 };              //ends DiscTypes array
 
 
-static JSValue athena_checkValidDisc(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_checkValidDisc(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	int testValid;
 	int result;
@@ -344,7 +245,7 @@ static JSValue athena_checkValidDisc(JSContext *ctx, JSValue this_val, int argc,
 	return JS_NewInt32(ctx, result);
 }
 
-static JSValue athena_checkDiscTray(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_checkDiscTray(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
 	int result;
 	if (sceCdStatus() == SCECdStatShellOpen){
@@ -356,7 +257,7 @@ static JSValue athena_checkDiscTray(JSContext *ctx, JSValue this_val, int argc, 
 }
 
 
-static JSValue athena_getDiscType(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_getDiscType(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
     int discType;
     int iz;
@@ -410,7 +311,7 @@ static int copyThread(void* data)
 }
 
 
-static JSValue athena_copyasync(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv){
+static JSValue js_copyasync(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv){
 	if (argc != 2) return JS_ThrowSyntaxError(ctx, "wrong number of arguments");
 
 	struct pathMap* copypaths = (struct pathMap*)malloc(sizeof(struct pathMap));
@@ -423,7 +324,7 @@ static JSValue athena_copyasync(JSContext *ctx, JSValue this_val, int argc, JSVa
 }
 
 
-static JSValue athena_getfileprogress(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_getfileprogress(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	if (argc != 0) return JS_ThrowSyntaxError(ctx, "wrong number of arguments");
 
 	JSValue obj = JS_NewObject(ctx);
@@ -434,7 +335,7 @@ static JSValue athena_getfileprogress(JSContext *ctx, JSValue this_val, int argc
 	return obj;
 }
 
-static JSValue athena_mount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_mount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	if (argc != 2 && argc != 3) return JS_ThrowSyntaxError(ctx, "wrong number of arguments");
 
 	int mode = 0;
@@ -452,7 +353,7 @@ static JSValue athena_mount(JSContext *ctx, JSValue this_val, int argc, JSValueC
 	return JS_NewInt32(ctx, ret);
 }
 
-static JSValue athena_umount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_umount(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	if (argc != 1) return JS_ThrowSyntaxError(ctx, "wrong number of arguments");
 
 	const char *device = JS_ToCString(ctx, argv[0]);
@@ -464,7 +365,7 @@ static JSValue athena_umount(JSContext *ctx, JSValue this_val, int argc, JSValue
 	return JS_NewInt32(ctx, ret);
 }
 
-static JSValue athena_devices(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_devices(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	int i, devcnt;
 	struct fileXioDevice DEV[FILEXIO_MAX_DEVICES];
 	
@@ -487,7 +388,7 @@ static JSValue athena_devices(JSContext *ctx, JSValue this_val, int argc, JSValu
 }
 
 // Gets BDM driver name via fileXio
-static JSValue athena_getbdminfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_getbdminfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	if (argc != 1)
 		return JS_ThrowSyntaxError(ctx, "wrong number of arguments");
 
@@ -515,7 +416,7 @@ static JSValue athena_getbdminfo(JSContext *ctx, JSValue this_val, int argc, JSV
 }
 
 
-static JSValue athena_darkmode(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_darkmode(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	dark_mode = JS_ToBool(ctx, argv[0]);
 	return JS_UNDEFINED;
 }
@@ -523,7 +424,7 @@ static JSValue athena_darkmode(JSContext *ctx, JSValue this_val, int argc, JSVal
 
 #define GS_REG_CSR (volatile u64 *)0x12001000 // System Status
 
-static JSValue athena_getcpuinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_getcpuinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
     unsigned short int revision;
     unsigned int value;
@@ -554,7 +455,7 @@ static JSValue athena_getcpuinfo(JSContext *ctx, JSValue this_val, int argc, JSV
     return data;
 }
 
-static JSValue athena_getgpuinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
+static JSValue js_getgpuinfo(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv)
 {
     unsigned short int revision;
     unsigned int value;
@@ -568,20 +469,22 @@ static JSValue athena_getgpuinfo(JSContext *ctx, JSValue this_val, int argc, JSV
     return data;
 }
 
-static JSValue athena_geteememory(JSContext *ctx, JSValue this_val, int argc, JSValueConst * argv){
+static JSValue js_geteememory(JSContext *ctx, JSValue this_val, int argc, JSValueConst * argv){
 	if (argc != 0) return JS_ThrowSyntaxError(ctx, "Wrong number of arguments");
 
-	JSValue obj = JS_NewObject(ctx);
-    JS_DefinePropertyValueStr(ctx, obj, "core", JS_NewUint32(ctx, get_binary_size()), JS_PROP_C_W_E);
-	JS_DefinePropertyValueStr(ctx, obj, "nativeStack", JS_NewUint32(ctx, get_stack_size()), JS_PROP_C_W_E);
-	JS_DefinePropertyValueStr(ctx, obj, "allocs", JS_NewUint32(ctx, get_allocs_size()), JS_PROP_C_W_E);
-	JS_DefinePropertyValueStr(ctx, obj, "used", JS_NewUint32(ctx, get_used_memory()), JS_PROP_C_W_E);
+	AthenaMemoryStats stats;
+	athena_system_get_memory_stats(&stats);
 
+	JSValue obj = JS_NewObject(ctx);
+    JS_DefinePropertyValueStr(ctx, obj, "core", JS_NewUint32(ctx, stats.core), JS_PROP_C_W_E);
+	JS_DefinePropertyValueStr(ctx, obj, "nativeStack", JS_NewUint32(ctx, stats.native_stack), JS_PROP_C_W_E);
+	JS_DefinePropertyValueStr(ctx, obj, "allocs", JS_NewUint32(ctx, stats.allocs), JS_PROP_C_W_E);
+	JS_DefinePropertyValueStr(ctx, obj, "used", JS_NewUint32(ctx, stats.used), JS_PROP_C_W_E);
 
 	return obj;
 }
 
-static JSValue athena_gettemps(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_gettemps(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	// Based on PS2Ident libxcdvd from SP193
 	unsigned char in_buffer[1], out_buffer[16];
 	int result;
@@ -604,7 +507,7 @@ static JSValue athena_gettemps(JSContext *ctx, JSValue this_val, int argc, JSVal
 
 }
 
-static JSValue athena_loaddynamiclibrary(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_loaddynamiclibrary(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
   	struct erl_record_t *erl = _init_load_erl_from_file(JS_ToCString(ctx, argv[0]), 0);
 
 	if (erl)
@@ -613,7 +516,7 @@ static JSValue athena_loaddynamiclibrary(JSContext *ctx, JSValue this_val, int a
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_unloaddynamiclibrary(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_unloaddynamiclibrary(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
   	struct erl_record_t *erl = NULL;
 	JS_ToUint32(ctx, &erl, argv[0]);
 
@@ -623,7 +526,7 @@ static JSValue athena_unloaddynamiclibrary(JSContext *ctx, JSValue this_val, int
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_findlocalrelocatableobject(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_findlocalrelocatableobject(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
   	struct erl_record_t *erl = NULL;
 	JS_ToUint32(ctx, &erl, argv[0]);
 
@@ -636,7 +539,7 @@ static JSValue athena_findlocalrelocatableobject(JSContext *ctx, JSValue this_va
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_findrelocatableobject(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_findrelocatableobject(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	struct symbol_t *symbol = erl_find_symbol(JS_ToCString(ctx, argv[0]));
 	if (symbol)
 		return JS_NewUint32(ctx, symbol->address);
@@ -644,7 +547,7 @@ static JSValue athena_findrelocatableobject(JSContext *ctx, JSValue this_val, in
 	return JS_UNDEFINED;
 }
 
-static JSValue athena_call_native(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+static JSValue js_call_native(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
 	func_arg arg[32] = { 0 };
 	uint32_t arg_count = 0, arg_type = 0, return_type = NONTYPE_VOID;
 
@@ -782,32 +685,32 @@ static JSValue athena_call_native(JSContext *ctx, JSValue this_val, int argc, JS
 }
 
 static const JSCFunctionListEntry system_funcs[] = {
-	JS_CFUNC_DEF( "getBDMInfo",               0,        athena_getbdminfo		 	 ),
-	JS_CFUNC_DEF( "mount",                    3,        athena_mount		 		 ),
-	JS_CFUNC_DEF( "umount",                   1,        athena_umount		 		 ),
-	JS_CFUNC_DEF( "devices",                  0,        athena_devices			 	 ),
-	JS_CFUNC_DEF( "listDir",                  1,        athena_dir			 		 ),
-	JS_CFUNC_DEF( "removeDirectory",    	  1,       	athena_removeDir	 		 ),
-	JS_CFUNC_DEF( "moveFile",	       		  2,        athena_movefile	 			 ),
-	JS_CFUNC_DEF( "copyFile",	       		  2,        athena_copyfile	 			 ),
-	JS_CFUNC_DEF( "threadCopyFile",	   		  2,       	athena_copyasync	   	     ),
-	JS_CFUNC_DEF( "getFileProgress",	  	  0,  		athena_getfileprogress       ),
-	JS_CFUNC_DEF( "rename",           		  2,        athena_rename		 		 ),
-	JS_CFUNC_DEF( "sleep",           		  1,        athena_sleep		 		 ),
-	JS_CFUNC_DEF( "delay",           		  0,        athena_delay		 		 ),
-	JS_CFUNC_DEF( "exitToBrowser",  		  0,        athena_exit	 				 ),
-	JS_CFUNC_DEF( "getMCInfo",                2,       	athena_getmcinfo	 		 ),
-	JS_CFUNC_DEF( "loadELF",                  3,        athena_loadELF	 			 ),
-	JS_CFUNC_DEF( "checkValidDisc",     	  0,  		athena_checkValidDisc 		 ),
-	JS_CFUNC_DEF( "getDiscType",        	  0,     	athena_getDiscType	  		 ),
-	JS_CFUNC_DEF( "checkDiscTray",      	  0,   		athena_checkDiscTray	 	 ),
-	JS_CFUNC_DEF( "setDarkMode",      		  1,   		athena_darkmode	 			 ),
-	JS_CFUNC_DEF( "getCPUInfo",      		  0,   		athena_getcpuinfo	 		 ),
-	JS_CFUNC_DEF( "getGPUInfo",      		  0,   		athena_getgpuinfo	 		 ),
-	JS_CFUNC_DEF( "getMemoryStats",      	  0,   		athena_geteememory	 		 ),
-	JS_CFUNC_DEF( "getTemperature",      	  0,   		athena_gettemps	 			 ),
+	JS_CFUNC_DEF( "getBDMInfo",               0,        js_getbdminfo		 	 ),
+	JS_CFUNC_DEF( "mount",                    3,        js_mount		 		 ),
+	JS_CFUNC_DEF( "umount",                   1,        js_umount		 		 ),
+	JS_CFUNC_DEF( "devices",                  0,        js_devices			 	 ),
+	JS_CFUNC_DEF( "listDir",                  1,        js_dir			 		 ),
+	JS_CFUNC_DEF( "removeDirectory",    	  1,       	js_removeDir	 		 ),
+	JS_CFUNC_DEF( "moveFile",	       		  2,        js_movefile	 			 ),
+	JS_CFUNC_DEF( "copyFile",	       		  2,        js_copyfile	 			 ),
+	JS_CFUNC_DEF( "threadCopyFile",	   		  2,       	js_copyasync	   	     ),
+	JS_CFUNC_DEF( "getFileProgress",	  	  0,  		js_getfileprogress       ),
+	JS_CFUNC_DEF( "rename",           		  2,        js_rename		 		 ),
+	JS_CFUNC_DEF( "sleep",           		  1,        js_sleep		 		 ),
+	JS_CFUNC_DEF( "delay",           		  0,        js_delay		 		 ),
+	JS_CFUNC_DEF( "exitToBrowser",  		  0,        js_exit	 				 ),
+	JS_CFUNC_DEF( "getMCInfo",                2,       	js_getmcinfo	 		 ),
+	JS_CFUNC_DEF( "loadELF",                  3,        js_loadELF	 			 ),
+	JS_CFUNC_DEF( "checkValidDisc",     	  0,  		js_checkValidDisc 		 ),
+	JS_CFUNC_DEF( "getDiscType",        	  0,     	js_getDiscType	  		 ),
+	JS_CFUNC_DEF( "checkDiscTray",      	  0,   		js_checkDiscTray	 	 ),
+	JS_CFUNC_DEF( "setDarkMode",      		  1,   		js_darkmode	 			 ),
+	JS_CFUNC_DEF( "getCPUInfo",      		  0,   		js_getcpuinfo	 		 ),
+	JS_CFUNC_DEF( "getGPUInfo",      		  0,   		js_getgpuinfo	 		 ),
+	JS_CFUNC_DEF( "getMemoryStats",      	  0,   		js_geteememory	 		 ),
+	JS_CFUNC_DEF( "getTemperature",      	  0,   		js_gettemps	 			 ),
 
-	JS_CFUNC_DEF( "nativeCall",      	      3, 		athena_call_native		 	 ),
+	JS_CFUNC_DEF( "nativeCall",      	      3, 		js_call_native		 	 ),
 
 	JS_PROP_INT32_DEF("T_LONG",    TYPE_LONG,   JS_PROP_CONFIGURABLE ),
 	JS_PROP_INT32_DEF("T_ULONG",   TYPE_ULONG,  JS_PROP_CONFIGURABLE ),
@@ -824,10 +727,10 @@ static const JSCFunctionListEntry system_funcs[] = {
 
 	JS_PROP_INT32_DEF("JS_BUFFER", TYPE_BUFFER, JS_PROP_CONFIGURABLE ),
 
-	JS_CFUNC_DEF( "loadReloc",      	    1, 		  athena_loaddynamiclibrary	 ),
-	JS_CFUNC_DEF( "unloadReloc",            1, 		  athena_unloaddynamiclibrary	 ),
-	JS_CFUNC_DEF( "findRelocObject",        1,        athena_findrelocatableobject	 ),
-	JS_CFUNC_DEF( "findRelocLocalObject",   2,        athena_findlocalrelocatableobject	 ),
+	JS_CFUNC_DEF( "loadReloc",      	    1, 		  js_loaddynamiclibrary	 ),
+	JS_CFUNC_DEF( "unloadReloc",            1, 		  js_unloaddynamiclibrary	 ),
+	JS_CFUNC_DEF( "findRelocObject",        1,        js_findrelocatableobject	 ),
+	JS_CFUNC_DEF( "findRelocLocalObject",   2,        js_findlocalrelocatableobject	 ),
 
 	JS_PROP_STRING_DEF("boot_path", boot_path, JS_PROP_CONFIGURABLE ),
 	JS_PROP_INT32_DEF("READ_ONLY", 1, JS_PROP_CONFIGURABLE ),

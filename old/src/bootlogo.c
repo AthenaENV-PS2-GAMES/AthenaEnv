@@ -2,7 +2,7 @@
 
 #include <graphics.h>
 #include <taskman.h>
-#include <ath_env.h>
+#include <athena_core.h>
 
 extern unsigned char owl_indices[];
 extern unsigned int size_owl_indices;

@@ -1,6 +1,7 @@
 #ifndef __FNTSYS_H
 #define __FNTSYS_H
 
+#include <tamtypes.h>
 #include <gsKit.h>
 
 /// Maximal count of atlases per font

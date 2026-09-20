@@ -1,3 +1,5 @@
+// {"name": "Tilemap", "author": "Daniel Santos", "version": "07112026", "icon": "render_icon.png", "file": "tilemap.js"}
+
 const pad = Pads.get();
 
 const tilesX = 6;

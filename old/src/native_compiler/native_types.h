@@ -50,7 +50,14 @@ typedef enum NativeType {
     
     /* Pointer type */
     NATIVE_TYPE_PTR,
-    
+
+    /* Pointer to a contiguous run of N Native.struct instances (fixed-size,
+     * caller-tracked count). Always a plain pointer at the ABI level, like
+     * NATIVE_TYPE_PTR - the element NativeStructDef lives in the compiler's
+     * local_struct_defs[] side table, keyed by argument/local index, same
+     * as a single-struct NATIVE_TYPE_PTR argument. */
+    NATIVE_TYPE_STRUCT_ARRAY,
+
     NATIVE_TYPE_COUNT
 } NativeType;
 
@@ -99,6 +106,8 @@ typedef struct NativeFunc {
     size_t code_size;             /* Size of generated code in bytes */
     NativeFuncSignature sig;      /* Function signature */
     bool is_valid;                /* Whether the function is valid */
+    char **owned_literals;        /* String literals referenced by generated code */
+    int owned_literal_count;
 } NativeFunc;
 
 /*

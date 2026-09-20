@@ -9,7 +9,7 @@ static void v_set(VECTOR v, float x, float y, float z, float w) {
     v[0] = x; v[1] = y; v[2] = z; v[3] = w;
 }
 
-athena_scene_node *athena_scene_node_create(void) {
+athena_scene_node *render_scene_node_create(void) {
     athena_scene_node *n = (athena_scene_node*)malloc(sizeof(*n));
     if (!n) return NULL;
     matrix_functions->identity(n->world);
@@ -32,10 +32,10 @@ static void list_remove_ptr(void **arr, unsigned int *count, void *ptr) {
     }
 }
 
-void athena_scene_node_destroy(athena_scene_node *n) {
+void render_scene_node_destroy(athena_scene_node *n) {
     if (!n) return;
     for (unsigned int i = 0; i < n->child_count; i++) {
-        athena_scene_node_destroy(n->children[i]);
+        render_scene_node_destroy(n->children[i]);
     }
     free(n->children);
     free(n->attachments);
@@ -51,10 +51,10 @@ static int ensure_cap(void **buf, unsigned int *cap, unsigned int need) {
     *buf = p; *cap = c; return 0;
 }
 
-void athena_scene_node_add_child(athena_scene_node *parent, athena_scene_node *child) {
+void render_scene_node_add_child(athena_scene_node *parent, athena_scene_node *child) {
     if (!parent || !child || parent == child) return;
     if (child->parent) {
-        athena_scene_node_remove_child(child->parent, child);
+        render_scene_node_remove_child(child->parent, child);
     }
     if (ensure_cap((void**)&parent->children, &parent->child_capacity, parent->child_count + 1) != 0)
         return;
@@ -62,21 +62,21 @@ void athena_scene_node_add_child(athena_scene_node *parent, athena_scene_node *c
     child->parent = parent;
 }
 
-void athena_scene_node_remove_child(athena_scene_node *parent, athena_scene_node *child) {
+void render_scene_node_remove_child(athena_scene_node *parent, athena_scene_node *child) {
     if (!parent || !child) return;
     list_remove_ptr((void**)parent->children, &parent->child_count, child);
     if (child->parent == parent)
         child->parent = NULL;
 }
 
-void athena_scene_node_attach(athena_scene_node *node, athena_object_data *obj) {
+void render_scene_node_attach(athena_scene_node *node, athena_object_data *obj) {
     if (!node || !obj) return;
     if (ensure_cap((void**)&node->attachments, &node->attach_capacity, node->attach_count + 1) != 0)
         return;
     node->attachments[node->attach_count++] = obj;
 }
 
-void athena_scene_node_detach(athena_scene_node *node, athena_object_data *obj) {
+void render_scene_node_detach(athena_scene_node *node, athena_object_data *obj) {
     if (!node) return;
     if (!obj) {
         node->attach_count = 0;
@@ -87,10 +87,7 @@ void athena_scene_node_detach(athena_scene_node *node, athena_object_data *obj) 
 
 static void scene_apply_recursive(athena_scene_node *node, const MATRIX parent, int has_parent) {
     MATRIX local, world;
-    matrix_functions->identity(local);
-    matrix_functions->rotate(local, local, node->rotation);
-    matrix_functions->scale(local, local, node->scale);
-    matrix_functions->translate(local, local, node->position);
+    matrix_functions->trs_euler(local, node->position, node->rotation, node->scale);
 
     if (has_parent) matrix_functions->multiply(world, parent, local);
     else            matrix_functions->copy(world, local);
@@ -114,7 +111,7 @@ static void scene_apply_recursive(athena_scene_node *node, const MATRIX parent, 
     }
 }
 
-void athena_scene_update(athena_scene_node *root) {
+void render_scene_update(athena_scene_node *root) {
     if (!root) return;
     scene_apply_recursive(root, NULL, 0);
 }

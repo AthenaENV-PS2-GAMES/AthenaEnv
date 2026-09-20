@@ -19,6 +19,14 @@
 void calculate_bbox(athena_render_data* res_m) {
 	float lowX, lowY, lowZ, hiX, hiY, hiZ;
 
+    // Callers outside the loaders (the JS RenderData constructor and its
+    // "vertices" setter) can reach here with nothing to measure. Leave the box
+    // zeroed rather than reading positions[0]: an all-zero box is what
+    // render_object_in_frustum() treats as "bounds unknown, always draw", so
+    // the failure mode is a missed optimisation instead of a null deref.
+    if (!res_m || !res_m->positions || res_m->index_count == 0)
+        return;
+
     lowX = hiX = res_m->positions[0][0];
     lowY = hiY = res_m->positions[0][1];
     lowZ = hiZ = res_m->positions[0][2];
@@ -162,7 +170,7 @@ void loadOBJ(athena_render_data* res_m, const char* path, GSSURFACE* text) {
 				added_material_indices++;
 
 				if (added_material_indices > res_m->material_index_count) {
-					res_m->material_indices = (material_index*)realloc(res_m->material_indices, added_material_indices);
+					res_m->material_indices = (material_index*)realloc(res_m->material_indices, added_material_indices * sizeof(material_index));
 					res_m->material_index_count++;
 				}
 
@@ -176,12 +184,25 @@ void loadOBJ(athena_render_data* res_m, const char* path, GSSURFACE* text) {
 	added_material_indices++;
 
 	if (added_material_indices > res_m->material_index_count) {
-		res_m->material_indices = (material_index*)realloc(res_m->material_indices, added_material_indices);
+		res_m->material_indices = (material_index*)realloc(res_m->material_indices, added_material_indices * sizeof(material_index));
 		res_m->material_index_count++;
 	}
 
 	res_m->material_indices[added_material_indices-1].index = cur_mat_index;
-	res_m->material_indices[added_material_indices-1].end = res_m->index_count;
+	// index_count-1, not index_count: .end is INCLUSIVE (every other entry
+	// above sets it to i-1, the last vertex of the group, and the draw loops
+	// compute their slice as `end - last_index` off that convention). Using
+	// index_count here handed the final material one phantom vertex past the
+	// real geometry, making its vertex count non-multiple-of-3 -- for Car.obj
+	// the last group asked for 721 vertices instead of 720.
+	//
+	// That phantom used to be invisible: pre-compact-cache, it read
+	// positions[index_count], one VECTOR past a malloc of exactly
+	// index_count entries, so it was heap garbage that almost always
+	// clipped away. render_cook_compact_vertices' +4 spare capacity is
+	// zeroed, so the same read now lands on a well-defined (0,0,0) -- a real
+	// vertex at the object's origin.
+	res_m->material_indices[added_material_indices-1].end = res_m->index_count - 1;
 
     calculate_bbox(res_m);
 
@@ -386,6 +407,21 @@ void load_gltf_skinning_data(athena_render_data* res_m, float* joints, float* we
         for (int j = 0; j < 4; j++) {
             skin->bone_weights[j] /= total_weight;
         }
+    }
+
+    // Sort descending so every zero weight trails. VU1 stops the skinning loop at
+    // the first zero instead of always running four influences.
+    for (int j = 1; j < 4; j++) {
+        float w = skin->bone_weights[j];
+        uint32_t b = skin->bone_indices[j];
+        int k = j;
+        while (k > 0 && skin->bone_weights[k-1] < w) {
+            skin->bone_weights[k] = skin->bone_weights[k-1];
+            skin->bone_indices[k] = skin->bone_indices[k-1];
+            k--;
+        }
+        skin->bone_weights[k] = w;
+        skin->bone_indices[k] = b;
     }
 }
 

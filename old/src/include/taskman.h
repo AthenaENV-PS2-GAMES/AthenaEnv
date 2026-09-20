@@ -1,3 +1,9 @@
+#ifndef TASKMAN_H
+#define TASKMAN_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
 typedef struct {
     int id;
     int status;
@@ -15,3 +21,5 @@ void kill_task(int id);
 void exit_task();
 void exit_kill_task();
 Task* get_tasks();
+
+#endif /* TASKMAN_H */

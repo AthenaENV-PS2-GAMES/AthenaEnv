@@ -1,0 +1,40 @@
+# Library build definitions for AthenaEnv.
+# Included by the top-level Makefile after feature flags are resolved.
+
+LIB_DIR = lib/
+
+ATHENA_CORE_LIB_OBJS = $(APP_CORE) $(INI_READER) $(VU1_MPGS) $(VU0_MPGS) $(IOP_MODULES) $(EMBEDDED_ELFS) $(EMBEDDED_ASSETS)
+ATHENA_CORE_LIB_OBJS := $(filter-out main.o capp_main.o,$(ATHENA_CORE_LIB_OBJS))
+ATHENA_CORE_LIB_OBJS := $(ATHENA_CORE_LIB_OBJS:%=$(EE_OBJ_DIR)%)
+
+ATHENA_JS_LIB_OBJS = $(JS_CORE) $(ATHENA_MODULES) $(NATIVE_COMPILER_OBJS)
+ATHENA_JS_LIB_OBJS := $(ATHENA_JS_LIB_OBJS:%=$(EE_OBJ_DIR)%)
+
+$(LIB_DIR):
+	@mkdir -p $@
+
+$(LIB_DIR)libathena.a: $(ATHENA_CORE_LIB_OBJS) | $(LIB_DIR)
+	@echo AR - $@
+	$(EE_AR) rcs $@ $(ATHENA_CORE_LIB_OBJS)
+
+ifeq ($(ATHENA_JS),1)
+$(LIB_DIR)libathena_js.a: $(ATHENA_JS_LIB_OBJS) | $(LIB_DIR)
+	@echo AR - $@
+	$(EE_AR) rcs $@ $(ATHENA_JS_LIB_OBJS)
+endif
+
+libs: $(LIB_DIR)libathena.a
+ifeq ($(ATHENA_JS),1)
+libs: $(LIB_DIR)libathena_js.a
+endif
+
+$(EE_OBJ_DIR)capp_main.o: examples/capp/main.c | $(EE_OBJ_DIR)
+	@echo CC - $<
+	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
+
+capp: $(MAIN_BUILD_STAMP) $(DIR_GUARD) $(EXT_LIBS) $(filter-out $(ATHENA_JS_LIB_OBJS),$(ATHENA_CORE_LIB_OBJS)) $(EE_OBJ_DIR)main.o $(EE_OBJ_DIR)capp_main.o
+	$(EE_CXX) -T$(EE_LINKFILE) $(EE_OPTFLAGS) -o $(EE_BIN_DIR)athena_capp.elf \
+		$(filter-out $(ATHENA_JS_LIB_OBJS),$(ATHENA_CORE_LIB_OBJS)) $(EE_OBJ_DIR)main.o $(EE_OBJ_DIR)capp_main.o \
+		$(EE_LDFLAGS) $(EXTRA_LDFLAGS) -fpermissive -Wno-write-strings $(EE_LIBS) $(EE_SRC_DIR)dummy-exports.c
+	$(EE_STRIP) $(EE_BIN_DIR)athena_capp.elf
+	@echo "Built $(EE_BIN_DIR)athena_capp.elf (C-only)"

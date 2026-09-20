@@ -52,8 +52,6 @@ let cur_duration = 0.0f;
 
 let text_size = null;
 
-console.log(JSON.stringify(Threads.get()));
-
 function msToSecondMin(ms) {
     let minutes = Math.floor(ms / 60000)
     let seconds = Math.round(ms / 1000)

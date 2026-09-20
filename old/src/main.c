@@ -13,7 +13,12 @@
 
 #include <taskman.h>
 
+#include <athena_core.h>
+#include <dbgprintf.h>
+
+#ifdef ATHENA_JS
 #include <ath_env.h>
+#endif
 
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
@@ -40,10 +45,7 @@
 
 char path_workbuffer[255] = { 0 };
 
-char boot_path[255] = { 0 };
-char default_script[128] = "main.js";
 char default_cfg[128] = "athena.ini";
-bool dark_mode, boot_logo;
 
 char MountPoint[32+6+1]; // max partition name + 'hdd0:/' + '\0'
 
@@ -80,12 +82,6 @@ int mnt(const char* path, int index, int openmod)
     }
     return 0;
 }
-
-void set_default_script(const char* path) {
-    strcpy(default_script, path);
-    default_script[strlen(path)] = '\0';
-}
-
 
 extern struct export_list_t {
     char * name;
@@ -229,7 +225,7 @@ int main(int argc, char **argv) {
                     wait_device(temp_path);
                     chdir(temp_path);
 
-                    FILE *f = fopen(default_script, "r");
+                    FILE *f = fopen(athena_get_default_script(), "r");
 
                     if (f) {
                         fclose(f);
@@ -309,16 +305,20 @@ int main(int argc, char **argv) {
     fntInit();
     #endif
 
+#ifdef ATHENA_JS
 	const char* err_msg = NULL;
 
     int jump_ret = setjmp(*get_reset_buf());
 
     do {
-        err_msg = run_script(default_script, false);
+        err_msg = run_script(athena_get_default_script(), false);
 
         athena_error_screen(err_msg, dark_mode);
 
     } while (err_msg != NULL);
+#else
+    athena_run_app_main(argc, argv);
+#endif
 
 	// End program.
 	return 0;

@@ -2,9 +2,11 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <delaythread.h>
+
+#include <dbgprintf.h>
 
 #include <pad.h>
-#include <dbgprintf.h>
 
 static char pad0Buf[256] __attribute__((aligned(64)));
 static char pad1Buf[256] __attribute__((aligned(64)));
@@ -33,6 +35,7 @@ int waitPadReady(int port, int slot)
                        port, slot, stateString);
         }
         lastState = state;
+        DelayThread(1000); // give the pad real time to leave EXECCMD; padGetState() alone doesn't block for it
         state=padGetState(port, slot);
         timeout++;
         if(timeout > 1000) {
@@ -150,17 +153,17 @@ int initializePad(int port, int slot)
 void checkPadReconnection(int port, int slot)
 {
     int current_state = padGetState(port, slot);
-    
+
     if (current_state == PAD_STATE_DISCONN) {
         pad_initialized[port] = 0;
     }
-    
-    if ((current_state == PAD_STATE_STABLE || current_state == PAD_STATE_FINDCTP1) && 
+
+    if ((current_state == PAD_STATE_STABLE || current_state == PAD_STATE_FINDCTP1) &&
         !pad_initialized[port]) {
         initializePad(port, slot);
         pad_initialized[port] = 1;
     }
-    
+
     last_pad_state[port] = current_state;
 }
 

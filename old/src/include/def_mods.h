@@ -85,6 +85,10 @@ iopman_define_module(ps2mouse);
 iopman_define_module(ps2cam);
 #endif
 
+#ifdef ATHENA_REMOTE
+iopman_define_module(rmman);
+#endif
+
 #ifdef ATHENA_PADEMU
 iopman_define_module(ds34bt);
 iopman_define_module(ds34usb);

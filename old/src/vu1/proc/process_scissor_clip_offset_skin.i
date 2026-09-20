@@ -55,15 +55,25 @@
 
     check:
         ;=====================================================================================
-        ; If all 3 verts are inside (i.e., All clip results = 0), we don't need to perform
-        ; scissoring.
+        ; Clip judgement FIRST. BackfaceCull works on vertex1/2/3, which are already
+        ; through the perspective divide -- and a vertex behind the near plane divides
+        ; by a negative w, so it lands mirrored through the origin and the winding it
+        ; reports is meaningless. Testing before the clip judgement is what dropped
+        ; front-facing triangles right where geometry crosses a frustum plane: holes
+        ; along the near plane whenever the camera got close.
+        ;
+        ; So only a triangle that needs no scissoring -- every vertex inside, every
+        ; screen coordinate meaningful -- gets culled here. One that straddles a plane
+        ; goes to the fan uncalled and is drawn even if it faces away: a thin band at
+        ; the frustum edge, against holes in the middle of the mesh.
         ;=====================================================================================
-        BackfaceCull         vertex1, vertex2, vertex3
-        ibne                 z_sign, vi00, triangle_outside
-        
         iadd                 ClipFlag1, ClipFlag1, ClipFlag2
         iadd                 ClipFlag1, ClipFlag1, ClipFlag3
-        iblez                ClipFlag1, after_scissoring
+        ibgtz                ClipFlag1, cull_vertex
+
+        BackfaceCull         vertex1, vertex2, vertex3
+        ibne                 z_sign, vi00, triangle_outside
+        b                    after_scissoring
 
     cull_vertex:
         ;=====================================================================================
@@ -167,10 +177,16 @@
 
         ;=====================================================================================
         ; Load the STQs from the original data and store them in the clipping work buffer.
+        ; The input stream holds the packed V2_16 UV wire format (see
+        ; athena_compact_uv / DecompressUV16 in athena_macros.i), not a raw
+        ; float STQ -- decode each before use.
         ;=====================================================================================
-        VectorLoad           TempSTQ1, SKINNED_TEXCOORD_OFFSET-2, iBase
-        VectorLoad           TempSTQ2, SKINNED_TEXCOORD_OFFSET-1, iBase
-        VectorLoad           TempSTQ3, SKINNED_TEXCOORD_OFFSET-0, iBase
+        VectorLoad           TempSTQ1Packed, SKINNED_TEXCOORD_OFFSET-2, iBase
+        DecompressUV16       TempSTQ1, TempSTQ1Packed
+        VectorLoad           TempSTQ2Packed, SKINNED_TEXCOORD_OFFSET-1, iBase
+        DecompressUV16       TempSTQ2, TempSTQ2Packed
+        VectorLoad           TempSTQ3Packed, SKINNED_TEXCOORD_OFFSET-0, iBase
+        DecompressUV16       TempSTQ3, TempSTQ3Packed
 
         add.xy TempSTQ1, TempSTQ1, st_offset
         add.xy TempSTQ2, TempSTQ2, st_offset
@@ -182,14 +198,16 @@
         VectorSave           TempSTQ1,  9, ClipWorkBuf0
 
         ;=====================================================================================
-        ; Only execute the following code snippet if we're processing triangles
-        ; (ClipTrigger >= 0).
-        ;=====================================================================================
-        ibltz                ClipTrigger, STRIP_COLOR
- 
-        ;=====================================================================================
-        ; Triangle only: Load 3 colors, convert them to float, and store them in the clipping
-        ; work buffer.
+        ; Load the 3 colors, convert them to float, and store them in the clipping work
+        ; buffer. Same three vertices a strip needs: at this point the current triangle is
+        ; (i-2, i-1, i) either way, which is why the STQ loads above never had a strip case
+        ; of their own. There used to be one here, replicating the CURRENT vertex color to
+        ; all of them -- a flat-shaded strip assumption that made every scissored triangle
+        ; lose its gouraud, visible as solid bands where the mesh crosses a frustum plane.
+        ;
+        ; Reading back 2 vertices is always in bounds: setup_clip_flags.i primes ClipFlag2
+        ; and ClipFlag3 to -2 per chunk, so the sum below never goes positive before the
+        ; third vertex and the first two can never reach this code.
         ;=====================================================================================
         VectorLoad           TempColor1, -5, outputAddress
         VectorLoad           TempColor2, -2, outputAddress
@@ -203,22 +221,12 @@
         VectorSave           TempColor2,  4, ClipWorkBuf0
         VectorSave           TempColor3,  7, ClipWorkBuf0
         VectorSave           TempColor1, 10, ClipWorkBuf0
- 
-        b                    PLANE_START
 
-    STRIP_COLOR:
-        ;=====================================================================================
-        ; Strip only: Load 1 color, convert it to fixed, and store it to the clipping work
-        ; buffer.
-        ;=====================================================================================
-        VectorLoad           TempColor1, 1, outputAddress
-     
-        ColorGsRGBAQtoFP     TempColor1, TempColor1
-     
-        VectorSave           TempColor1,  1, ClipWorkBuf0
-        VectorSave           TempColor1,  4, ClipWorkBuf0
-        VectorSave           TempColor1,  7, ClipWorkBuf0
-        VectorSave           TempColor1, 10, ClipWorkBuf0
+        ; Branch to the very next instruction. VCL folds it away, but without it
+        ; its allocator runs out of integer registers right here ("failed to
+        ; assign an external ClipWorkBuf1") -- it stands in for the block
+        ; boundary the old triangle/strip split used to provide.
+        b                    PLANE_START
 
     PLANE_START:
         ;=====================================================================================
@@ -513,3 +521,9 @@
         isw.w                Mask, 2(outputAddress)
 
     after_scissoring:
+        ;=====================================================================================
+        ; Every path above lands here, exactly once per vertex. Lane x of bfc_multiplier is
+        ; -1 for a tristrip, whose winding alternates vertex by vertex, and +1 otherwise --
+        ; so this keeps BackfaceCull in step with the strip and is a no-op for triangles.
+        ;=====================================================================================
+        mulx.w               bfc_multiplier, bfc_multiplier, bfc_multiplier

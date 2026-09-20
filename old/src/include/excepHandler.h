@@ -8,6 +8,8 @@
 #ifndef _EXCEPTION_H_
 #define _EXCEPTION_H_
 
+#include <tamtypes.h>
+
 void installExceptionHandlers(void);
 void iopException(int cause, int badvaddr, int status, int epc, u32 *regs, int repc, char *name);
 

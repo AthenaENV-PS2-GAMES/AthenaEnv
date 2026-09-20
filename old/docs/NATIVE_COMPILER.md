@@ -393,6 +393,9 @@ typedef struct IRInstr {
 | `Int32Array` | `NativeArray*` | 4 bytes | 4 | Typed array pointer |
 | `Float32Array` | `NativeArray*` | 4 bytes | 4 | Typed array pointer |
 | `Uint32Array` | `NativeArray*` | 4 bytes | 4 | Typed array pointer |
+| `DynamicInt32Array` | `NativeDynamicArray*` | 4 bytes | 4 | Dynamic array (int32 elements) |
+| `DynamicUint32Array` | `NativeDynamicArray*` | 4 bytes | 4 | Dynamic array (uint32 elements) |
+| `DynamicFloat32Array` | `NativeDynamicArray*` | 4 bytes | 4 | Dynamic array (float elements) |
 | Custom | `void*` | 4 bytes | 4 | Struct pointer |
 | `void` | - | 0 | - | No return value |
 
@@ -1218,12 +1221,23 @@ MIPS_CFLAGS += -march=r5900 -mabi=eabi
 
 ### C. Testing
 
-**Test suite:** `native_test.js`
-- 20+ test cases
-- Covers all IR opcodes
-- Struct methods validation
-- Array operations
-- Type conversions
+**Test suite:** `bin/native_smoke.js`
+- Self-checking regression suite: every case runs the same computation natively
+  and in plain JS, then diffs the results. Prints `N passed, M failed`.
+- Covers arithmetic, control flow, optimizer passes, Math intrinsics, registered
+  C functions, calls and argument passing, typed arrays, int64, strings,
+  `Native.struct`, dynamic arrays, and float32/float64 interop
+- Cases tagged `[reg]` pin bugs that actually shipped; keep them
+- A compile failure is recorded as a failed case instead of aborting the run
+- Run it after touching `src/native_compiler/`, `src/quickjs/`, or `ath_native.c`
+- Does not exhaustively cover all IR opcodes
+
+**Newly supported runtime features (see `native_smoke.js` for examples):**
+- Dynamic arrays: `.push()`, `.pop()`, `.length`, `.clear()`, `.resize()`, `.reserve()`, `.remove()`, indexing
+- String methods: literals, `.length`, `.slice()`, `.indexOf()`, `.toUpperCase()`, `.toLowerCase()`, `.trim()`, `.replace()`
+- Float/unsigned/int64 comparisons in compiled code
+- Nested calls to other `Native.compile()` functions via constant pool references
+- Unsupported bytecode opcodes fail compilation (no silent skip)
 
 ### D. References
 

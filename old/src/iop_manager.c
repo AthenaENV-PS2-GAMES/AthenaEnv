@@ -27,6 +27,9 @@ const uint8_t default_incompatibility_id_mask[4] = {
 };
 
 module_entry *iopman_register_module(char* name, void *data, uint32_t size, uint8_t dependencies[4], void *init_func, void *end_func) {
+    if (registry_entries >= MODULE_REGISTRY_SIZE)
+        return NULL;
+
     module_registry[registry_entries].id = registry_entries;
 
     module_registry[registry_entries].name = name;
@@ -46,7 +49,7 @@ void iopman_add_incompatible_module(module_entry *module, module_entry *incompat
     for (uint8_t i = 0; i < 4; i++) {
         if (module->incompatibilities[i] == EMPTY_ENTRY) {
             module->incompatibilities[i] = incompatibility->id;
-            for (uint8_t j = 0; j < 4; i++) {
+            for (uint8_t j = 0; j < 4; j++) {
                 if (incompatibility->incompatibilities[j] == EMPTY_ENTRY) {
                     incompatibility->incompatibilities[j] = module->id;
                     return;

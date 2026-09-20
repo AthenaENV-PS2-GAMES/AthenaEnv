@@ -1,3 +1,5 @@
+// {"name": "Video Playback", "author": "Daniel Santos", "version": "08022026", "file": "video_playback.js"}
+
 /**
  * MPEG Video Playback Sample
  * 
@@ -11,13 +13,12 @@
  */
 
 
-Screen.setParam(Screen.DEPTH_TEST_ENABLE, false);
 // Load the video file
 const video = new Video("video.m2v");
 
 
 // Enable looping (optional)
-video.loop = true;
+video.loop = false;
 
 // Start playback
 video.play();
@@ -27,8 +28,20 @@ console.log("  Width: " + video.width);
 console.log("  Height: " + video.height);
 console.log("  FPS: " + video.fps);
 
+let should_finish = false;
+
+const pad = Pads.get();
+
 // Main loop
-while (!video.ended) {
+while (!video.ended && !should_finish) {
+    pad.update();
+
+    if (pad.justPressed(Pads.TRIANGLE)) {
+        should_finish = true;
+    } else if (pad.justPressed(Pads.SQUARE)) {
+        video.loop ^= 1;
+    }
+
     // Clear screen with black background
     Screen.clear(Color.new(0, 0, 0));
 
@@ -36,7 +49,7 @@ while (!video.ended) {
     video.update();
 
     // Draw video fullscreen
-    video.draw(0, 0, 640, 448);
+    video.draw(0, 0, video.width, video.height);
 
     // Optional: Display some info
     // Font.print(font, 10, 10, "Frame: " + video.currentFrame);
@@ -47,3 +60,5 @@ while (!video.ended) {
 // Clean up
 video.free();
 console.log("Video playback finished!");
+
+std.reload("main.js");

@@ -21,8 +21,8 @@ typedef struct athena_async_loader {
 
 typedef void (*athena_loader_user_cleanup)(void *user);
 
-athena_async_loader *athena_async_loader_create(unsigned int jobs_per_step);
-void athena_async_loader_destroy(athena_async_loader *l);
+athena_async_loader *render_async_loader_create(unsigned int jobs_per_step);
+void render_async_loader_destroy(athena_async_loader *l);
 
 int  athena_async_enqueue(athena_async_loader *l, const char *path, GSSURFACE *tex, athena_loader_cb cb, void *user);
 unsigned int athena_async_process(athena_async_loader *l, unsigned int budget);

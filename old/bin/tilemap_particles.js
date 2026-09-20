@@ -1,3 +1,5 @@
+// {"name": "Tilemap Particles", "author": "Daniel Santos", "version": "07112026", "icon": "render_icon.png", "file": "tilemap_particles.js"}
+
 const pad = Pads.get();
 
 const MAX_PARTICLES = 256;
@@ -9,10 +11,10 @@ let activeCount = INITIAL_PARTICLES;
 
 function buildDescriptor(endIndex) {
     return new TileMap.Descriptor({
-        textures: [texturePath],
+        textures: [],
         materials: [{
-            texture_index: 0,
-            blend_mode: Screen.alphaEquation(Screen.ZERO_RGB, Screen.SRC_RGB, Screen.SRC_ALPHA, Screen.DST_RGB, 0),
+            texture_index: -1,
+            blend_mode: Screen.alphaEquation(Screen.SRC_RGB, Screen.DST_RGB, Screen.SRC_ALPHA, Screen.DST_RGB, 0),
             end_offset: endIndex,
         }],
     });
@@ -33,7 +35,6 @@ const particles = Array.from({ length: MAX_PARTICLES }, () => ({
     vel: { x: 0, y: 0 },
     size: TILE_SIZE,
     life: 0,
-    color: 0,
 }));
 
 function setFloat(idx, offset, value) {
@@ -42,6 +43,10 @@ function setFloat(idx, offset, value) {
 
 function setUint(idx, offset, value) {
     spriteView.setUint32(idx * stride + offset, value >>> 0, true);
+}
+
+function randomChannel(base, spread) {
+    return Math.max(0, Math.min(255, base + Math.floor((Math.random() - 0.5) * spread)));
 }
 
 function setParticleInactive(idx) {
@@ -58,7 +63,10 @@ function initParticle(idx, x, y, velX, velY) {
     particle.vel.y = velY;
     particle.life = 1.5 + Math.random() * 1.5;
     particle.size = 12 + Math.random() * 10;
-    particle.color = 120 + Math.floor(Math.random() * 120);
+
+    const r = randomChannel(100, 80);
+    const g = randomChannel(60, 60);
+    const b = randomChannel(128, 40);
 
     setFloat(idx, offsets.x, x);
     setFloat(idx, offsets.y, y);
@@ -66,14 +74,11 @@ function initParticle(idx, x, y, velX, velY) {
     setFloat(idx, offsets.w, particle.size);
     setFloat(idx, offsets.h, particle.size);
 
-    setFloat(idx, offsets.u1, 0);
-    setFloat(idx, offsets.v1, 0);
-    setFloat(idx, offsets.u2, 32);
-    setFloat(idx, offsets.v2, 32);
 
-    setUint(idx, offsets.r, particle.color);
-    setUint(idx, offsets.g, 240);
-    setUint(idx, offsets.b, 255);
+
+    setUint(idx, offsets.r, r);
+    setUint(idx, offsets.g, g);
+    setUint(idx, offsets.b, b);
     setUint(idx, offsets.a, 255);
 }
 

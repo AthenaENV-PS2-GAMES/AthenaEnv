@@ -119,22 +119,68 @@ int native_struct_finalize(NativeStructDef *def) {
  */
 NativeStructInstance *native_struct_alloc(NativeStructDef *def, int managed) {
     if (!def) return NULL;
-    
+
     NativeStructInstance *inst = (NativeStructInstance *)calloc(1, sizeof(NativeStructInstance));
     if (!inst) return NULL;
-    
+
     /* Allocate aligned memory for struct data */
     inst->data = aligned_alloc(def->alignment, def->size);
     if (!inst->data) {
         free(inst);
         return NULL;
     }
-    
+
     memset(inst->data, 0, def->size);
     inst->def = def;
+    inst->count = 1;
     inst->managed = managed ? 1 : 0;
     inst->flags = 0;
-    
+
+    def->ref_count++;
+    return inst;
+}
+
+/*
+ * Allocate a contiguous array of `count` struct instances
+ */
+NativeStructInstance *native_struct_alloc_array(NativeStructDef *def, uint32_t count, int managed) {
+    if (!def || count < 1) return NULL;
+
+    NativeStructInstance *inst = (NativeStructInstance *)calloc(1, sizeof(NativeStructInstance));
+    if (!inst) return NULL;
+
+    size_t total = (size_t)def->size * (size_t)count;
+    inst->data = aligned_alloc(def->alignment, total);
+    if (!inst->data) {
+        free(inst);
+        return NULL;
+    }
+
+    memset(inst->data, 0, total);
+    inst->def = def;
+    inst->count = count;
+    inst->managed = managed ? 1 : 0;
+    inst->flags = STRUCT_INST_FLAG_ARRAY;
+
+    def->ref_count++;
+    return inst;
+}
+
+/*
+ * Create a non-owning view over one element of an existing block
+ */
+NativeStructInstance *native_struct_view_at(NativeStructDef *def, void *data) {
+    if (!def || !data) return NULL;
+
+    NativeStructInstance *inst = (NativeStructInstance *)calloc(1, sizeof(NativeStructInstance));
+    if (!inst) return NULL;
+
+    inst->data = data;
+    inst->def = def;
+    inst->count = 1;
+    inst->managed = 1;  /* wrapper itself is freed normally by native_struct_free */
+    inst->flags = STRUCT_INST_FLAG_VIEW;  /* ...but `data` is never freed (see native_struct_free) */
+
     def->ref_count++;
     return inst;
 }
@@ -144,15 +190,15 @@ NativeStructInstance *native_struct_alloc(NativeStructDef *def, int managed) {
  */
 void native_struct_free(NativeStructInstance *inst) {
     if (!inst) return;
-    
-    if (inst->data) {
+
+    if (inst->data && !(inst->flags & STRUCT_INST_FLAG_VIEW)) {
         free(inst->data);
     }
-    
+
     if (inst->def) {
         inst->def->ref_count--;
     }
-    
+
     free(inst);
 }
 

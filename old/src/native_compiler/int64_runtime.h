@@ -25,6 +25,18 @@ uint64_t __dmult_u64(uint64_t a, uint64_t b);
 uint64_t __ddiv_u64(uint64_t dividend, uint64_t divisor);
 uint64_t __dmod_u64(uint64_t dividend, uint64_t divisor);
 
+/* 64-bit comparison helpers (return 0/1 boolean) */
+int32_t __deq_i64(int64_t a, int64_t b);
+int32_t __dne_i64(int64_t a, int64_t b);
+int32_t __dlt_i64(int64_t a, int64_t b);
+int32_t __dle_i64(int64_t a, int64_t b);
+int32_t __dgt_i64(int64_t a, int64_t b);
+int32_t __dge_i64(int64_t a, int64_t b);
+int32_t __dlt_u64(uint64_t a, uint64_t b);
+int32_t __dle_u64(uint64_t a, uint64_t b);
+int32_t __dgt_u64(uint64_t a, uint64_t b);
+int32_t __dge_u64(uint64_t a, uint64_t b);
+
 #ifdef __cplusplus
 }
 #endif

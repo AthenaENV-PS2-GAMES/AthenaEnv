@@ -173,6 +173,62 @@ typedef struct {
 	uint32_t end;
 } material_index;
 
+// Compact wire formats fed to the VU1 via VIF unpack (V3_32/V4_8/V2_16).
+// These are derived caches cooked from positions/normals/colours/texcoords
+// every render, never a source of truth -- see render_cook_compact_vertices().
+typedef struct {
+	float x, y, z;
+} athena_compact_position; // V3_32, 12 bytes
+
+typedef struct {
+	int8_t x, y, z, w;
+} athena_compact_normal; // V4_8 signed, 4 bytes
+
+typedef struct {
+	uint8_t r, g, b, a;
+} athena_compact_color; // V4_8 unsigned, 4 bytes
+
+typedef struct {
+	int16_t u, v;
+} athena_compact_uv; // V2_16 signed, 4 bytes
+
+// Per-attribute bits for athena_render_data.compact_dirty -- see its doc
+// comment and render_invalidate_compact_cache()/_positions().
+#define RENDER_DIRTY_POSITIONS (1 << 0)
+#define RENDER_DIRTY_NORMALS   (1 << 1)
+#define RENDER_DIRTY_COLORS    (1 << 2)
+#define RENDER_DIRTY_UVS       (1 << 3)
+#define RENDER_DIRTY_ALL       (RENDER_DIRTY_POSITIONS | RENDER_DIRTY_NORMALS | RENDER_DIRTY_COLORS | RENDER_DIRTY_UVS)
+
+// Pre-baked DMA_CALL sub-chain for draw_vu1_with_colors: the per-chunk parts
+// that are static across frames. All DMA_REF, so live JS mutation still works.
+// bake_giftags stays dynamic -- it embeds PrimContext, which flips per frame.
+typedef struct {
+    owl_qword *buffer;       // NULL until first built
+    uint32_t   qwc_alloc;    // buffer size, in quadwords
+    uint32_t  *chunk_offset; // per-chunk entry point, in quadwords into buffer
+    uint32_t   chunk_count;
+    int        mpg_addr;     // mpg_addr baked into this chain's MSCALF/MSCNT trailers
+    uint32_t   built_version; // athena_render_data.chain_version at last build; see below
+
+
+    // GS TEX0/TEX1 on PATH1 instead of a PATH2 DIRECT. 3 QW per
+    // material_indices entry: AD giftag header + TEX0 + TEX1, EOP=1. The VU
+    // XGKICKs it standalone BEFORE the vertex data -- chaining it onto the
+    // vertex kick would let the accurate-clipping path's mid-loop XGKICKs
+    // (which carry no texture state) draw with the previous chunk's texture.
+    // Header baked once; TEX0/TEX1 refreshed per draw (PrimContext flips).
+    owl_qword *tex_giftag;
+
+    // owl_flush_generation() of the last draw call that queued this chain. Both
+    // buffers above reach the DMAC by reference, so they belong to that draw
+    // until it has been read -- rewriting them earlier (a second draw of the
+    // same object with a different texture, or a rebuild triggered mid-frame)
+    // would retroactively change what the first draw renders with.
+    uint32_t queued_gen;
+    int      has_queued;
+} athena_chain_cache;
+
 typedef struct athena_render_data {
     uint32_t index_count;
 
@@ -183,8 +239,50 @@ typedef struct athena_render_data {
 	VECTOR* normals;
     VECTOR* colours;
 
-    vertex_skin_data* skin_data;    
-	athena_skeleton* skeleton;        
+    // Lazily (re)allocated by render_cook_compact_vertices(); freed/reset by
+    // new_render_object(). Sized padded_total+4 to keep DMA_REF QWC rounding
+    // (owl_add_unpack_data_ref_packed) from ever reading past the allocation.
+    // Indexed via compact_group_base, NOT by source vertex number.
+    athena_compact_position* compact_positions;
+    athena_compact_normal*   compact_normals;
+    athena_compact_color*    compact_colors;
+    athena_compact_uv*       compact_uvs;
+    uint32_t compact_capacity;
+
+    // Start of each material_indices[] group inside compact_*, in elements,
+    // rounded up to a multiple of 4. The DMAC only fetches from quadword-aligned
+    // addresses, and with the compact formats (12B position, 4B normal/colour/uv)
+    // that means index % 4 == 0; a group starting elsewhere is read up to 8 bytes
+    // early and its whole slice slides one lane. Was free when a 16B VECTOR made
+    // every index aligned. skin_data is exempt: 32B, always aligned.
+    uint32_t* compact_group_base;
+    uint32_t  compact_group_count;
+    // Cooked on first draw and after render_invalidate_compact_*(), not every
+    // draw: skinned meshes animate via bone matrices, not this data. Bits are
+    // per-attribute (RENDER_DIRTY_*) because callers that do touch something
+    // every frame usually touch only one (shadows.c rewrites positions only).
+    uint8_t compact_dirty;
+    // render_freeze_compact_vertices() freed the float source (~64 B/vertex),
+    // leaving only the compact buffers. Reassigning positions un-freezes.
+    // A frozen mesh cannot be used with ODE trimesh or shadows.c's grid.
+    bool frozen;
+
+    // [pipeline][pass_state]. A dedicated slot per combination, never shared:
+    // render_object() issues base/bump/decal back-to-back into the same
+    // unflushed ring, and a script can flip data->pipeline between passes of the
+    // same frame (shadows.js does). Rebuilding a slot in place while a queued
+    // DMA_CALL still points at it desyncs the VIF stream.
+    // Rebuilt when built_version != chain_version or mpg_addr goes stale.
+    athena_chain_cache chain[3][3];
+
+    // The reflection pass runs IN ADDITION to the pipeline above, so it cannot
+    // share those slots. Always pass_state 0.
+    athena_chain_cache ref_chain;
+
+    uint32_t chain_version;
+
+    vertex_skin_data* skin_data;
+	athena_skeleton* skeleton;
 
     VECTOR bounding_box[8];
 
@@ -211,14 +309,25 @@ typedef struct athena_object_data {
 	VECTOR rotation;
     VECTOR scale;
 
-    athena_animation_controller anim_controller; 
+    athena_animation_controller anim_controller;
     athena_bone_transform *bones;
     MATRIX *bone_matrices;
+
+    // Frustum-cull bounds for skinned meshes, rebuilt from the live bone
+    // palette every render_object() -- see render_update_skinned_bounds().
+    // NULL (and unused) for everything else, which is culled straight against
+    // data->bounding_box. Allocated alongside bones/bone_matrices.
+    VECTOR *skinned_bounds;
 
     VECTOR *bump_offset_buffer;
     VECTOR bump_offset;
 
     athena_render_data *data;
+
+    // Defaults true. Turn off when drawn geometry can escape the bounds --
+    // i.e. a script mutating shareBuffers positions without reassigning
+    // .bounds. Skeletal animation is already handled via skinned_bounds.
+    bool frustum_cull;
 
     void *collision;
     void (*update_collision)(struct athena_object_data *obj);
@@ -237,7 +346,19 @@ void initCamera(MATRIX *ws, MATRIX *wv, MATRIX *vs);
 void cameraUpdate();
 
 #define BATCH_SIZE 48
-#define BATCH_SIZE_SKINNED 30
+// Must match the VU mem stride baked into mem_layout.i's SKINNED_*_OFFSET
+// constants (62, 92, 122, 152 -- each exactly 30 apart) -- render.c's
+// destination-offset expressions (2+batch_size*N) depend on this equality.
+// Do NOT change this to "fix" the rounding in owl_add_unpack_data_ref_packed;
+// use render_compact_chunk_cap() instead, which floors it to a multiple of 4
+// without touching what the offset formula sees.
+#define BATCH_SIZE_SKINNED 40
+
+// Mirrors mem_layout.i's INBUF_SIZE/SKINNED_INBUF_SIZE (VU1 asm has no
+// C-visible constants). The tex_giftag unpack targets this offset, which is
+// where the .vcl's texGiftagAddr lands. Keep in lockstep with mem_layout.i.
+#define RENDER_INBUF_SIZE 194
+#define RENDER_SKINNED_INBUF_SIZE 242
 
 int clip_bounding_box(MATRIX local_clip, VECTOR *bounding_box);
 void calculate_vertices_clipped(VECTOR *output,  int count, VECTOR *vertices, MATRIX local_screen);
@@ -254,6 +375,11 @@ void LookAtCameraMatrix(MATRIX m, VECTOR position, VECTOR target, VECTOR up);
 void render_init();
 
 void render_begin();
+
+// Marks the VU1 static view block (screen_scale at 0, world_screen at 1..4,
+// camera position at 9) stale, so the next draw re-uploads it. Call from any
+// code that unpacks into VU1 static addresses 0..9 -- tile_render.c does.
+void render_invalidate_vu_view(void);
 
 void render_set_view(float fov, float near, float far, float width, float height);
 
@@ -276,16 +402,61 @@ void draw_bbox(athena_object_data *obj, Color color);
 
 void render_object(athena_object_data *obj);
 
+// True when obj still has to be drawn: either culling is off for it, or its
+// bounding box is not provably outside the view frustum. See the definition in
+// render.c for what "provably" buys and what it deliberately does not.
+int render_object_in_frustum(athena_object_data *obj);
+
+// Recomputes data->bounding_box from data->positions (axis-aligned, in object
+// space). Implemented in mesh_loaders.c, where the model loaders already call
+// it; declared here because anything that replaces positions after load has to
+// call it too or frustum culling will test a stale box.
+void calculate_bbox(athena_render_data *data);
+
 void new_render_object(athena_object_data *obj, athena_render_data *data);
+
+// Forces the next draw call to re-cook every compact VIF wire buffer from
+// positions/normals/colours/texcoords instead of reusing the cached ones.
+// Only needed after a script mutates those arrays in place post-load.
+void render_invalidate_compact_cache(athena_render_data *data);
+
+// Like render_invalidate_compact_cache(), but only forces positions to be
+// re-cooked, leaving the (still valid) cached normals/colours/texcoords
+// alone -- for callers that only ever touch positions per update, e.g.
+// shadows.c's projector grid.
+void render_invalidate_compact_positions(athena_render_data *data);
+
+// Cooks the compact buffers if needed, then frees positions/normals/
+// texcoords/colours and marks data as frozen -- see the `frozen` field doc
+// in athena_render_data. A no-op if already frozen.
+void render_freeze_compact_vertices(athena_render_data *data);
+
+// Bumps chain_version, so every pass_state slot rebuilds on its next draw.
+// Needed after changing materials/material_indices/texture_mapping/vertices,
+// or reallocating the compact_* buffers the chains' DMA_REFs point at.
+void render_invalidate_chain_cache(athena_render_data *data);
 
 void update_object_space(athena_object_data *obj);
 
 void create_view(MATRIX view_screen, float fov, float near, float far, float w, float h);
 
-#define alloc_vectors(cnt) (VECTOR*)malloc(cnt * sizeof(VECTOR))
+// memalign, not malloc: VECTOR is declared aligned(16) but malloc only promises
+// 8, and the cook loops (render.c) read these arrays with lqc2, which faults on
+// a misaligned address. free() releases memalign'd blocks fine.
+#define alloc_vectors(cnt) (VECTOR*)memalign(16, cnt * sizeof(VECTOR))
 #define copy_vectors(dst, src, cnt) memcpy(dst, src, cnt*sizeof(VECTOR))
 #define copy_vector(dst, src) memcpy(dst, src, sizeof(VECTOR))
 #define free_vectors(vec) free(vec)
+
+// copy_vector() has to stay a memcpy: mesh_loaders.c feeds it a source with a
+// 12-byte stride on purpose. Use this one only where both sides came from
+// alloc_vectors -- 2 memory ops instead of the 8 an unaligned memcpy expands to.
+static inline void copy_vector_qw(VECTOR dst, VECTOR src) {
+	__asm__ __volatile__(
+		"lq  $8, 0x0(%1)\n"
+		"sq  $8, 0x0(%0)\n"
+		: : "r" (dst), "r" (src) : "$8", "memory");
+}
 
 #define copy_init_w_vector(dst, src) \
 do { \
@@ -323,6 +494,10 @@ void append_texture_tags(owl_packet* packet, GSSURFACE *texture, int texture_id,
 typedef struct {
 	uint32_t draw_calls;
 	uint32_t triangles;
+	// Objects render_object() rejected via render_object_in_frustum() this
+	// frame. draw_calls/triangles count only what actually got submitted, so
+	// these three together tell you how much the cull is really saving.
+	uint32_t objects_culled;
 } render_stats_t;
 
 const render_stats_t *render_get_stats(void);

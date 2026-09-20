@@ -61,7 +61,10 @@ static NativeType binary_result_type(NativeType left, NativeType right, IROp op)
     }
     
     /* Comparison operations always return bool */
-    if (op >= IR_EQ_I32 && op <= IR_LE_F32) {
+    if (op >= IR_EQ_I32 && op <= IR_GE_F32) {
+        return NATIVE_TYPE_BOOL;
+    }
+    if (op >= IR_EQ_I64 && op <= IR_GE_U64) {
         return NATIVE_TYPE_BOOL;
     }
     
@@ -249,7 +252,42 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
                 type_stack_pop(stack);
                 instr->type = NATIVE_TYPE_VOID;
                 break;
-                
+
+            case IR_ARRAY_ELEM_ADDR:
+                /* Struct array indexing: pop index, pop base, push the
+                 * element address as a plain pointer - mirrors the real
+                 * codegen exactly (native_compiler.c), unlike IR_LOAD_ARRAY's
+                 * entry above which pushes the ARRAY's declared element type.
+                 * A struct element isn't representable as one scalar type,
+                 * so this always pushes NATIVE_TYPE_PTR regardless of what
+                 * struct type it addresses - the field type only becomes
+                 * known at the following IR_LOAD_FIELD_DYN/IR_STORE_FIELD_DYN. */
+                type_stack_pop(stack);  /* index */
+                type_stack_pop(stack);  /* base */
+                type_stack_push(stack, NATIVE_TYPE_PTR);
+                instr->type = NATIVE_TYPE_PTR;
+                break;
+
+            case IR_LOAD_FIELD_DYN:
+                /* Same as IR_LOAD_FIELD: push using the type already baked
+                 * into the instruction at construction time (the struct
+                 * field's declared type) - see the [reg] comment on
+                 * IR_LOAD_FIELD/IR_LOAD_FIELD_ADDR above for why this must
+                 * NOT be recomputed here. Pop the base pointer (the one real
+                 * difference from IR_LOAD_FIELD: base comes off the stack
+                 * instead of a fixed local). */
+                type_stack_pop(stack);  /* base ptr */
+                type_stack_push(stack, instr->type);
+                break;
+
+            case IR_STORE_FIELD_DYN:
+                /* Pop value, pop base ptr (the one real difference from
+                 * IR_STORE_FIELD, which only pops the value). */
+                type_stack_pop(stack);  /* value */
+                type_stack_pop(stack);  /* base ptr */
+                instr->type = NATIVE_TYPE_VOID;
+                break;
+
             /* Binary integer operations */
             case IR_ADD_I32:
             case IR_SUB_I32:
@@ -346,7 +384,18 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
             /* Unary operations */
             case IR_NEG_I32:
                 t1 = type_stack_pop(stack);
-                if (NATIVE_TYPE_IS_INT64(t1)) {
+                if (NATIVE_TYPE_IS_FLOAT(t1)) {
+                    /* Unary minus is decoded as IR_NEG_I32 regardless of operand
+                     * type (see OP_neg), exactly like the binary ops are decoded
+                     * as their _I32 forms - so it needs the same promotion the
+                     * binary case does via needs_float above. Without it, `-a`
+                     * on a float ran an integer negate over the float's bit
+                     * pattern: -3.25f came back as -1078984704, which is
+                     * literally -(bits of 3.25f). */
+                    instr->op = IR_NEG_F32;
+                    type_stack_push(stack, NATIVE_TYPE_FLOAT32);
+                    instr->type = NATIVE_TYPE_FLOAT32;
+                } else if (NATIVE_TYPE_IS_INT64(t1)) {
                     instr->op = IR_NEG_I64;
                     type_stack_push(stack, NATIVE_TYPE_INT64);
                     instr->type = NATIVE_TYPE_INT64;
@@ -356,11 +405,51 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
                 }
                 break;
                 
+            /* Math.* intrinsics that the decoder folds into a single IR op.
+             * All of these were missing here, so any block containing one was
+             * rejected by this pass ("default: return -1") and re-run through
+             * the permissive fallback below - which leaves the type stack
+             * unbalanced. Most survived by accident because their codegen
+             * hardcodes the right PUSH_TYPE, but Math.imul() came back as 0.
+             * Grouped by arity: pop N, push one result. */
             case IR_NEG_F32:
             case IR_SQRT_F32:
+            case IR_ABS_F32:
+            case IR_SIGN_F32:
+            case IR_FROUND_F32:
+            case IR_SATURATE_F32:
+            case IR_RSQRT_F32:
                 t1 = type_stack_pop(stack);
                 type_stack_push(stack, NATIVE_TYPE_FLOAT32);
                 instr->type = NATIVE_TYPE_FLOAT32;
+                break;
+
+            case IR_MIN_F32:
+            case IR_MAX_F32:
+            case IR_STEP_F32:
+                t1 = type_stack_pop(stack);
+                t2 = type_stack_pop(stack);
+                (void)t1; (void)t2;
+                type_stack_push(stack, NATIVE_TYPE_FLOAT32);
+                instr->type = NATIVE_TYPE_FLOAT32;
+                break;
+
+            case IR_CLAMP_F32:
+            case IR_FMA_F32:
+            case IR_LERP_F32:
+            case IR_SMOOTHSTEP_F32:
+                type_stack_pop(stack);
+                type_stack_pop(stack);
+                type_stack_pop(stack);
+                type_stack_push(stack, NATIVE_TYPE_FLOAT32);
+                instr->type = NATIVE_TYPE_FLOAT32;
+                break;
+
+            case IR_IMUL_I32:
+                type_stack_pop(stack);
+                type_stack_pop(stack);
+                type_stack_push(stack, NATIVE_TYPE_INT32);
+                instr->type = NATIVE_TYPE_INT32;
                 break;
                 
             /* Bitwise operations */
@@ -395,8 +484,21 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
             case IR_GT_U32:
             case IR_GE_U32:
             case IR_EQ_F32:
+            case IR_NE_F32:
             case IR_LT_F32:
-            case IR_LE_F32: {
+            case IR_LE_F32:
+            case IR_GT_F32:
+            case IR_GE_F32:
+            case IR_EQ_I64:
+            case IR_NE_I64:
+            case IR_LT_I64:
+            case IR_LE_I64:
+            case IR_GT_I64:
+            case IR_GE_I64:
+            case IR_LT_U64:
+            case IR_LE_U64:
+            case IR_GT_U64:
+            case IR_GE_U64: {
                 t2 = type_stack_pop(stack);
                 t1 = type_stack_pop(stack);
                 
@@ -406,9 +508,36 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
                     if (instr->op == IR_EQ_I32) {
                         instr->op = IR_STRING_EQUALS;
                     } else {
-                        /* NE: Use STRING_EQUALS and negate later (or add IR_STRING_NE) */
-                        /* For now, keep as string compare */
-                        instr->op = IR_STRING_COMPARE;
+                        instr->op = IR_STRING_NE;
+                    }
+                } else if (NATIVE_TYPE_IS_FLOAT(t1) || NATIVE_TYPE_IS_FLOAT(t2)) {
+                    switch (instr->op) {
+                        case IR_EQ_I32: instr->op = IR_EQ_F32; break;
+                        case IR_NE_I32: instr->op = IR_NE_F32; break;
+                        case IR_LT_I32: instr->op = IR_LT_F32; break;
+                        case IR_LE_I32: instr->op = IR_LE_F32; break;
+                        case IR_GT_I32: instr->op = IR_GT_F32; break;
+                        case IR_GE_I32: instr->op = IR_GE_F32; break;
+                        default: break;
+                    }
+                } else if (NATIVE_TYPE_IS_INT64(t1) || NATIVE_TYPE_IS_INT64(t2)) {
+                    switch (instr->op) {
+                        case IR_EQ_I32: instr->op = IR_EQ_I64; break;
+                        case IR_NE_I32: instr->op = IR_NE_I64; break;
+                        case IR_LT_I32: instr->op = IR_LT_I64; break;
+                        case IR_LE_I32: instr->op = IR_LE_I64; break;
+                        case IR_GT_I32: instr->op = IR_GT_I64; break;
+                        case IR_GE_I32: instr->op = IR_GE_I64; break;
+                        default: break;
+                    }
+                } else if ((t1 == NATIVE_TYPE_UINT32 || t2 == NATIVE_TYPE_UINT32) &&
+                           instr->op >= IR_LT_I32 && instr->op <= IR_GE_I32) {
+                    switch (instr->op) {
+                        case IR_LT_I32: instr->op = IR_LT_U32; break;
+                        case IR_LE_I32: instr->op = IR_LE_U32; break;
+                        case IR_GT_I32: instr->op = IR_GT_U32; break;
+                        case IR_GE_I32: instr->op = IR_GE_U32; break;
+                        default: break;
                     }
                 }
                 
@@ -487,15 +616,34 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
                 instr->type = NATIVE_TYPE_VOID;
                 break;
                 
+            /* Direct call to a registered C function (Math.sin, Math.atan2,
+             * ...). Same shape as IR_CALL except the callee address is baked
+             * in, so there is no callee operand on the stack. Without this
+             * case the op fell through to `default: return -1`, which failed
+             * inference for the whole block and dropped it into the permissive
+             * fallback below - where the result of e.g. sinf() came back typed
+             * as int32, so every float op consuming it was emitted as integer
+             * arithmetic. */
+            case IR_CALL_C_FUNC:
             case IR_CALL:
-                /* Function calls - would need function signature info */
-                /* For now, assume returns int32 */
+            case IR_TAIL_CALL: {
+                /* bytecode_to_ir's nc_apply_pending_call_sig() stamps the
+                 * resolved callee's real return type onto operand.call.ret_type
+                 * when it can (i.e. the callee was a resolvable nested
+                 * Native.compile() function) - use that instead of blindly
+                 * assuming int32, or a float-returning nested call (e.g.
+                 * lerp/clamp) ends up read from $v0 instead of $f0. UNKNOWN
+                 * means we truly don't know (unresolved indirect call), so
+                 * int32 remains the fallback only in that case. */
                 for (int j = 0; j < instr->operand.call.arg_count; j++) {
                     type_stack_pop(stack);
                 }
-                type_stack_push(stack, NATIVE_TYPE_INT32);
-                instr->type = NATIVE_TYPE_INT32;
+                NativeType rt = instr->operand.call.ret_type;
+                if (rt == NATIVE_TYPE_UNKNOWN) rt = NATIVE_TYPE_INT32;
+                type_stack_push(stack, rt);
+                instr->type = rt;
                 break;
+            }
                 
             /* String operations */
             case IR_STRING_CONCAT: {
@@ -514,11 +662,18 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
             }
             
             case IR_STRING_COMPARE:
-            case IR_STRING_EQUALS: {
+            case IR_STRING_EQUALS:
+            case IR_STRING_NE: {
                 t2 = type_stack_pop(stack);
                 t1 = type_stack_pop(stack);
                 type_stack_push(stack, NATIVE_TYPE_BOOL);
                 instr->type = NATIVE_TYPE_BOOL;
+                break;
+            }
+            
+            case IR_STRING_NEW: {
+                type_stack_push(stack, NATIVE_TYPE_STRING);
+                instr->type = NATIVE_TYPE_STRING;
                 break;
             }
             
@@ -561,11 +716,47 @@ static int infer_block_types(IRBasicBlock *block, NativeType *local_types,
             case IR_ARRAY_PUSH:
             case IR_ARRAY_RESIZE:
             case IR_ARRAY_RESERVE:
-            case IR_ARRAY_REMOVE: {
+            case IR_ARRAY_REMOVE:
+            case IR_ARRAY_INSERT: {
                 type_stack_pop(stack);  /* value or index */
                 type_stack_pop(stack);  /* array */
                 type_stack_push(stack, NATIVE_TYPE_BOOL);
                 instr->type = NATIVE_TYPE_BOOL;
+                break;
+            }
+
+            case IR_ARRAY_POP: {
+                type_stack_pop(stack);  /* array */
+                NativeType elem = instr->operand.field.field_type;
+                if (elem == NATIVE_TYPE_UNKNOWN)
+                    elem = NATIVE_TYPE_INT32;
+                type_stack_push(stack, elem);
+                instr->type = elem;
+                break;
+            }
+
+            case IR_ARRAY_GET: {
+                type_stack_pop(stack);  /* index */
+                type_stack_pop(stack);  /* array */
+                NativeType elem = instr->operand.field.field_type;
+                if (elem == NATIVE_TYPE_UNKNOWN)
+                    elem = NATIVE_TYPE_INT32;
+                type_stack_push(stack, elem);
+                instr->type = elem;
+                break;
+            }
+
+            case IR_ARRAY_SET: {
+                type_stack_pop(stack);  /* value */
+                type_stack_pop(stack);  /* index */
+                type_stack_pop(stack);  /* array */
+                instr->type = NATIVE_TYPE_VOID;
+                break;
+            }
+
+            case IR_ARRAY_NEW: {
+                type_stack_push(stack, NATIVE_TYPE_DYNAMIC_INT32_ARRAY);
+                instr->type = NATIVE_TYPE_DYNAMIC_INT32_ARRAY;
                 break;
             }
             
@@ -602,17 +793,56 @@ int infer_types(IRFunction *ir, const NativeFuncSignature *sig) {
         }
     }
     
+    /* Re-run the full block-by-block pass below until local_types[]
+     * stabilizes. A single pass processes blocks in index order
+     * (0,1,2,...), which doesn't match control-flow order: a local whose
+     * true type is only discovered via a promotion in a LATER block (e.g.
+     * a loop's else-branch storing a float result - see the promotion
+     * rule in IR_STORE_LOCAL below) leaves EARLIER blocks that already
+     * loaded that local - e.g. the same loop's body reading it a few
+     * instructions up to pass to a nested call - permanently stuck with
+     * whatever type was current when THEY were processed (usually the
+     * INT32 default), since nothing revisits an already-processed
+     * instruction. Repeating the whole pass lets a promotion found late
+     * apply everywhere on the next round. This can only take at most
+     * local_count passes: each pass can only promote previously-int
+     * locals to float (never the reverse), so it's bounded and always
+     * terminates. */
+    NativeType prev_local_types[NC_MAX_LOCALS];
+
+    /* Per-block entry type stack, mirroring ir_to_native's block_entry_depth
+     * fix in native_compiler.c: a branch-target block isn't necessarily
+     * entered with an empty stack - e.g. a ternary merge point receives
+     * whatever type its arms pushed (a float, if both arms produce floats).
+     * Without this, every block used to start from a hard-reset empty
+     * stack, so a STORE_LOCAL sitting right at a merge point always popped
+     * NATIVE_TYPE_UNKNOWN and silently fell back to the local's existing
+     * (default INT32) type instead of ever seeing - and promoting to - the
+     * real incoming float type. Persisted across outer passes and refreshed
+     * every pass so a promotion discovered on one pass's block reaches its
+     * successors on the same or next pass, same convergence argument as the
+     * local_types stabilization loop below. */
+    NativeType block_entry_types[NC_MAX_BASIC_BLOCKS][NC_MAX_STACK_DEPTH];
+    int block_entry_depth[NC_MAX_BASIC_BLOCKS];
+    for (int b = 0; b < ir->block_count; b++) block_entry_depth[b] = -1;
+
+    for (int pass = 0; pass <= ir->local_count; pass++) {
+        memcpy(prev_local_types, ir->local_types, sizeof(NativeType) * ir->local_count);
+
     /* Process each basic block with its own stack state */
-    /* For loops, we allow UNKNOWN types and infer from context */
     for (int b = 0; b < ir->block_count; b++) {
         TypeStack stack;
-        type_stack_init(&stack);
-        
-        /* If this block is a loop target, start with empty stack */
-        /* Otherwise, we could inherit from predecessor, but for simplicity
-         * we'll infer types per-block and allow UNKNOWN */
-        
-        int result = infer_block_types(&ir->blocks[b], ir->local_types, 
+        if (block_entry_depth[b] >= 0) {
+            stack.depth = block_entry_depth[b];
+            memcpy(stack.types, block_entry_types[b], sizeof(NativeType) * stack.depth);
+        } else {
+            /* Not yet reached by a predecessor this pass (e.g. a loop
+             * header on the first pass, before its back-edge has been
+             * processed) - empty stack is the safe default. */
+            type_stack_init(&stack);
+        }
+
+        int result = infer_block_types(&ir->blocks[b], ir->local_types,
                                        ir->local_count, &stack);
         if (result < 0) {
             /* Type inference failed - try again with more permissive rules */
@@ -647,10 +877,57 @@ int infer_types(IRFunction *ir, const NativeFuncSignature *sig) {
                     case IR_LOAD_ARRAY:
                         if (stack.depth >= 2) {
                             type_stack_pop(&stack);  /* index */
-                            type_stack_pop(&stack);  /* array */
-                            type_stack_push(&stack, NATIVE_TYPE_INT32);  /* Assume int32 */
-                            instr->type = NATIVE_TYPE_INT32;
+                            NativeType arr_t = type_stack_pop(&stack);  /* array */
+                            /* [reg] this used to blindly assume int32 regardless
+                             * of the array's real element type. A struct's
+                             * array field (e.g. `m.m[0]` on a float[16] field)
+                             * pushes its element via IR_LOAD_FIELD_ADDR, so the
+                             * popped type here is a real FLOAT32_ARRAY, not
+                             * UNKNOWN - ignoring it forced every such read to
+                             * be treated as int32, which made the codegen
+                             * numerically convert the raw float bit pattern as
+                             * if it were an integer (CVT.S.W on already-float
+                             * bits) instead of loading it as a float. */
+                            NativeType elem = native_array_element_type(arr_t);
+                            if (elem == NATIVE_TYPE_UNKNOWN) elem = NATIVE_TYPE_INT32;
+                            type_stack_push(&stack, elem);
+                            instr->type = elem;
                         }
+                        break;
+                    case IR_LOAD_FIELD:
+                    case IR_LOAD_FIELD_ADDR:
+                        /* [reg] these two fell through to `default` below,
+                         * which stomped the already-correct type (computed at
+                         * IR-construction time from the struct field's
+                         * declared type) back to UNKNOWN. Preserve it instead -
+                         * mirrors the strict pass at infer_block_types. */
+                        type_stack_push(&stack, instr->type);
+                        break;
+                    case IR_STORE_FIELD:
+                        if (stack.depth > 0) type_stack_pop(&stack);
+                        instr->type = NATIVE_TYPE_VOID;
+                        break;
+                    case IR_ARRAY_ELEM_ADDR:
+                        if (stack.depth >= 2) {
+                            type_stack_pop(&stack);  /* index */
+                            type_stack_pop(&stack);  /* base */
+                        }
+                        type_stack_push(&stack, NATIVE_TYPE_PTR);
+                        instr->type = NATIVE_TYPE_PTR;
+                        break;
+                    case IR_LOAD_FIELD_DYN:
+                        /* Same reasoning as IR_LOAD_FIELD/IR_LOAD_FIELD_ADDR
+                         * above: preserve the already-correct type baked in
+                         * at construction time, don't recompute it here. */
+                        if (stack.depth > 0) type_stack_pop(&stack);  /* base ptr */
+                        type_stack_push(&stack, instr->type);
+                        break;
+                    case IR_STORE_FIELD_DYN:
+                        if (stack.depth >= 2) {
+                            type_stack_pop(&stack);  /* value */
+                            type_stack_pop(&stack);  /* base ptr */
+                        }
+                        instr->type = NATIVE_TYPE_VOID;
                         break;
                     case IR_STORE_ARRAY:
                         if (stack.depth >= 3) {
@@ -721,6 +998,22 @@ int infer_types(IRFunction *ir, const NativeFuncSignature *sig) {
                     case IR_RETURN_VOID:
                         instr->type = NATIVE_TYPE_VOID;
                         break;
+                    case IR_CALL_C_FUNC:
+                    case IR_CALL:
+                    case IR_TAIL_CALL: {
+                        /* Keep the stack balanced and the return type honest
+                         * here too - this fallback runs for any block the
+                         * strict pass rejected, and a call left unbalanced
+                         * corrupts the types of everything after it. */
+                        for (int a = 0; a < instr->operand.call.arg_count; a++) {
+                            if (stack.depth > 0) type_stack_pop(&stack);
+                        }
+                        NativeType rt = instr->operand.call.ret_type;
+                        if (rt == NATIVE_TYPE_UNKNOWN) rt = NATIVE_TYPE_INT32;
+                        if (rt != NATIVE_TYPE_VOID) type_stack_push(&stack, rt);
+                        instr->type = rt;
+                        break;
+                    }
                     default:
                         /* For unknown ops, try to maintain stack balance */
                         instr->type = NATIVE_TYPE_UNKNOWN;
@@ -728,8 +1021,30 @@ int infer_types(IRFunction *ir, const NativeFuncSignature *sig) {
                 }
             }
         }
+
+        /* Propagate this block's final stack state to whichever successors
+         * haven't been reached yet this pass, so they don't fall back to an
+         * empty stack when their turn comes later in this same loop (the
+         * common forward-jump case) or on the next outer pass (the backward
+         * / loop-header case). */
+        {
+            int depth = stack.depth;
+            if (depth > NC_MAX_STACK_DEPTH) depth = NC_MAX_STACK_DEPTH;
+            for (int s = 0; s < 2; s++) {
+                int succ = ir->blocks[b].successors[s];
+                if (succ >= 0 && succ < ir->block_count) {
+                    block_entry_depth[succ] = depth;
+                    memcpy(block_entry_types[succ], stack.types, sizeof(NativeType) * depth);
+                }
+            }
+        }
     }
-    
+
+        if (memcmp(prev_local_types, ir->local_types, sizeof(NativeType) * ir->local_count) == 0) {
+            break;  /* No local was promoted this pass - types have stabilized */
+        }
+    }
+
     return 0;
 }
 
@@ -809,6 +1124,7 @@ const char *native_type_name(NativeType type) {
         case NATIVE_TYPE_UINT32_ARRAY: return "Uint32Array";
         case NATIVE_TYPE_FLOAT32_ARRAY: return "Float32Array";
         case NATIVE_TYPE_PTR: return "ptr";
+        case NATIVE_TYPE_STRUCT_ARRAY: return "StructArray";
         case NATIVE_TYPE_STRING: return "string";
         case NATIVE_TYPE_STRING_VIEW: return "StringView";
         case NATIVE_TYPE_DYNAMIC_INT32_ARRAY: return "DynamicInt32Array";
@@ -830,6 +1146,7 @@ size_t native_type_size(NativeType type) {
         case NATIVE_TYPE_BOOL:
         case NATIVE_TYPE_FLOAT32:
         case NATIVE_TYPE_PTR:
+        case NATIVE_TYPE_STRUCT_ARRAY:
             return 4;  /* 32 bits = 4 bytes */
         case NATIVE_TYPE_INT64:
         case NATIVE_TYPE_UINT64:
@@ -837,7 +1154,12 @@ size_t native_type_size(NativeType type) {
         case NATIVE_TYPE_INT32_ARRAY:
         case NATIVE_TYPE_UINT32_ARRAY:
         case NATIVE_TYPE_FLOAT32_ARRAY:
-            return sizeof(void*);  /* Pointer size */
+        case NATIVE_TYPE_DYNAMIC_INT32_ARRAY:
+        case NATIVE_TYPE_DYNAMIC_UINT32_ARRAY:
+        case NATIVE_TYPE_DYNAMIC_FLOAT32_ARRAY:
+        case NATIVE_TYPE_STRING:
+        case NATIVE_TYPE_STRING_VIEW:
+            return sizeof(void*);  /* All handles/views are a single pointer */
         case NATIVE_TYPE_VOID:
         case NATIVE_TYPE_UNKNOWN:
         default:
@@ -859,6 +1181,7 @@ size_t native_type_alignment(NativeType type) {
         case NATIVE_TYPE_BOOL:
         case NATIVE_TYPE_FLOAT32:
         case NATIVE_TYPE_PTR:
+        case NATIVE_TYPE_STRUCT_ARRAY:
         default:
             return 4;  /* Default 4-byte alignment */
     }
@@ -871,10 +1194,13 @@ size_t native_type_alignment(NativeType type) {
 NativeType native_array_element_type(NativeType array_type) {
     switch (array_type) {
         case NATIVE_TYPE_INT32_ARRAY:
+        case NATIVE_TYPE_DYNAMIC_INT32_ARRAY:
             return NATIVE_TYPE_INT32;
         case NATIVE_TYPE_UINT32_ARRAY:
+        case NATIVE_TYPE_DYNAMIC_UINT32_ARRAY:
             return NATIVE_TYPE_UINT32;
         case NATIVE_TYPE_FLOAT32_ARRAY:
+        case NATIVE_TYPE_DYNAMIC_FLOAT32_ARRAY:
             return NATIVE_TYPE_FLOAT32;
         default:
             return NATIVE_TYPE_UNKNOWN;

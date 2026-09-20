@@ -20,16 +20,16 @@ typedef struct athena_scene_node {
     struct athena_scene_node *parent;
 } athena_scene_node;
 
-athena_scene_node *athena_scene_node_create(void);
-void athena_scene_node_destroy(athena_scene_node *n);
+athena_scene_node *render_scene_node_create(void);
+void render_scene_node_destroy(athena_scene_node *n);
 
-void athena_scene_node_add_child(athena_scene_node *parent, athena_scene_node *child);
-void athena_scene_node_remove_child(athena_scene_node *parent, athena_scene_node *child);
+void render_scene_node_add_child(athena_scene_node *parent, athena_scene_node *child);
+void render_scene_node_remove_child(athena_scene_node *parent, athena_scene_node *child);
 
-void athena_scene_node_attach(athena_scene_node *node, athena_object_data *obj);
-void athena_scene_node_detach(athena_scene_node *node, athena_object_data *obj); // obj==NULL clears all
+void render_scene_node_attach(athena_scene_node *node, athena_object_data *obj);
+void render_scene_node_detach(athena_scene_node *node, athena_object_data *obj); // obj==NULL clears all
 
-void athena_scene_update(athena_scene_node *root);
+void render_scene_update(athena_scene_node *root);
 
 #endif
 

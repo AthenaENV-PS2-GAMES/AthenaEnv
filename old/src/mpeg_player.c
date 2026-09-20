@@ -15,6 +15,7 @@
 #include <owl_packet.h>
 #include <texture_manager.h>
 #include <graphics.h>
+#include <dbgprintf.h>
 
 // Buffer size for file reading (sent to IPU in chunks)
 #define MPEG_FILE_BUFFER_SIZE (64 * 1024)  // 64KB buffer
@@ -28,55 +29,56 @@ static MPEGPlayer* g_current_player = NULL;
  */
 static int mpeg_set_dma_callback(void* user_data) {
     MPEGPlayer* player = g_current_player;
-    
+
     if (!player || !player->file) {
         return 0;  // End of data
     }
-    
+
     // Check if we need to refill buffer from file
     if (player->file_buffer_pos >= player->file_buffer_size) {
         // Read more data from file
         size_t bytes_read = fread(player->file_buffer, 1, MPEG_FILE_BUFFER_SIZE, player->file);
-        
+
         if (bytes_read == 0) {
             // Check for loop
             if (player->loop) {
                 fseek(player->file, 0, SEEK_SET);
                 bytes_read = fread(player->file_buffer, 1, MPEG_FILE_BUFFER_SIZE, player->file);
                 if (bytes_read == 0) {
-                    return 0;  // Still no data - real end
+                    return 0;  // Empty file -- nothing we can do
                 }
                 player->current_frame = 0;
             } else {
-                return 0;  // End of file
+                dbgprintf("mpeg: [dma_cb] real EOF, reporting no more data\n");
+                return 0;  // Real end of stream. libmpeg's own _ipu_sync/
+                           // _ipu_sync_data (libmpeg_core.s) already inject
+                           // a sequence-end code (00 00 01 B7) internally
+                           // whenever this callback returns 0 -- no need to
+                           // fake one ourselves here.
             }
         }
-        
+
         player->file_buffer_size = bytes_read;
         player->file_buffer_pos = 0;
     }
-    
-    // Calculate how much to send (up to chunk size)
+
+    // Calculate how much to send this call (matches ps2sdk's own libmpeg
+    // sample: fixed-size chunks, no manual byte-alignment bookkeeping --
+    // the buffer is a full MPEG_FILE_BUFFER_SIZE allocation, so reading a
+    // few bytes past the last real chunk's exact length is harmless, and
+    // rounding the DMA transfer down/dropping a partial tail chunk is what
+    // previously left the decoder's start-code scan running past real data
+    // without ever reaching a byte-aligned sync pattern.
     size_t remaining = player->file_buffer_size - player->file_buffer_pos;
-    size_t to_send = (remaining > MPEG_DMA_CHUNK_SIZE) ? MPEG_DMA_CHUNK_SIZE : remaining;
-    
-    // Align to 16 bytes
-    to_send = (to_send + 15) & ~15;
-    if (to_send > remaining) {
-        to_send = remaining & ~15;
-        if (to_send == 0) {
-            return 0;
-        }
-    }
-    
-    // Wait for previous transfer and send new data to IPU using dmaKit
+    size_t to_send = (remaining < MPEG_DMA_CHUNK_SIZE) ? remaining : MPEG_DMA_CHUNK_SIZE;
+
     dmaKit_wait(DMA_CHANNEL_TOIPU, 0);
-    dmaKit_send(DMA_CHANNEL_TOIPU, 
-        player->file_buffer + player->file_buffer_pos, 
-        to_send >> 4);  // QWC (quadwords)
-    
+    dmaKit_send(DMA_CHANNEL_TOIPU,
+        player->file_buffer + player->file_buffer_pos,
+        (to_send + 15) >> 4);  // QWC (quadwords), rounded up
+
     player->file_buffer_pos += to_send;
-    
+
     return 1;  // Data sent
 }
 
@@ -96,6 +98,8 @@ static void* mpeg_init_callback(void* user_data, MPEGSequenceInfo* info) {
     player->width = info->m_Width;
     player->height = info->m_Height;
     player->frame_count = info->m_FrameCnt;
+    dbgprintf("mpeg: [init_cb] sequence header: %dx%d, reported frame_count=%d\n",
+              info->m_Width, info->m_Height, info->m_FrameCnt);
     
     // Calculate FPS from ms per frame
     if (info->m_MSPerFrame > 0) {
@@ -175,7 +179,7 @@ MPEGPlayer* mpeg_player_create(const char* path) {
     player->initialized = false;
     player->sequence_started = false;
     player->texture_allocated = false;
-    
+
     // Initialize DMA channel for IPU using dmaKit
     // Note: dmaKit_init is already called in init_graphics()
     dmaKit_chan_init(DMA_CHANNEL_TOIPU);
@@ -204,7 +208,9 @@ void mpeg_player_destroy(MPEGPlayer* player) {
     }
     
     if (player == g_current_player) {
+        dbgprintf("mpeg: [destroy] before MPEG_Destroy\n");
         MPEG_Destroy();
+        dbgprintf("mpeg: [destroy] after MPEG_Destroy\n");
         g_current_player = NULL;
     }
     
@@ -243,7 +249,7 @@ void mpeg_player_play(MPEGPlayer* player) {
         player->file_buffer_pos = 0;
         player->current_frame = 0;
     }
-    
+
     player->state = MPEG_STATE_PLAYING;
     player->last_decode_time = clock() / (CLOCKS_PER_SEC / 1000);  // ms
 }
@@ -284,37 +290,51 @@ bool mpeg_player_decode_frame(MPEGPlayer* player) {
     
     // Try to decode next frame
     int64_t pts;
-    if (!MPEG_Picture(player->frame_data, &pts)) {
-        // Decode failed - check if end of file
-        if (player->info.m_fEOF) {
-            if (player->loop) {
-                // Restart
-                fseek(player->file, 0, SEEK_SET);
-                player->file_buffer_size = fread(player->file_buffer, 1, MPEG_FILE_BUFFER_SIZE, player->file);
-                player->file_buffer_pos = 0;
-                player->current_frame = 0;
-                
-                // Re-initialize MPEG decoder
-                MPEG_Destroy();
-                MPEG_Initialize(mpeg_set_dma_callback, NULL, mpeg_init_callback, player, &player->pts_current);
-                
-                // Try decode again
-                if (!MPEG_Picture(player->frame_data, &pts)) {
-                    player->state = MPEG_STATE_ENDED;
-                    return false;
-                }
-            } else {
+    dbgprintf("mpeg: [decode_frame] before MPEG_Picture, frame=%d\n", player->current_frame);
+    bool ok = MPEG_Picture(player->frame_data, &pts);
+    dbgprintf("mpeg: [decode_frame] after MPEG_Picture, ok=%d\n", ok);
+    if (!ok) {
+        // Decode failed. player->info is a one-time snapshot taken by
+        // mpeg_init_callback() at sequence-header time (before any data has
+        // been read), so player->info.m_fEOF never reflects the live EOF
+        // state and can't be used to tell "end of stream" apart from a
+        // genuine decode error -- libmpeg doesn't expose the live flag.
+        // Either way there is nothing left to usefully decode, so treat
+        // any failure the same: restart on loop, otherwise stop. Leaving
+        // the state machine stuck here (as before) is what made
+        // `while (!video.ended)`-style caller loops spin forever once
+        // playback actually reached the end of the file.
+        if (player->loop) {
+            dbgprintf("mpeg: [decode_frame] looping: restarting file + decoder\n");
+            // Restart
+            fseek(player->file, 0, SEEK_SET);
+            player->file_buffer_size = fread(player->file_buffer, 1, MPEG_FILE_BUFFER_SIZE, player->file);
+            player->file_buffer_pos = 0;
+            player->current_frame = 0;
+
+            // Re-initialize MPEG decoder
+            dbgprintf("mpeg: [decode_frame] before MPEG_Destroy (loop restart)\n");
+            MPEG_Destroy();
+            dbgprintf("mpeg: [decode_frame] after MPEG_Destroy, before MPEG_Initialize (loop restart)\n");
+            MPEG_Initialize(mpeg_set_dma_callback, NULL, mpeg_init_callback, player, &player->pts_current);
+            dbgprintf("mpeg: [decode_frame] after MPEG_Initialize (loop restart)\n");
+
+            // Try decode again
+            if (!MPEG_Picture(player->frame_data, &pts)) {
+                dbgprintf("mpeg: [decode_frame] second MPEG_Picture also failed -> ENDED\n");
                 player->state = MPEG_STATE_ENDED;
                 return false;
             }
         } else {
-            return false;  // Decode error
+            dbgprintf("mpeg: [decode_frame] not looping -> ENDED\n");
+            player->state = MPEG_STATE_ENDED;
+            return false;
         }
     }
-    
+
     player->pts_current = pts;
     player->current_frame++;
-    
+
     return true;
 }
 

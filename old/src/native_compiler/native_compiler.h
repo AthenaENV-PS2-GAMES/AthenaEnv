@@ -27,6 +27,7 @@
  #define NC_MAX_LOCALS       32      /* Maximum local variables */
  #define NC_MAX_STACK_DEPTH  64      /* Maximum operand stack depth */
  #define NC_MAX_BASIC_BLOCKS 128     /* Maximum basic blocks in IR */
+ #define NC_MAX_PENDING_INTRINSICS 8 /* Max nesting of Math.x(Math.y(...)) calls */
  
  /*
   * Intermediate Representation (IR) opcodes
@@ -93,6 +94,7 @@
      IR_STRING_LENGTH,    /* Get string length */
      IR_STRING_COMPARE,   /* Compare two strings (-1, 0, 1) */
      IR_STRING_EQUALS,    /* Check string equality (bool) */
+    IR_STRING_NE,        /* Check string inequality (bool) */
      IR_STRING_FIND,      /* Find substring (returns index or -1) */
      IR_STRING_REPLACE,   /* Replace substring */
      IR_STRING_TO_UPPER,  /* Convert to uppercase */
@@ -136,9 +138,12 @@
      IR_GT_U32,
      IR_GE_U32,
      
-     IR_EQ_F32,
-     IR_LT_F32,
-     IR_LE_F32,
+    IR_EQ_F32,
+    IR_NE_F32,
+    IR_LT_F32,
+    IR_LE_F32,
+    IR_GT_F32,
+    IR_GE_F32,
      
      /* 64-bit Comparison */
      IR_EQ_I64,
@@ -161,10 +166,18 @@
      IR_F32_TO_I64,      /* Float to 64-bit int */
      
      /* Struct field access */
-     IR_LOAD_FIELD,      /* Load field: pop base ptr, push value at offset */
-     IR_STORE_FIELD,     /* Store field: pop value, pop base ptr, write at offset */
+     IR_LOAD_FIELD,      /* Load field: base ptr resolved from operand.field.local_idx, push value at offset */
+     IR_STORE_FIELD,     /* Store field: pop value, base ptr resolved from operand.field.local_idx, write at offset */
      IR_LOAD_FIELD_ADDR, /* Load field address: push base + offset (for array fields) */
-     
+
+     /* Struct ARRAY field access: unlike IR_LOAD_FIELD/IR_STORE_FIELD above,
+      * the struct base pointer here is a genuine runtime value already on
+      * the eval stack (produced by IR_ARRAY_ELEM_ADDR), not a fixed
+      * local/argument slot - see OP_get_array_el's struct-array branch. */
+     IR_ARRAY_ELEM_ADDR, /* Struct array indexing: pop index, pop base ptr, push base + index*elem_size */
+     IR_LOAD_FIELD_DYN,  /* Load field: pop base ptr, push value at offset */
+     IR_STORE_FIELD_DYN, /* Store field: pop value, pop base ptr, write at offset */
+
      /* Control flow */
      IR_JUMP,            /* Unconditional jump */
      IR_JUMP_IF_TRUE,    /* Conditional jump if true */
@@ -217,7 +230,13 @@
              int16_t offset;      /* Byte offset from base pointer */
              int16_t local_idx;   /* Local variable holding the base pointer */
              NativeType field_type;  /* Type of the field (for load/store size) */
-         } field;  /* For IR_LOAD_FIELD / IR_STORE_FIELD */
+         } field;  /* For IR_LOAD_FIELD / IR_STORE_FIELD / IR_LOAD_FIELD_ADDR.
+                    * Also reused by IR_LOAD_FIELD_DYN / IR_STORE_FIELD_DYN
+                    * (offset + field_type only; local_idx unused, base comes
+                    * off the eval stack instead - see IR_ARRAY_ELEM_ADDR). */
+         struct {
+             int32_t elem_size;   /* sizeof(struct) - compile-time constant multiplier */
+         } array_elem;  /* For IR_ARRAY_ELEM_ADDR */
      } operand;
     
     /* Track which local this instruction loaded (for struct field access)
@@ -300,9 +319,61 @@
     uint8_t used_saved_regs;  /* Bitmask of used $s0-$s7 registers (bit 0 = $s0, etc) */
     bool has_loops;           /* True if function contains loops (backward jumps) */
     
-    /* Pending intrinsic call from OP_get_field2 - avoids emitting IR markers */
+    /* Pending intrinsic call from OP_get_field2 - avoids emitting IR markers.
+     * These three fields hold the entry currently being resolved by
+     * OP_get_field2; it is then pushed onto pending_intrinsic_stack below. */
     NativeFuncEntry *pending_intrinsic_entry;  /* Function entry for C calls, NULL if none */
     IROp pending_intrinsic_op;                 /* IR opcode (IR_SQRT_F32, IR_ABS_F32, or IR_CALL_C_FUNC) */
+    NativeType pending_intrinsic_elem_type;    /* Element type for dynamic array intrinsics */
+    bool pending_intrinsic_is_method;          /* True for arr.push()/str.slice()-style instance
+                                                 * methods, whose receiver is a real IR value the
+                                                 * op still needs - as opposed to Math.sqrt()-style
+                                                 * namespace calls, whose receiver is a throwaway
+                                                 * global-object placeholder that must be dropped. */
+
+    /* Resolved-but-not-yet-called intrinsics, innermost last.
+     *
+     * A single pending slot breaks as soon as one intrinsic appears inside
+     * another's arguments - e.g. Math.atan2(-dy, Math.sqrt(x)). QuickJS emits
+     * get_field2(atan2), <args...>, get_field2(sqrt), <args...>,
+     * call_method(sqrt), call_method(atan2): the inner get_field2 used to
+     * overwrite the outer one, so by the time the outer call_method ran there
+     * was no pending entry left and it fell back to a generic indirect
+     * IR_TAIL_CALL - which pops a callee pointer that was never pushed, and
+     * jumped to whatever float happened to sit on the eval stack.
+     *
+     * get_field2 pushes and call_method/tail_call_method pops, which matches
+     * the strict nesting of the bytecode. */
+    struct {
+        NativeFuncEntry *entry;
+        IROp op;
+        NativeType elem_type;
+    } pending_intrinsic_stack[NC_MAX_PENDING_INTRINSICS];
+    int pending_intrinsic_depth;
+
+    /* QuickJS constant pool (not owned, valid during compile) */
+    JSValueConst *cpool;
+    int cpool_count;
+
+    /* Function currently being compiled + its closure var count
+     * (used to resolve nested native functions captured as closure vars) */
+    JSValueConst current_js_func;
+    int closure_var_count;
+
+    /* Signature of the most recently resolved nested-call target (set by
+     * nc_resolve_closure_func_ptr/nc_resolve_cpool_func_ptr when they
+     * successfully resolve a callee, consumed by the OP_call/OP_tail_call
+     * decode case right after). Lets IR_CALL/IR_TAIL_CALL codegen convert
+     * literal arguments (which reach IR as IR_CONST_I32 regardless of `f`
+     * suffix - see IR_RETURN) to the bit pattern the callee actually
+     * expects, instead of passing raw mismatched bits. */
+    NativeFuncSignature pending_call_sig;
+    bool has_pending_call_sig;
+
+    /* Compile-time string literals (owned, freed after each compile) */
+    char **compile_string_literals;
+    int compile_string_count;
+    int compile_string_capacity;
     
     /* Native C function registry */
      NativeFuncEntry native_funcs[NC_MAX_NATIVE_FUNCS];
@@ -312,7 +383,26 @@
      struct NativeStructDef *local_struct_defs[NC_MAX_LOCALS];  /* Struct def for each struct-typed local */
      int last_loaded_local;  /* Index of last loaded local (for getter) */
      int last_put_field_target;  /* Index of target for next put_field (not reset by getters) */
-     
+
+     /* Pushed by OP_get_array_el/OP_get_array_el2 when the indexed local is a
+      * struct array (nc_arg_is_struct_array): holds the ELEMENT struct def so
+      * the matching OP_get_field/OP_put_field knows to consume the
+      * IR_ARRAY_ELEM_ADDR result already on the eval stack (IR_LOAD_FIELD_DYN/
+      * IR_STORE_FIELD_DYN) instead of the fixed-local-slot IR_LOAD_FIELD/
+      * IR_STORE_FIELD path, then pops it.
+      *
+      * A single pending slot breaks as soon as one struct-array field access
+      * appears inside another's containing expression - e.g.
+      * `arr[i].x = arr[i].x + arr[i].vx`: the LHS's `arr[i]` pushes first,
+      * but two more complete `arr[i].field` reads (for the RHS) push AND pop
+      * their own entries before the LHS's put_field ever runs, so a single
+      * slot would already be cleared by the time the LHS needs it. Same
+      * failure mode pending_intrinsic_stack below exists to avoid for
+      * Math.atan2(Math.sqrt(...)) - LIFO stack, not a single slot. */
+     struct NativeStructDef *pending_struct_elem_stack[NC_MAX_PENDING_INTRINSICS];
+     int pending_struct_elem_depth;
+
+
      /* Track which local each stack item came from for field access resolution */
      int stack_local_source[NC_MAX_STACK_DEPTH];  /* Which local does each stack item come from? -1 if unknown */
  } NativeCompiler;
@@ -344,8 +434,12 @@
      const NativeFuncSignature *sig
  );
  
- /* Look up a registered native function by name */
- NativeFuncEntry *native_lookup_function(NativeCompiler *nc, const char *name);
+/* Look up a registered native function by name */
+NativeFuncEntry *native_lookup_function(NativeCompiler *nc, const char *name);
+
+/* Register a compiled native function for nested calls (returns 0 on success) */
+int native_register_compiled_function(NativeCompiler *nc, void *code_ptr,
+                                      const NativeFuncSignature *sig);
  
  /* Compile a JavaScript function to native code */
  CompileResult native_compile_function(

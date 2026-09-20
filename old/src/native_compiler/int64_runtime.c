@@ -113,3 +113,14 @@ uint64_t __dmod_u64(uint64_t dividend, uint64_t divisor) {
     
     return (uint64_t)result32;
 }
+
+int32_t __deq_i64(int64_t a, int64_t b) { return a == b; }
+int32_t __dne_i64(int64_t a, int64_t b) { return a != b; }
+int32_t __dlt_i64(int64_t a, int64_t b) { return a < b; }
+int32_t __dle_i64(int64_t a, int64_t b) { return a <= b; }
+int32_t __dgt_i64(int64_t a, int64_t b) { return a > b; }
+int32_t __dge_i64(int64_t a, int64_t b) { return a >= b; }
+int32_t __dlt_u64(uint64_t a, uint64_t b) { return a < b; }
+int32_t __dle_u64(uint64_t a, uint64_t b) { return a <= b; }
+int32_t __dgt_u64(uint64_t a, uint64_t b) { return a > b; }
+int32_t __dge_u64(uint64_t a, uint64_t b) { return a >= b; }

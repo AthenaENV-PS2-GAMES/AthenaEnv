@@ -1,60 +1,19 @@
-#ifndef ATHENA_NETWORK_H
-#define ATHENA_NETWORK_H
-
-#include <ath_env.h>
-
-#include <netman.h>
-#include <sys/socket.h> /* socket, connect */
-#include <arpa/inet.h> /* struct sockaddr_in, struct sockaddr */
-#include <netdb.h> /* struct hostent, gethostbyname */
-#include <loadfile.h>
-#include <loadfile.h>
-#include <pthread.h>
-
-struct MemoryStruct {
-    union {
-     char *memory;
-     FILE* fp;
-    };
-    size_t size;
-    bool transferring;
-    clock_t timer;
-};
-
-enum RequestMethods {
-    ATHENA_GET = 0,
-    ATHENA_POST,
-    ATHENA_HEAD,
-};
-
-typedef struct
-{
-    int tid;
-    bool ready;
-    bool save;
-    int method;
-    const char* url;
-    const char* error;
-    long keepalive;
-    int timeout_ms;
-    int verify_tls;
-    int follow_redirects;
-    const char* userpwd;
-    const char* useragent;
-    const char* postdata;
-    struct MemoryStruct chunk;
-    long response_code;
-    char* response_headers;
-    char* headers[16];
-    int headers_len;
-} JSRequestData;
-
-void requestThread(void* data);
-char* jsonToUrl(char *json);
-int ethApplyNetIFConfig(int mode);
-int ethWaitValidNetIFLinkState(void);
-int ethWaitValidDHCPState(void);
-int ethApplyIPConfig(int use_dhcp, const struct ip4_addr *ip, const struct ip4_addr *netmask, const struct ip4_addr *gateway, const struct ip4_addr *dns);
-
-
-#endif
+#ifndef ATHENA_NETWORK_H
+#define ATHENA_NETWORK_H
+
+#include <stdbool.h>
+#include <time.h>
+
+#include <netman.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <loadfile.h>
+#include <pthread.h>
+
+int ethApplyNetIFConfig(int mode);
+int ethWaitValidNetIFLinkState(void);
+int ethWaitValidDHCPState(void);
+int ethApplyIPConfig(int use_dhcp, const struct ip4_addr *ip, const struct ip4_addr *netmask, const struct ip4_addr *gateway, const struct ip4_addr *dns);
+
+#endif

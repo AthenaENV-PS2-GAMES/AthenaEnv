@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include <kernel.h>
+#include <tamtypes.h>
 
 #include <gsKit.h>
 #include <dmaKit.h>
@@ -378,129 +379,6 @@ int load_image(GSSURFACE* image, const char* path, bool delayed);
 
 void draw_image(GSSURFACE* source, float x, float y, float width, float height, float startx, float starty, float endx, float endy, Color color);
 void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float height, float startx, float starty, float endx, float endy, float angle, Color color);
-
-typedef struct {
-	float x;
-	float y;
-
-	Color rgba;
-} prim_point;
-
-typedef struct {
-	float x;
-	float y;
-
-	float x2;
-	float y2;
-
-	Color rgba;
-} prim_line;
-
-typedef struct {
-	float x;
-	float y;
-    Color rgba;
-
-	float x2;
-	float y2;
-    Color rgba2;
-} prim_gouraud_line;
-
-typedef struct {
-	float x;
-	float y;
-
-	float x2;
-	float y2;
-
-	float x3;
-	float y3;
-
-	Color rgba;
-} prim_triangle;
-
-typedef struct {
-	float x;
-	float y;
-    Color rgba;
-
-	float x2;
-	float y2;
-    Color rgba2;
-
-	float x3;
-	float y3;
-	Color rgba3;
-} prim_gouraud_triangle;
-
-typedef struct {
-	float x;
-	float y;
-	float u;
-	float v;
-
-	float x2;
-	float y2;
-	float u2;
-	float v2;
-
-	float x3;
-	float y3;
-	float u3;
-	float v3;
-
-	Color rgba;
-} prim_tex_triangle;
-
-typedef struct {
-	float x;
-	float y;
-	float u;
-	float v;
-    Color rgba;
-
-	float x2;
-	float y2;
-	float u2;
-	float v2;
-    Color rgba2;
-
-	float x3;
-	float y3;
-	float u3;
-	float v3;
-	Color rgba3;
-} prim_tex_gouraud_triangle;
-
-typedef struct {
-	float x;
-	float y;
-	float u1;
-	float v1;
-
-	float w;
-	float h;
-	float u2;
-	float v2;
-
-	Color rgba;
-} prim_tex_sprite;
-
-void draw_point_list(float x, float y, prim_point *list, int list_size);
-
-void draw_line_list(float x, float y, prim_line *list, int list_size);
-
-void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size);
-
-void draw_triangle_list(float x, float y, prim_triangle *list, int list_size);
-
-void draw_triangle_gouraud_list(float x, float y, prim_gouraud_triangle *list, int list_size);
-
-void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triangle *list, int list_size);
-
-void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_tex_gouraud_triangle *list, int list_size);
-
-void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list, int list_size);
 
 void gs_copy_block(GSSURFACE *src, int src_x, int src_y, GSSURFACE *dst, int dst_x, int dst_y);
 

@@ -3,6 +3,8 @@
 #include <string.h>
 #include <math.h>
 #include <ath_env.h>
+#include <ath_bindings.h>
+#include <athena/ode_facade.h>
 #include <ode/ode.h>
 
 #define MAX_CONTACTS 64
@@ -17,8 +19,8 @@ static JSClassID js_joint_group_class_id;
 
 static void js_space_finalizer(JSRuntime *rt, JSValue val) {
     JSSpace *space = JS_GetOpaque(val, js_space_class_id);
-    if (space && space->space) {
-        dSpaceDestroy(space->space);
+    if (space) {
+        athena_ode_space_destroy(space->native);
         free(space);
     }
 }
@@ -33,16 +35,16 @@ static void js_geom_finalizer(JSRuntime *rt, JSValue val) {
 
 static void js_world_finalizer(JSRuntime *rt, JSValue val) {
     JSWorld *world = JS_GetOpaque(val, js_world_class_id);
-    if (world && world->world) {
-        dWorldDestroy(world->world);
+    if (world) {
+        athena_ode_world_destroy(world->native);
         free(world);
     }
 }
 
 static void js_body_finalizer(JSRuntime *rt, JSValue val) {
     JSBody *body = JS_GetOpaque(val, js_body_class_id);
-    if (body && body->body) {
-        dBodyDestroy(body->body);
+    if (body) {
+        athena_ode_body_destroy(body->native);
         free(body);
     }
 }
@@ -94,79 +96,77 @@ static JSClassDef js_joint_group_class = {
 };
 
 static JSValue js_ode_cleanup(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    dCloseODE();
+    athena_ode_cleanup();
     return JS_UNDEFINED;
 }
 
 static JSValue js_world_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSWorld *world = malloc(sizeof(JSWorld));
-    if (!world) {
+    JSWorld *wrapper = malloc(sizeof(JSWorld));
+    if (!wrapper)
         return JS_EXCEPTION;
-    }
-    
-    world->world = dWorldCreate();
-    if (!world->world) {
-        free(world);
+
+    wrapper->native = athena_ode_world_create();
+    if (!wrapper->native) {
+        free(wrapper);
         return JS_ThrowInternalError(ctx, "Failed to create ODE world");
     }
-    
+
     JSValue obj = JS_NewObjectClass(ctx, js_world_class_id);
     if (JS_IsException(obj)) {
-        dWorldDestroy(world->world);
-        free(world);
+        athena_ode_world_destroy(wrapper->native);
+        free(wrapper);
         return obj;
     }
-    
-    JS_SetOpaque(obj, world);
+
+    JS_SetOpaque(obj, wrapper);
     return obj;
 }
 
 static JSValue js_world_destroy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSWorld *world = JS_GetOpaque(this_val, js_world_class_id);
-    
-    if (world->world) {
-        dWorldDestroy(world->world);
-        world->world = NULL;
+    if (world && world->native) {
+        athena_ode_world_destroy(world->native);
+        world->native = NULL;
     }
     return JS_UNDEFINED;
 }
 
 static JSValue js_space_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSSpace *space = malloc(sizeof(JSSpace));
-    if (!space) {
-        return JS_EXCEPTION;
-    }
+    JSSpace *wrapper = malloc(sizeof(JSSpace));
+    AthenaOdeSpace *parent = NULL;
 
-    space->parent = NULL;
+    if (!wrapper)
+        return JS_EXCEPTION;
 
     if (argc > 0) {
-        JSSpace *space = JS_GetOpaque(argv[0], js_space_class_id);
-        space->parent = space->space;
+        JSSpace *parent_wrap = JS_GetOpaque(argv[0], js_space_class_id);
+        if (parent_wrap)
+            parent = parent_wrap->native;
     }
 
-    space->space = dHashSpaceCreate(space->parent);
-    if (!space->space) {
-        free(space);
+    wrapper->native = athena_ode_space_create(parent);
+    if (!wrapper->native) {
+        free(wrapper);
         return JS_ThrowInternalError(ctx, "Failed to create ODE space");
     }
-    
+
     JSValue obj = JS_NewObjectClass(ctx, js_space_class_id);
     if (JS_IsException(obj)) {
-        dSpaceDestroy(space->space);
-        free(space);
+        athena_ode_space_destroy(wrapper->native);
+        free(wrapper);
         return obj;
     }
-    
-    JS_SetOpaque(obj, space);
+
+    JS_SetOpaque(obj, wrapper);
     return obj;
 }
 
 static JSValue js_space_destroy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSSpace *space = JS_GetOpaque(this_val, js_space_class_id);
-    
-    if (space->space) {
-        dSpaceDestroy(space->space);
-        space->space = NULL;
+
+    if (space && space->native) {
+        athena_ode_space_destroy(space->native);
+        space->native = NULL;
     }
     return JS_UNDEFINED;
 }
@@ -290,8 +290,8 @@ static JSValue js_geom_create_ray(JSContext *ctx, JSValueConst this_val, int arg
         return JS_EXCEPTION;
     }
     
-    geom->geom = dCreateRay(space? space->space : NULL, length);
-    geom->parent_space = space? space->space : NULL;
+    geom->geom = dCreateRay(space? space->native->space : NULL, length);
+    geom->parent_space = space? space->native->space : NULL;
     
     if (!geom->geom) {
         free(geom);
@@ -336,8 +336,8 @@ static JSValue js_geom_create_box(JSContext *ctx, JSValueConst this_val, int arg
         return JS_EXCEPTION;
     }
     
-    geom->geom = dCreateBox(space? space->space : NULL, width, height, depth);
-    geom->parent_space = space? space->space : NULL;
+    geom->geom = dCreateBox(space? space->native->space : NULL, width, height, depth);
+    geom->parent_space = space? space->native->space : NULL;
     
     if (!geom->geom) {
         free(geom);
@@ -371,8 +371,8 @@ static JSValue js_geom_create_sphere(JSContext *ctx, JSValueConst this_val, int 
         return JS_EXCEPTION;
     }
     
-    geom->geom = dCreateSphere(space? space->space : NULL, radius);
-    geom->parent_space = space? space->space : NULL;
+    geom->geom = dCreateSphere(space? space->native->space : NULL, radius);
+    geom->parent_space = space? space->native->space : NULL;
     
     if (!geom->geom) {
         free(geom);
@@ -395,22 +395,33 @@ static JSValue js_geom_create_sphere(JSContext *ctx, JSValueConst this_val, int 
 
 static JSValue js_geom_create_from_render_object(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSSpace *space = JS_GetOpaque(argv[0], js_space_class_id);
-    
     JSRenderObject *ro = JS_GetOpaque(argv[1], js_render_object_class_id);
+    athena_object_data *od;
+    athena_render_data *rd;
+
+    if (!ro || !ro->native)
+        return JS_ThrowTypeError(ctx, "expected RenderObject");
+
+    od = athena_render_object_native(ro->native);
+    if (!od || !od->data)
+        return JS_ThrowTypeError(ctx, "RenderObject has no mesh data");
+
+    rd = od->data;
 
     dTriMeshDataID tm_id = dGeomTriMeshDataCreate();
     
-    dGeomTriMeshDataBuildSingle(tm_id, ro->obj.data->positions, sizeof(VECTOR), ro->obj.data->index_count, ro->obj.data->indices, ro->obj.data->index_count, 3*sizeof(uint32_t));
+    dGeomTriMeshDataBuildSingle(tm_id, rd->positions, sizeof(VECTOR), rd->index_count,
+                                rd->indices, rd->index_count, 3 * sizeof(uint32_t));
 
     JSGeom *geom = malloc(sizeof(JSGeom));
     if (!geom) {
         return JS_EXCEPTION;
     }
     
-    geom->geom = dCreateTriMesh(space? space->space : NULL, tm_id, NULL, NULL, NULL);
+    geom->geom = dCreateTriMesh(space? space->native->space : NULL, tm_id, NULL, NULL, NULL);
     dGeomSetData(geom->geom, tm_id); 
 
-    geom->parent_space = space? space->space : NULL;
+    geom->parent_space = space? space->native->space : NULL;
     
     if (!geom->geom) {
         free(geom);
@@ -447,8 +458,8 @@ static JSValue js_geom_create_plane(JSContext *ctx, JSValueConst this_val, int a
         return JS_EXCEPTION;
     }
     
-    geom->geom = dCreatePlane(space? space->space : NULL, a, b, c, d);
-    geom->parent_space = space? space->space : NULL;
+    geom->geom = dCreatePlane(space? space->native->space : NULL, a, b, c, d);
+    geom->parent_space = space? space->native->space : NULL;
     
     if (!geom->geom) {
         free(geom);
@@ -479,9 +490,9 @@ static JSValue js_geom_create_transform(JSContext *ctx, JSValueConst this_val, i
 
     JSGeom *target_geom = JS_GetOpaque(argv[1], js_geom_class_id);
     
-    geom->geom = dCreateGeomTransform(space->space);
+    geom->geom = dCreateGeomTransform(space->native->space);
     dGeomTransformSetGeom(geom->geom, target_geom->geom);
-    geom->parent_space = space->space;
+    geom->parent_space = space->native->space;
     
     if (!geom->geom) {
         free(geom);
@@ -631,7 +642,7 @@ static JSValue js_space_collide(JSContext *ctx, JSValueConst this_val, int argc,
     cdata.callback = (argc > 0) ? argv[0] : JS_UNDEFINED;
     cdata.contacts_array = JS_NewArray(ctx);
     
-    dSpaceCollide(space->space, &cdata, collision_callback);
+    dSpaceCollide(space->native->space, &cdata, collision_callback);
     
     return cdata.contacts_array;
 }
@@ -670,41 +681,6 @@ static JSValue js_geom_collide(JSContext *ctx, JSValueConst this_val, int argc, 
     return contacts_array;
 }
 
-static void rot_vector_to_matrix(VECTOR vec, dMatrix3 result) {
-    float angle = sqrtf(vec[0] * vec[0] + vec[1] * vec[1] + vec[2] * vec[2]);
-
-    float nx = vec[0] / angle;
-    float ny = vec[1] / angle;
-    float nz = vec[2] / angle;
-
-    float cos_angle = cosf(angle);
-    float sin_angle = sinf(angle);
-    float one_minus_cos = 1.0f - cos_angle;
-
-    result[0] = cos_angle + nx*nx*one_minus_cos;          
-    result[1] = nx*ny*one_minus_cos - nz*sin_angle;       
-    result[2] = nx*nz*one_minus_cos + ny*sin_angle;       
-    
-    result[4] = ny*nx*one_minus_cos + nz*sin_angle;       
-    result[5] = cos_angle + ny*ny*one_minus_cos;          
-    result[6] = ny*nz*one_minus_cos - nx*sin_angle;       
-    
-    result[8] = nz*nx*one_minus_cos - ny*sin_angle;       
-    result[9] = nz*ny*one_minus_cos + nx*sin_angle;       
-    result[10] = cos_angle + nz*nz*one_minus_cos;         
-}
-
-void updateGeomPosRot(athena_object_data *obj) {
-    dGeomID geom = (dGeomID)obj->collision;
-
-    dGeomSetPosition(geom, obj->position[0], obj->position[1], obj->position[2]);
-
-    dMatrix3 R;
-    rot_vector_to_matrix(obj->rotation, R);
-    
-    dGeomSetRotation(geom, R);
-}
-
 static JSValue js_world_set_gravity(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSWorld *world = JS_GetOpaque(this_val, js_world_class_id);
     
@@ -715,7 +691,7 @@ static JSValue js_world_set_gravity(JSContext *ctx, JSValueConst this_val, int a
         return JS_EXCEPTION;
     }
     
-    dWorldSetGravity(world->world, x, y, z);
+    dWorldSetGravity(world->native->world, x, y, z);
     return JS_UNDEFINED;
 }
 
@@ -723,7 +699,7 @@ static JSValue js_world_get_gravity(JSContext *ctx, JSValueConst this_val, int a
     JSWorld *world = JS_GetOpaque(this_val, js_world_class_id);
     
     dVector3 gravity;
-    dWorldGetGravity(world->world, gravity);
+    dWorldGetGravity(world->native->world, gravity);
     
     JSValue arr = JS_NewArray(ctx);
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat32(ctx, gravity[0]));
@@ -741,7 +717,7 @@ static JSValue js_world_set_cfm(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     }
     
-    dWorldSetCFM(world->world, cfm);
+    dWorldSetCFM(world->native->world, cfm);
     return JS_UNDEFINED;
 }
 
@@ -753,7 +729,7 @@ static JSValue js_world_set_erp(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     }
     
-    dWorldSetERP(world->world, erp);
+    dWorldSetERP(world->native->world, erp);
     return JS_UNDEFINED;
 }
 
@@ -765,7 +741,7 @@ static JSValue js_world_step(JSContext *ctx, JSValueConst this_val, int argc, JS
         return JS_EXCEPTION;
     }
     
-    dWorldStep(world->world, step_size);
+    dWorldStep(world->native->world, step_size);
     return JS_UNDEFINED;
 }
 
@@ -777,7 +753,7 @@ static JSValue js_world_quick_step(JSContext *ctx, JSValueConst this_val, int ar
         return JS_EXCEPTION;
     }
     
-    dWorldQuickStep(world->world, step_size);
+    dWorldQuickStep(world->native->world, step_size);
     return JS_UNDEFINED;
 }
 
@@ -789,7 +765,7 @@ static JSValue js_world_set_quick_step_iterations(JSContext *ctx, JSValueConst t
         return JS_EXCEPTION;
     }
     
-    dWorldSetQuickStepNumIterations(world->world, iterations);
+    dWorldSetQuickStepNumIterations(world->native->world, iterations);
     return JS_UNDEFINED;
 }
 
@@ -871,14 +847,14 @@ static JSValue js_world_step_with_contacts(JSContext *ctx, JSValueConst this_val
     }
     
     physics_world_data cdata;
-    cdata.world = world->world;
+    cdata.world = world->native->world;
     cdata.joint_group = contact_group->group;
     cdata.contacts_array = JS_NewArray(ctx);
     cdata.callback = (argc > 0) ? argv[3] : JS_UNDEFINED;
     cdata.ctx = ctx;
     
-    dSpaceCollide(space->space, &cdata, contact_callback);
-    dWorldStep(world->world, step_size);
+    dSpaceCollide(space->native->space, &cdata, contact_callback);
+    dWorldStep(world->native->world, step_size);
     dJointGroupEmpty(contact_group->group);
     
     return cdata.contacts_array;
@@ -886,37 +862,38 @@ static JSValue js_world_step_with_contacts(JSContext *ctx, JSValueConst this_val
 
 static JSValue js_body_create(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSWorld *world = JS_GetOpaque(argv[0], js_world_class_id);
-    
-    JSBody *body = malloc(sizeof(JSBody));
-    if (!body) {
+    JSBody *wrapper;
+
+    if (!world || !world->native)
         return JS_EXCEPTION;
-    }
-    
-    body->body = dBodyCreate(world->world);
-    body->parent_world = world->world;
-    
-    if (!body->body) {
-        free(body);
+
+    wrapper = malloc(sizeof(JSBody));
+    if (!wrapper)
+        return JS_EXCEPTION;
+
+    wrapper->native = athena_ode_body_create(world->native);
+    if (!wrapper->native) {
+        free(wrapper);
         return JS_ThrowInternalError(ctx, "Failed to create ODE body");
     }
-    
+
     JSValue obj = JS_NewObjectClass(ctx, js_body_class_id);
     if (JS_IsException(obj)) {
-        dBodyDestroy(body->body);
-        free(body);
+        athena_ode_body_destroy(wrapper->native);
+        free(wrapper);
         return obj;
     }
-    
-    JS_SetOpaque(obj, body);
+
+    JS_SetOpaque(obj, wrapper);
     return obj;
 }
 
 static JSValue js_body_destroy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
-    
-    if (body->body) {
-        dBodyDestroy(body->body);
-        body->body = NULL;
+
+    if (body && body->native) {
+        athena_ode_body_destroy(body->native);
+        body->native = NULL;
     }
     return JS_UNDEFINED;
 }
@@ -931,14 +908,14 @@ static JSValue js_body_set_position(JSContext *ctx, JSValueConst this_val, int a
         return JS_EXCEPTION;
     }
     
-    dBodySetPosition(body->body, x, y, z);
+    dBodySetPosition(body->native->body, x, y, z);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_get_position(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
     
-    const dReal *pos = dBodyGetPosition(body->body);
+    const dReal *pos = dBodyGetPosition(body->native->body);
     JSValue arr = JS_NewArray(ctx);
     
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat32(ctx, pos[0]));
@@ -967,14 +944,14 @@ static JSValue js_body_set_rotation(JSContext *ctx, JSValueConst this_val, int a
         JS_FreeValue(ctx, val);
     }
     
-    dBodySetRotation(body->body, R);
+    dBodySetRotation(body->native->body, R);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_get_rotation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
     
-    const dReal *rot = dBodyGetRotation(body->body);
+    const dReal *rot = dBodyGetRotation(body->native->body);
     JSValue arr = JS_NewArray(ctx);
     
     for (int i = 0; i < 9; i++) {
@@ -994,14 +971,14 @@ static JSValue js_body_set_linear_vel(JSContext *ctx, JSValueConst this_val, int
         return JS_EXCEPTION;
     }
     
-    dBodySetLinearVel(body->body, x, y, z);
+    dBodySetLinearVel(body->native->body, x, y, z);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_get_linear_vel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
     
-    const dReal *vel = dBodyGetLinearVel(body->body);
+    const dReal *vel = dBodyGetLinearVel(body->native->body);
     JSValue arr = JS_NewArray(ctx);
     
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat32(ctx, vel[0]));
@@ -1021,14 +998,14 @@ static JSValue js_body_set_angular_vel(JSContext *ctx, JSValueConst this_val, in
         return JS_EXCEPTION;
     }
     
-    dBodySetAngularVel(body->body, x, y, z);
+    dBodySetAngularVel(body->native->body, x, y, z);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_get_angular_vel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
     
-    const dReal *vel = dBodyGetAngularVel(body->body);
+    const dReal *vel = dBodyGetAngularVel(body->native->body);
     JSValue arr = JS_NewArray(ctx);
     
     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat32(ctx, vel[0]));
@@ -1049,7 +1026,7 @@ static JSValue js_body_set_mass(JSContext *ctx, JSValueConst this_val, int argc,
     dMass m;
     dMassSetSphere(&m, 1.0, 1.0);
     dMassAdjust(&m, mass);
-    dBodySetMass(body->body, &m);
+    dBodySetMass(body->native->body, &m);
     return JS_UNDEFINED;
 }
 
@@ -1067,7 +1044,7 @@ static JSValue js_body_set_mass_box(JSContext *ctx, JSValueConst this_val, int a
     dMass m;
     dMassSetBox(&m, 1.0, lx, ly, lz);
     dMassAdjust(&m, mass);
-    dBodySetMass(body->body, &m);
+    dBodySetMass(body->native->body, &m);
     return JS_UNDEFINED;
 }
 
@@ -1083,7 +1060,7 @@ static JSValue js_body_set_mass_sphere(JSContext *ctx, JSValueConst this_val, in
     dMass m;
     dMassSetSphere(&m, 1.0, radius);
     dMassAdjust(&m, mass);
-    dBodySetMass(body->body, &m);
+    dBodySetMass(body->native->body, &m);
     return JS_UNDEFINED;
 }
 
@@ -1097,7 +1074,7 @@ static JSValue js_body_add_force(JSContext *ctx, JSValueConst this_val, int argc
         return JS_EXCEPTION;
     }
     
-    dBodyAddForce(body->body, fx, fy, fz);
+    dBodyAddForce(body->native->body, fx, fy, fz);
     return JS_UNDEFINED;
 }
 
@@ -1111,32 +1088,32 @@ static JSValue js_body_add_torque(JSContext *ctx, JSValueConst this_val, int arg
         return JS_EXCEPTION;
     }
     
-    dBodyAddTorque(body->body, fx, fy, fz);
+    dBodyAddTorque(body->native->body, fx, fy, fz);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_enable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
-    dBodyEnable(body->body);
+    dBodyEnable(body->native->body);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_disable(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
-    dBodyDisable(body->body);
+    dBodyDisable(body->native->body);
     return JS_UNDEFINED;
 }
 
 static JSValue js_body_is_enabled(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSBody *body = JS_GetOpaque(this_val, js_body_class_id);
-    return JS_NewBool(ctx, dBodyIsEnabled(body->body));
+    return JS_NewBool(ctx, dBodyIsEnabled(body->native->body));
 }
 
 static JSValue js_geom_set_body(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     JSGeom *geom = JS_GetOpaque(this_val, js_geom_class_id);
     JSBody *body = JS_GetOpaque(argv[0], js_body_class_id);
     
-    dGeomSetBody(geom->geom, body->body);
+    dGeomSetBody(geom->geom, body->native->body);
     return JS_UNDEFINED;
 }
 
@@ -1149,15 +1126,20 @@ static JSValue js_geom_get_body(JSContext *ctx, JSValueConst this_val, int argc,
     }
     
     JSBody *body = malloc(sizeof(JSBody));
-    if (!body) {
+    AthenaOdeBody *native = calloc(1, sizeof(AthenaOdeBody));
+    if (!body || !native) {
+        free(body);
+        free(native);
         return JS_EXCEPTION;
     }
-    
-    body->body = body_id;
-    body->parent_world = NULL;
+
+    native->body = body_id;
+    native->parent_world = NULL;
+    body->native = native;
     
     JSValue obj = JS_NewObjectClass(ctx, js_body_class_id);
     if (JS_IsException(obj)) {
+        free(native);
         free(body);
         return obj;
     }
@@ -1206,34 +1188,6 @@ static JSValue js_joint_group_destroy(JSContext *ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
-void updateBodyPosRot(athena_object_data *obj) {
-    dBodyID body = (dBodyID)obj->physics;
-    
-    const dReal *pos = dBodyGetPosition(body);
-    const dReal *rot = dBodyGetRotation(body);
-    
-    obj->position[0] = pos[0];
-    obj->position[1] = pos[1];
-    obj->position[2] = pos[2];
-    
-    dQuaternion q;
-    dRtoQ(rot, q);
-    
-    float angle = 2.0f * acosf(q[0]);
-    if (angle > 0.001f) {
-        float sin_half = sinf(angle * 0.5f);
-        obj->rotation[0] = (q[1] / sin_half) * angle;
-        obj->rotation[1] = (q[2] / sin_half) * angle;
-        obj->rotation[2] = (q[3] / sin_half) * angle;
-    } else {
-        obj->rotation[0] = 0;
-        obj->rotation[1] = 0;
-        obj->rotation[2] = 0;
-    }
-
-    update_object_space(obj);
-}
-
 typedef enum {
     JOINT_BALL,
     JOINT_HINGE,
@@ -1265,7 +1219,7 @@ static JSValue js_joint_create(JSContext *ctx, JSValueConst this_val, int argc, 
     JSWorld *world = JS_GetOpaque(argv[0], js_world_class_id);
     JSJointGroup *group = JS_GetOpaque(argv[1], js_joint_group_class_id);
 
-    joint->joint = joint_funcs[magic](world->world, group->group);
+    joint->joint = joint_funcs[magic](world->native->world, group->group);
 
     if (!joint->joint) {
         free(joint);
@@ -1298,7 +1252,7 @@ static JSValue js_joint_attach(JSContext *ctx, JSValueConst this_val, int argc, 
     JSBody *body1 = JS_GetOpaque(argv[0], js_body_class_id);
     JSBody *body2 = JS_GetOpaque(argv[1], js_body_class_id);
 
-    dJointAttach (joint->joint, body1->body, body2->body);
+    dJointAttach(joint->joint, body1->native->body, body2->native->body);
 
     return JS_UNDEFINED;
 }

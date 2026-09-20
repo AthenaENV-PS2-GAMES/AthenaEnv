@@ -51,13 +51,18 @@ typedef struct NativeStructDef {
     NativeStructField fields[MAX_STRUCT_FIELDS];
 } NativeStructDef;
 
+/* Instance flags */
+#define STRUCT_INST_FLAG_ARRAY  0x01  /* data is a contiguous run of `count` instances, not 1 */
+#define STRUCT_INST_FLAG_VIEW   0x02  /* non-owning: data points into someone else's block, don't free it */
+
 /**
  * Struct instance (allocated memory)
  */
 typedef struct NativeStructInstance {
     NativeStructDef *def;       /* Type definition */
     void *data;                 /* Pointer to struct data */
-    uint8_t flags;              /* Instance flags */
+    uint32_t count;             /* Number of contiguous instances at `data` (1 unless STRUCT_INST_FLAG_ARRAY) */
+    uint8_t flags;              /* Instance flags (STRUCT_INST_FLAG_*) */
     uint8_t managed;            /* 1 = GC managed, 0 = manual */
 } NativeStructInstance;
 
@@ -82,7 +87,22 @@ int native_struct_finalize(NativeStructDef *def);
 /* Create a new instance of a struct */
 NativeStructInstance *native_struct_alloc(NativeStructDef *def, int managed);
 
-/* Free a struct instance */
+/* Create a new contiguous array of `count` instances of a struct (count >= 1).
+ * inst->data is one aligned_alloc'd block of def->size * count bytes, zeroed.
+ * Freed the same way as a single instance (one native_struct_free call frees
+ * the whole block) - see STRUCT_INST_FLAG_ARRAY. */
+NativeStructInstance *native_struct_alloc_array(NativeStructDef *def, uint32_t count, int managed);
+
+/* Create a non-owning view over one element of an existing struct-array
+ * block (data points INTO someone else's allocation, e.g. arr[i] from JS).
+ * Returned instance is GC-managed (its own small wrapper gets freed
+ * normally by native_struct_free), but STRUCT_INST_FLAG_VIEW keeps
+ * native_struct_free from ever freeing `data` itself. */
+NativeStructInstance *native_struct_view_at(NativeStructDef *def, void *data);
+
+/* Free a struct instance (or array instance - frees the whole block).
+ * No-op (does not free `data`) for STRUCT_INST_FLAG_VIEW instances, since
+ * those point into someone else's allocation. */
 void native_struct_free(NativeStructInstance *inst);
 
 /* Get field by name */

@@ -20,6 +20,9 @@ $(EE_EMBED_DIR)padman.c: $(PS2SDK)/iop/irx/padman.irx | $(EE_EMBED_DIR)
 $(EE_EMBED_DIR)mtapman.c: $(PS2SDK)/iop/irx/mtapman.irx | $(EE_EMBED_DIR)
 	$(BIN2S) $< $@ mtapman_irx
 
+$(EE_EMBED_DIR)rmman.c: $(PS2SDK)/iop/irx/rmman.irx | $(EE_EMBED_DIR)
+	$(BIN2S) $< $@ rmman_irx
+
 $(EE_EMBED_DIR)libsd.c: $(PS2SDK)/iop/irx/libsd.irx | $(EE_EMBED_DIR)
 	$(BIN2S) $< $@ libsd_irx
 
@@ -125,6 +128,9 @@ ee_modules/ode/lib/libode.a: ee_modules/ode
 	$(MAKE) -C $<
 
 ee_modules/ode/lib/libopcode.a: ee_modules/ode
+	$(MAKE) -C $<
+
+ee_modules/box2d/lib/libbox2d.a: ee_modules/box2d
 	$(MAKE) -C $<
 
 ee_modules/loader/loader.elf: ee_modules/loader

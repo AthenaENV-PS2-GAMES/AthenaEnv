@@ -15,7 +15,7 @@ static int ensure_cap_jobs(athena_async_loader *l, unsigned int need) {
     return 0;
 }
 
-athena_async_loader *athena_async_loader_create(unsigned int jobs_per_step) {
+athena_async_loader *render_async_loader_create(unsigned int jobs_per_step) {
     athena_async_loader *l = (athena_async_loader*)malloc(sizeof(*l));
     if (!l) return NULL;
     l->jobs = NULL;
@@ -25,7 +25,7 @@ athena_async_loader *athena_async_loader_create(unsigned int jobs_per_step) {
     return l;
 }
 
-void athena_async_loader_destroy(athena_async_loader *l) {
+void render_async_loader_destroy(athena_async_loader *l) {
     if (!l) return;
     // Ensure user data is cleaned if someone forgot to clear
     for (unsigned int i = 0; i < l->count; i++) {
@@ -104,5 +104,5 @@ void athena_async_set_jobs_per_step(athena_async_loader *l, unsigned int v) {
 void athena_async_destroy_with(athena_async_loader *l, athena_loader_user_cleanup cleanup) {
     if (!l) return;
     athena_async_clear_with(l, cleanup);
-    athena_async_loader_destroy(l);
+    render_async_loader_destroy(l);
 }

@@ -51,7 +51,11 @@ void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                       JS_BOOL is_handled, void *opaque);
 void js_std_set_worker_new_context_func(JSContext *(*func)(JSRuntime *rt));
 
-void js_set_render_loop_func(JSContext *ctx, JSValue func);
+#ifdef ATHENA_GRAPHICS
+#include <athena/screen.h>
+#endif
+
+void js_set_render_loop_func(JSContext *ctx, JSValueConst func);
 void js_set_clear_color(uint64_t color);
 
 typedef enum {
@@ -60,21 +64,9 @@ typedef enum {
     NONPRESSED_EVENT
 } EventFlavours;
 
-typedef struct {
-	char port;
+#include <athena/pad.h>
 
-    uint32_t btns;
-    int lx;
-	int ly;
-	int rx;
-	int ry;
-
-    uint32_t old_btns;
-    char old_lx;
-	char old_ly;
-	char old_rx;
-	char old_ry;
-} JSPads;
+typedef AthenaPad JSPads;
 
 int js_new_input_event(int buttons, JSValueConst func, EventFlavours flavour);
 void js_delete_input_event(int id);

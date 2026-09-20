@@ -1,3 +1,5 @@
+// {"name": "Texture video", "author": "Daniel Santos", "version": "08022026", "file": "video_as_texture.js"}
+
 /**
  * Video as Texture Sample
  * 

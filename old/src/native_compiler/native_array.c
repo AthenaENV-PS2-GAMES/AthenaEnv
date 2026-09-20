@@ -148,9 +148,15 @@ bool native_array_push_u32(NativeDynamicArray *arr, uint32_t value) {
 bool native_array_push_f32(NativeDynamicArray *arr, float value) {
     if (!arr || arr->element_type != NATIVE_TYPE_FLOAT32) return false;
     if (!ensure_capacity(arr, arr->length + 1)) return false;
-    
+
     ((float*)arr->data)[arr->length++] = value;
     return true;
+}
+
+bool native_array_push_f32_bits(NativeDynamicArray *arr, uint32_t value_bits) {
+    union { uint32_t u; float f; } conv;
+    conv.u = value_bits;
+    return native_array_push_f32(arr, conv.f);
 }
 
 /* Pop operations */

@@ -1,3 +1,5 @@
+#ifndef ATHENA_SOUND_H
+#define ATHENA_SOUND_H
 
 #include <audsrv.h>
 #include <vorbis/vorbisfile.h>
@@ -30,6 +32,8 @@ typedef struct {
     struct audsrv_fmt_t fmt;
     int type;
     bool loop;
+    long data_offset;  /* WAV only: file offset where PCM sample data begins */
+    int duration_ms;   /* cached at load time so length queries never touch fp */
 } SoundStream;
 
 SoundStream *sound_load(const char* path);
@@ -61,3 +65,5 @@ int sound_sfx_find_channel();
 bool sound_sfx_is_playing(Sfx *snd, int channel);
 int sound_sfx_get_pitch(Sfx *snd);
 void sound_sfx_set_pitch(Sfx *snd, int pitch);
+
+#endif /* ATHENA_SOUND_H */

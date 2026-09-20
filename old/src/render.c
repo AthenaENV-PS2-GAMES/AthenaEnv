@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <malloc.h>
 #include <math.h>
+#include <float.h>
 #include <fcntl.h>
 #include <string.h>
 #include <matrix.h>
@@ -51,16 +52,84 @@ static int active_pnt_lights = 0;
 static int active_dir_lights = 0;
 
 static LightData dir_lights = { };
+
+// Ambients pre-summed for the VU, which used to add one per light inside its
+// per-vertex loop. w = 1.0 so a single lq initialises the light accumulator
+// including the alpha lane. The light count cannot share that w -- see
+// mem_layout.i -- so it lives in its own quadword.
+static VECTOR   light_ambient_sum qw_aligned = { 0.0f, 0.0f, 0.0f, 1.0f };
+static FIVECTOR light_count qw_aligned = { 0.0f, 0.0f, 0.0f, 0 };
+
+static void render_sum_ambient(void) {
+	light_ambient_sum[0] = light_ambient_sum[1] = light_ambient_sum[2] = 0.0f;
+
+	for (int i = 0; i < active_dir_lights; i++) {
+		light_ambient_sum[0] += dir_lights.ambient[i].x;
+		light_ambient_sum[1] += dir_lights.ambient[i].y;
+		light_ambient_sum[2] += dir_lights.ambient[i].z;
+	}
+}
 static render_stats_t g_render_stats = { 0 };
+
+// View block: screen_scale (0), world_screen (1..4), camera position (9). Lives
+// outside the double-buffered window (use_top=0), so VU1 keeps it across draws
+// and frames -- upload only when it changes, not once per object per pass.
+// Invalidated by render_set_view, cameraUpdate, tile_render (overwrites 0..1),
+// and render_begin (once a frame, in case something else touches VU1 static).
+static uint32_t g_view_version  = 1;
+static uint32_t g_view_resident = 0;
+
+// Quadwords render_upload_view() is about to emit -- callers need this before
+// they can size their owl_query_packet() reservation.
+static inline int render_view_qwc(void) {
+	return (g_view_resident != g_view_version) ? 9 : 0;
+}
+
+// Emits the view block if VU1 no longer holds the current one. Address 9
+// (camera position) goes out even for pipelines whose microprogram never reads
+// it: uploading all three together keeps ONE version counter honest. Tracking
+// them separately would let a colors draw mark the block resident and make the
+// next lights draw skip a camera position it never actually sent.
+static void render_upload_view(owl_packet *packet) {
+	if (g_view_resident == g_view_version)
+		return;
+
+	owl_add_unpack_data_cnt(packet, 0, 1, 0);
+	owl_add_uquad_ptr(packet, &screen_scale);
+
+	owl_add_unpack_data_cnt(packet, 1, 4, 0);
+	owl_add_uquad_ptr(packet, &(world_screen[0]));
+	owl_add_uquad_ptr(packet, &(world_screen[4]));
+	owl_add_uquad_ptr(packet, &(world_screen[8]));
+	owl_add_uquad_ptr(packet, &(world_screen[12]));
+
+	owl_add_unpack_data_cnt(packet, 9, 1, 0);
+	owl_add_uquad_ptr(packet, getCameraPosition());
+
+	g_view_resident = g_view_version;
+}
+
+void render_invalidate_vu_view(void) {
+	g_view_version++;
+}
 
 static inline uint32_t render_calc_triangles(const athena_render_data *data) {
 	if (!data)
 		return 0;
 
 	if (data->tristrip) {
-		if (data->index_count < 2)
+		// One strip per material group, not one for the whole mesh: a chunk
+		// carries its own GIFtag, so the primitive restarts at every group
+		// boundary (which is exactly why shadow_slot_build gives each grid row
+		// a group of its own). Each strip loses its first two vertices.
+		uint32_t groups = data->material_index_count > 0
+			? (uint32_t)data->material_index_count : 1;
+		uint32_t warmup = groups * 2;
+
+		if (data->index_count <= warmup)
 			return 0;
-		return data->index_count - 2;
+
+		return data->index_count - warmup;
 	}
 
 	return data->index_count / 3;
@@ -69,7 +138,10 @@ static inline uint32_t render_calc_triangles(const athena_render_data *data) {
 void render_init() {
 	initCamera(&world_screen, &world_view, &view_screen);
 	
-	vu1_set_double_buffer_settings(270, 339); // Skinned layout
+	// One window for both layouts, starting where the bone matrices used to be
+	// (they moved to 880). 369 fits the larger of the two footprints: skinned
+	// 2 + 40*6 + 3 + 1 + 40*3 = 366. Global VIF1 state, shared by all pipelines.
+	vu1_set_double_buffer_settings(141, 369);
 
 	vu1_colors   = vu_mpg_load_buffer(embed_vu_code_ptr(VU1Draw3DCS),   embed_vu_code_size(VU1Draw3DCS),   VECTOR_UNIT_1, false); 
 	vu1_lights   = vu_mpg_load_buffer(embed_vu_code_ptr(VU1Draw3DLCS),  embed_vu_code_size(VU1Draw3DLCS),  VECTOR_UNIT_1, false);
@@ -83,9 +155,22 @@ void render_init() {
 }
 
 void render_begin() {
-	vu1_set_double_buffer_settings(270, 339); // Skinned layout
+	// One window for both layouts, starting where the bone matrices used to be
+	// (they moved to 880). 369 fits the larger of the two footprints: skinned
+	// 2 + 40*6 + 3 + 1 + 40*3 = 366. Global VIF1 state, shared by all pipelines.
+	vu1_set_double_buffer_settings(141, 369);
 
 	render_reset_stats();
+
+	render_sum_ambient();
+
+	// Cheap insurance, not a correctness requirement: VU1 static memory does
+	// survive a frame boundary, so in principle the view block resident from
+	// last frame is still good. Re-uploading once a frame costs 9 quadwords and
+	// bounds the damage from any future code path that writes VU1 static memory
+	// without calling render_invalidate_vu_view() -- a class of bug that would
+	// otherwise show up as subtly wrong geometry with no obvious cause.
+	render_invalidate_vu_view();
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 17);
 
@@ -94,10 +179,10 @@ void render_begin() {
 	owl_add_uquad_ptr(packet, (dir_lights.direction[1]));
 	owl_add_uquad_ptr(packet, (dir_lights.direction[2]));
 	owl_add_uquad_ptr(packet, (dir_lights.direction[3]));
-	owl_add_uquad_ptr(packet, &(dir_lights.ambient[0]));
-	owl_add_uquad_ptr(packet, &(dir_lights.ambient[1]));
-	owl_add_uquad_ptr(packet, &(dir_lights.ambient[2]));
-	owl_add_uquad_ptr(packet, &(dir_lights.ambient[3]));
+	owl_add_uquad_ptr(packet, &light_ambient_sum);
+	owl_add_uquad_ptr(packet, &light_count);
+	owl_add_uquad_ptr(packet, &light_count);   // 16..17 unused, see mem_layout.i
+	owl_add_uquad_ptr(packet, &light_count);
 	owl_add_uquad_ptr(packet, (dir_lights.diffuse[0]));
 	owl_add_uquad_ptr(packet, (dir_lights.diffuse[1]));
 	owl_add_uquad_ptr(packet, (dir_lights.diffuse[2]));
@@ -121,14 +206,17 @@ void render_set_view(float fov, float near, float far, float width, float height
 	screen_scale.y = height/2;
 	screen_scale.z = ((float)get_max_z(gsGlobal)) / 2.0f;
 	screen_scale.w = 0;
+
+	// Both halves of the view block just changed.
+	render_invalidate_vu_view();
 }
 
 int NewLight() {
 	if (active_dir_lights < 4) {
-		dir_lights.ambient[0].w = active_dir_lights+1;
+		light_count.w = active_dir_lights+1;
 		owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 2);
-		owl_add_unpack_data_cnt(packet, 14, 1, 0);
-		owl_add_uquad_ptr(packet, &(dir_lights.ambient[0]));
+		owl_add_unpack_data_cnt(packet, 15, 1, 0);
+		owl_add_uquad_ptr(packet, &light_count);
 		return active_dir_lights++;
 	}
 		
@@ -153,8 +241,9 @@ void SetLightAttribute(int id, float x, float y, float z, int attr) {
 			dir_lights.ambient[id].x = x;
 			dir_lights.ambient[id].y = y;
 			dir_lights.ambient[id].z = z;
-			owl_add_unpack_data_cnt(packet, 14+id, 1, 0);
-			owl_add_uquad_ptr(packet, &(dir_lights.ambient[id]));
+			render_sum_ambient();
+			owl_add_unpack_data_cnt(packet, 14, 1, 0);
+			owl_add_uquad_ptr(packet, &light_ambient_sum);
 			break;
 		case ATHENA_LIGHT_DIFFUSE:
 			dir_lights.diffuse[id][0] = x;
@@ -184,6 +273,9 @@ void render_reset_stats(void) {
 
 VECTOR zero_bump_offset = { 0.0f, 0.0f, 0.0f, 0.0f };
 
+// Defined below, but render_object() (above them) drives the skeleton now.
+void process_animation(athena_object_data *obj);
+
 void draw_vu1_with_colors(athena_object_data *obj, int pass_state);
 void draw_vu1_with_lights(athena_object_data *obj, int pass_state);
 void draw_vu1_with_spec_lights(athena_object_data *obj, int pass_state);
@@ -195,14 +287,101 @@ void (*render_funcs[])(athena_object_data *obj, int pass_state) = {
 	draw_vu1_with_spec_lights
 };
 
+// A skinned mesh draws sum(w_i * BoneMatrix_i * v), so the bind-pose
+// bounding_box is not what reaches the screen -- up close, a slightly wrong box
+// reads as "entirely past the near plane" and the object vanishes.
+//
+// Rebuild it from the live bone palette: transform the bind box by every bone
+// matrix, take the AABB of the union. Conservative for any animation, since the
+// skinned vertex is a convex combination of points each inside one M_i(box).
+// Corner-by-corner, not centre+extent: the latter only holds for rigid matrices
+// and would under-cover a skeleton carrying scale.
+static void render_update_skinned_bounds(athena_object_data *obj) {
+	athena_render_data *data = obj->data;
+	uint32_t bone_count = data->skeleton->bone_count;
+
+	if (!obj->skinned_bounds || bone_count == 0)
+		return;
+
+	// Sentinel seeds rather than "first point wins": bone_count is non-zero
+	// here, so at least 8 corners always land on both.
+	VECTOR lo = {  FLT_MAX,  FLT_MAX,  FLT_MAX, 0.0f };
+	VECTOR hi = { -FLT_MAX, -FLT_MAX, -FLT_MAX, 0.0f };
+
+	vu0_bounds_from_palette(lo, hi, obj->bone_matrices, bone_count, data->bounding_box);
+
+	// Same corner ordering calculate_bbox() uses; clip_bounding_box() only
+	// cares that all 8 are present, but keeping them consistent means the two
+	// boxes stay interchangeable for anything added later.
+	const float xs[8] = { lo[0], lo[0], lo[0], lo[0], hi[0], hi[0], hi[0], hi[0] };
+	const float ys[8] = { lo[1], lo[1], hi[1], hi[1], lo[1], lo[1], hi[1], hi[1] };
+	const float zs[8] = { lo[2], hi[2], lo[2], hi[2], lo[2], hi[2], lo[2], hi[2] };
+
+	for (int c = 0; c < 8; c++) {
+		obj->skinned_bounds[c][0] = xs[c];
+		obj->skinned_bounds[c][1] = ys[c];
+		obj->skinned_bounds[c][2] = zs[c];
+		obj->skinned_bounds[c][3] = 1.0f;
+	}
+}
+
+// Transforms the bounding box's 8 corners by (object * world_screen) on VU0 and
+// ANDs their CLIP flags: non-zero means all 8 violate the SAME plane, so the
+// whole (convex) box is off-screen. One-sided -- a box outside two planes but
+// neither alone is reported visible. The exact test costs more than it saves.
+int render_object_in_frustum(athena_object_data *obj) {
+	if (!obj || !obj->data || !obj->frustum_cull)
+		return 1;
+
+	// skinned_bounds is non-NULL only for skeletal meshes, where it holds the
+	// animated box render_update_skinned_bounds() rebuilt from this frame's
+	// bone palette. Everything else has no bone matrices between its positions
+	// and the screen, so its bind-time box is already the right thing to test.
+	VECTOR *bounds = obj->skinned_bounds ? obj->skinned_bounds : obj->data->bounding_box;
+
+	// A never-computed bounding box is all zeroes, which survives the transform
+	// as (0,0,0,0) and trips no CLIP flag at all -- the AND collapses to 0 and
+	// the object is reported visible. That fail-open is the intended behaviour
+	// for geometry whose bounds nobody filled in (see calculate_bbox's
+	// callers); culling must never be the reason something silently stops
+	// rendering.
+	MATRIX local_screen;
+	matrix_functions->multiply(local_screen, obj->transform, world_screen);
+
+	return !clip_bounding_box(local_screen, bounds);
+}
+
 void render_object(athena_object_data *obj) {
+	if (!obj || !obj->data)
+		return;
+
+	// Physics still has to advance for culled objects: it is game state, not
+	// drawing. Skipping it off-screen would make bodies freeze the moment the
+	// camera looks away.
 	if (obj->update_physics)
 		obj->update_physics(obj);
 
-	if (obj && obj->data) {
-		g_render_stats.draw_calls++;
-		g_render_stats.triangles += render_calc_triangles(obj->data);
+	// Advance the skeleton BEFORE the cull test, because the test's bounds are
+	// derived from the bone palette (render_update_skinned_bounds). This used
+	// to live inside every draw_vu1_* function, which meant an object drawn in
+	// several passes -- base, then decal, then reflection, then bump twice --
+	// re-evaluated its animation and rebuilt every bone matrix once per pass.
+	// Now it happens once per frame per object, and a culled object skips it
+	// entirely (process_animation() is driven by wall clock, so it picks up
+	// again correctly whenever the object comes back into view).
+	if (obj->data->skeleton && obj->bone_matrices) {
+		process_animation(obj);
+		update_bone_transforms(obj);
+		render_update_skinned_bounds(obj);
 	}
+
+	if (!render_object_in_frustum(obj)) {
+		g_render_stats.objects_culled++;
+		return;
+	}
+
+	g_render_stats.draw_calls++;
+	g_render_stats.triangles += render_calc_triangles(obj->data);
 
 	uint64_t old_alpha = get_screen_param(ALPHA_BLEND_EQUATION);
 	uint64_t old_colclamp = get_screen_param(COLOR_CLAMP_MODE);
@@ -244,16 +423,99 @@ void render_object(athena_object_data *obj) {
 	set_screen_param(ALPHA_BLEND_EQUATION, old_alpha);
 }
 
+// Defined further down, next to the tex_giftag refresh that shares it.
+static void render_chain_wait_if_queued(athena_chain_cache *chain);
+
 void new_render_object(athena_object_data *obj, athena_render_data *data) {
 	obj->data = data;
 
+	// Compact vertex cache (render_cook_compact_vertices): free whatever a
+	// previous life of this render_data cooked (e.g. shadows.c rebuilding
+	// its projector geometry with a new vertex count) and reset so the next
+	// draw call reallocates at the current index_count.
+	//
+	// Skip all of this if already frozen: a frozen object's positions/
+	// normals/texcoords/colours are NULL (freed by render_freeze_compact_
+	// vertices) and its compact cache is the only valid copy of the
+	// geometry left. Resetting compact_dirty/frozen here regardless of
+	// that would make the next draw call's cook loop dereference the
+	// (still-NULL) float source -- e.g. wrapping an already-frozen
+	// RenderData in a second RenderObject, or freezing before the first
+	// `new RenderObject(...)` call finishes constructing it.
+	if (!data->frozen) {
+		free(data->compact_positions);
+		free(data->compact_normals);
+		free(data->compact_colors);
+		free(data->compact_uvs);
+		data->compact_positions = NULL;
+		data->compact_normals = NULL;
+		data->compact_colors = NULL;
+		data->compact_uvs = NULL;
+		data->compact_capacity = 0;
+		data->compact_dirty = RENDER_DIRTY_ALL;
+
+		// The padded group layout describes the buffers just freed, and is
+		// rebuilt by the next cook from the current material table.
+		free(data->compact_group_base);
+		data->compact_group_base = NULL;
+		data->compact_group_count = 0;
+	}
+
+	// Baked DMA_CALL chains: independent of the frozen float source, so reset
+	// unconditionally -- covers a previous life of this render_data (e.g.
+	// shadows.c rebuilding geometry with a different chunk count).
+	athena_chain_cache *slots[10] = {
+		&data->chain[0][0], &data->chain[0][1], &data->chain[0][2],
+		&data->chain[1][0], &data->chain[1][1], &data->chain[1][2],
+		&data->chain[2][0], &data->chain[2][1], &data->chain[2][2],
+		&data->ref_chain
+	};
+	for (int i = 0; i < 10; i++) {
+		// These are freed, not just rewritten, and the DMAC may still be reading
+		// them from a draw call queued earlier this frame (rebinding a
+		// RenderData, or shadows.c rebuilding its projector geometry).
+		render_chain_wait_if_queued(slots[i]);
+
+		free(slots[i]->buffer);
+		free(slots[i]->chunk_offset);
+		free(slots[i]->tex_giftag);
+		slots[i]->buffer = NULL;
+		slots[i]->chunk_offset = NULL;
+		slots[i]->tex_giftag = NULL;
+		slots[i]->qwc_alloc = 0;
+		slots[i]->chunk_count = 0;
+		slots[i]->mpg_addr = -1;
+		slots[i]->built_version = 0;
+	}
+	data->chain_version = 1;
+
 	obj->bump_offset_buffer = &zero_bump_offset;
+
+	// On by default: it is a pure win for the static meshes that make up most
+	// of a scene, and harmless (fail-open) for render_data whose bounding_box
+	// was never filled in. Callers whose geometry outgrows its box at runtime
+	// clear this -- see the field's doc comment in render.h.
+	obj->frustum_cull = true;
+
+	// A previous life of this athena_object_data may have been skinned
+	// (shadows.c rebinds its projector object, JS rebinds RenderData): drop
+	// any animated box before deciding whether this data needs one. Every
+	// creator zeroes the struct first -- calloc in athena_render_object_create,
+	// memset in shadow_projector_init -- so this is free(NULL) on a fresh one.
+	free(obj->skinned_bounds);
+	obj->skinned_bounds = NULL;
 
 	if (data->skin_data) {
 		obj->anim_controller.current = NULL;
 
 		obj->bones = (athena_bone_transform*)malloc(data->skeleton->bone_count * sizeof(athena_bone_transform));
 		obj->bone_matrices = (MATRIX*)malloc(data->skeleton->bone_count * sizeof(MATRIX));
+
+		// Per-object, not per-render_data: two RenderObjects sharing one
+		// skinned RenderData play different animations, so they cannot share
+		// an animated box. memalign because clip_bounding_box() reads it with
+		// lqc2.
+		obj->skinned_bounds = (VECTOR*)memalign(16, 8 * sizeof(VECTOR));
 
 		for (int i = 0; i < data->skeleton->bone_count; i++) {
 			copy_vector(obj->bones[i].position, data->skeleton->bones[i].position);
@@ -364,11 +626,7 @@ void process_animation(athena_object_data *obj) {
 }
 
 void update_object_space(athena_object_data *obj) {
-  	matrix_functions->identity(obj->transform);
-
-  	matrix_functions->rotate(obj->transform, obj->transform, obj->rotation);
-	matrix_functions->scale(obj->transform, obj->transform, obj->scale);
-  	matrix_functions->translate(obj->transform, obj->transform, obj->position);
+  	matrix_functions->trs_euler(obj->transform, obj->position, obj->rotation, obj->scale);
 
 	if (obj->update_collision)
 		obj->update_collision(obj);
@@ -398,8 +656,13 @@ static void bake_giftags(owl_packet *packet, athena_render_data *data, bool text
 
 	prim_data.PRIM = (data->tristrip? GS_PRIM_PRIM_TRISTRIP : GS_PRIM_PRIM_TRIANGLE);
 
+	// NLOOP carries the "kick texture state" flag to the VU, which reads it via
+	// ilw.x and skips its texture XGKICK when 0. Free: every microprogram
+	// overwrites word x of its output copy with the real vertex count.
+	// Must ride here, not in CLIPFAN's spare lane: this unpack is double-buffered,
+	// CLIPFAN is static and the VIF writes chunk N+1 while the VU runs chunk N.
 	giftag_t prim_tag = {
-		.NLOOP = 0,
+		.NLOOP = texture_mapping ? 1 : 0,
 		.EOP = 1,
 		.PRE = 1,
 		.PRIM = prim_data.data,
@@ -408,46 +671,630 @@ static void bake_giftags(owl_packet *packet, athena_render_data *data, bool text
 	};
 
 	owl_add_unpack_data_cnt(packet, 26, 1, 0);
-	owl_add_uint(packet, 0);
+	// x: per-vertex winding flip for the backface test. A tristrip alternates
+	// winding vertex by vertex, so a fixed-sign test would cull every other
+	// triangle; the VU multiplies its culling direction by this every vertex.
+	owl_add_float(packet, data->tristrip ? -1.0f : 1.0f);
 	owl_add_uint(packet, data->attributes.accurate_clipping? (clip_tag.data >> 32) : 0);
+	// z stays an integer: setup_clip_trigger.i reads it with mtir (bit pattern,
+	// not value) to pick per-triangle vs per-vertex clip judgement.
 	owl_add_uint(packet, data->tristrip);
-	owl_add_uint(packet, data->attributes.face_culling);
+	// float, not uint: the VU multiplies the triangle edge by this lane
+	// (bfc_multiplier, +1 cull back / -1 cull front) and only then converts it
+	// with ftoi0 to decide whether culling is on at all. Sent as an integer,
+	// CULL_FACE_BACK's 1.0f arrived as the bit pattern 0x00000001 -- a denormal
+	// the VU reads as ~0, which both zeroed the edge vector and made the enable
+	// test see "no culling". Face culling has never actually run.
+	owl_add_float(packet, data->attributes.face_culling);
 	owl_add_unpack_data_cnt(packet, 0, 1, 1);
 	owl_add_ulong(packet, prim_tag.data);
 	owl_add_ulong(packet, DRAW_STQ2_REGLIST);
 }
 
+// Cook constants. Clamping AFTER the scale is equivalent to clamping before it
+// (the bounds are just scaled too) and lets VU0 do the whole thing branchless:
+// vmax/vmini for the clamp, vftoi0 to truncate exactly like the C cast did.
+// The upper UV bound is written as the product so it is bit-identical to the
+// old clampf(v, -127.99f, 127.99f) * 256.0f at the boundary.
+static const VECTOR COOK_ZERO  = { 0.0f, 0.0f, 0.0f, 0.0f };
+static const VECTOR COOK_C255  = { 255.0f, 255.0f, 255.0f, 255.0f };
+static const VECTOR COOK_C127  = { 127.0f, 127.0f, 127.0f, 0.0f };     // .w = 0 forces normal.w = 0
+static const VECTOR COOK_CN127 = { -127.0f, -127.0f, -127.0f, 0.0f };
+static const VECTOR COOK_C256  = { 256.0f, 256.0f, 256.0f, 256.0f };
+static const VECTOR COOK_UVHI  = {  127.99f*256.0f,  127.99f*256.0f,  127.99f*256.0f,  127.99f*256.0f };
+static const VECTOR COOK_UVLO  = { -127.99f*256.0f, -127.99f*256.0f, -127.99f*256.0f, -127.99f*256.0f };
+
+// 16B VECTOR -> 12B struct, no conversion. Left scalar on purpose: an MMI
+// repack of 4 vertices needs ~12 shuffles to land 12 words that straddle every
+// doubleword boundary, for 19 instructions against 24. Not worth it -- the win
+// here was hoisting the per-vertex cook_* branches out of the loop.
+static void cook_positions_range(athena_compact_position *dst, const VECTOR *src, uint32_t count) {
+	for (uint32_t i = 0; i < count; i++) {
+		dst[i].x = src[i][0];
+		dst[i].y = src[i][1];
+		dst[i].z = src[i][2];
+	}
+}
+
+// ppach folds the 4 words to 4 halfwords, ppacb folds those to 4 bytes, so one
+// sw writes the whole packed vertex.
+static void cook_colors_range(athena_compact_color *dst, const VECTOR *src, uint32_t count) {
+	if (count == 0)
+		return;
+
+	__asm__ __volatile__(
+	".set noreorder             \n"
+	"lqc2   $vf4, 0x0(%3)       \n"
+	"lqc2   $vf5, 0x0(%4)       \n"
+    "1:                         \n"
+	"lqc2   $vf1, 0x0(%1)       \n"
+	"vmul.xyzw   $vf1, $vf1, $vf4\n"
+	"vmax.xyzw   $vf1, $vf1, $vf5\n"
+	"vmini.xyzw  $vf1, $vf1, $vf4\n"
+	"vftoi0.xyzw $vf1, $vf1     \n"
+	"qmfc2  $8, $vf1            \n"
+	"ppach  $8, $0, $8          \n"
+	"ppacb  $8, $0, $8          \n"
+	"sw     $8, 0x0(%0)         \n"
+	"addiu  %1, %1, 0x10        \n"
+	"addiu  %2, %2, -1          \n"
+	"bne    $0, %2, 1b          \n"
+	"addiu  %0, %0, 0x4         \n"
+	".set reorder               \n"
+	: "+r" (dst), "+r" (src), "+r" (count)
+	: "r" (COOK_C255), "r" (COOK_ZERO)
+	: "$8", "memory");
+}
+
+static void cook_normals_range(athena_compact_normal *dst, const VECTOR *src, uint32_t count) {
+	if (count == 0)
+		return;
+
+	__asm__ __volatile__(
+	".set noreorder             \n"
+	"lqc2   $vf4, 0x0(%3)       \n"
+	"lqc2   $vf5, 0x0(%4)       \n"
+    "1:                         \n"
+	"lqc2   $vf1, 0x0(%1)       \n"
+	"vmul.xyzw   $vf1, $vf1, $vf4\n"
+	"vmax.xyzw   $vf1, $vf1, $vf5\n"
+	"vmini.xyzw  $vf1, $vf1, $vf4\n"
+	"vftoi0.xyzw $vf1, $vf1     \n"
+	"qmfc2  $8, $vf1            \n"
+	"ppach  $8, $0, $8          \n"
+	"ppacb  $8, $0, $8          \n"
+	"sw     $8, 0x0(%0)         \n"
+	"addiu  %1, %1, 0x10        \n"
+	"addiu  %2, %2, -1          \n"
+	"bne    $0, %2, 1b          \n"
+	"addiu  %0, %0, 0x4         \n"
+	".set reorder               \n"
+	: "+r" (dst), "+r" (src), "+r" (count)
+	: "r" (COOK_C127), "r" (COOK_CN127)
+	: "$8", "memory");
+}
+
+// Only .xy survive: ppach leaves u,v in the low two halfwords and sw writes
+// exactly those four bytes.
+static void cook_uvs_range(athena_compact_uv *dst, const VECTOR *src, uint32_t count) {
+	if (count == 0)
+		return;
+
+	__asm__ __volatile__(
+	".set noreorder             \n"
+	"lqc2   $vf4, 0x0(%3)       \n"
+	"lqc2   $vf5, 0x0(%4)       \n"
+	"lqc2   $vf6, 0x0(%5)       \n"
+    "1:                         \n"
+	"lqc2   $vf1, 0x0(%1)       \n"
+	"vmul.xyzw   $vf1, $vf1, $vf4\n"
+	"vmax.xyzw   $vf1, $vf1, $vf5\n"
+	"vmini.xyzw  $vf1, $vf1, $vf6\n"
+	"vftoi0.xyzw $vf1, $vf1     \n"
+	"qmfc2  $8, $vf1            \n"
+	"ppach  $8, $0, $8          \n"
+	"sw     $8, 0x0(%0)         \n"
+	"addiu  %1, %1, 0x10        \n"
+	"addiu  %2, %2, -1          \n"
+	"bne    $0, %2, 1b          \n"
+	"addiu  %0, %0, 0x4         \n"
+	".set reorder               \n"
+	: "+r" (dst), "+r" (src), "+r" (count)
+	: "r" (COOK_C256), "r" (COOK_UVLO), "r" (COOK_UVHI)
+	: "$8", "memory");
+}
+
+void render_invalidate_compact_cache(athena_render_data *data) {
+	if (data)
+		data->compact_dirty |= RENDER_DIRTY_ALL;
+}
+
+void render_invalidate_compact_positions(athena_render_data *data) {
+	if (data)
+		data->compact_dirty |= RENDER_DIRTY_POSITIONS;
+}
+
+void render_invalidate_chain_cache(athena_render_data *data) {
+	if (data)
+		data->chain_version++;
+}
+
+// Cooks the compact VIF wire formats from positions/normals/colours/texcoords,
+// only for the attributes marked dirty. positions/colours are assumed non-NULL
+// (file-wide invariant); normals/texcoords are optional.
+static void render_cook_compact_vertices(athena_render_data *data) {
+	if (!data || data->index_count == 0 || data->frozen)
+		return;
+
+	// (Re)build the padded group layout whenever the material table changed
+	// shape. Every group base is rounded up to a multiple of 4 elements so the
+	// DMA_REF each chunk issues lands on a quadword boundary -- see
+	// athena_render_data.compact_group_base for why that is mandatory rather
+	// than tidy.
+	if (data->material_index_count > 0 &&
+	    data->compact_group_count != (uint32_t)data->material_index_count) {
+		free(data->compact_group_base);
+		data->compact_group_base = (uint32_t*)malloc(data->material_index_count * sizeof(uint32_t));
+		data->compact_group_count = data->material_index_count;
+
+		// Force a re-cook and a chain rebuild: every group just moved inside
+		// the compact buffers, so both the cooked contents and the DMA_REF
+		// addresses baked into the cached chains are stale.
+		data->compact_dirty = RENDER_DIRTY_ALL;
+		data->compact_capacity = 0;
+		data->chain_version++;
+	}
+
+	// Total padded footprint. Computed every call (it is a handful of adds over
+	// the material table, not per vertex) so the capacity check below always
+	// compares against the layout actually in use.
+	uint32_t padded_total = 0;
+	if (data->compact_group_base) {
+		int prev_end = -1;
+		for (int i = 0; i < data->material_index_count; i++) {
+			data->compact_group_base[i] = padded_total;
+			uint32_t group_count = (uint32_t)(data->material_indices[i].end - prev_end);
+			padded_total += (group_count + 3u) & ~3u;
+			prev_end = data->material_indices[i].end;
+		}
+	} else {
+		padded_total = data->index_count;
+	}
+
+	if (data->compact_capacity < padded_total) {
+		uint32_t new_capacity = padded_total + 4;
+
+		free(data->compact_positions);
+		free(data->compact_normals);
+		free(data->compact_colors);
+		free(data->compact_uvs);
+
+		data->compact_positions = (athena_compact_position*)memalign(16, new_capacity * sizeof(athena_compact_position));
+		data->compact_normals   = (athena_compact_normal*)memalign(16, new_capacity * sizeof(athena_compact_normal));
+		data->compact_colors    = (athena_compact_color*)memalign(16, new_capacity * sizeof(athena_compact_color));
+		data->compact_uvs       = (athena_compact_uv*)memalign(16, new_capacity * sizeof(athena_compact_uv));
+
+		// The cook loop below only ever writes [0, index_count); the spare
+		// tail exists solely to absorb owl_add_unpack_data_ref_packed's
+		// element-count rounding (up to +3). Zero it so that harmless
+		// over-read never decodes as a NaN/denormal on the VU.
+		memset(data->compact_positions, 0, new_capacity * sizeof(athena_compact_position));
+		memset(data->compact_normals,   0, new_capacity * sizeof(athena_compact_normal));
+		memset(data->compact_colors,    0, new_capacity * sizeof(athena_compact_color));
+		memset(data->compact_uvs,       0, new_capacity * sizeof(athena_compact_uv));
+
+		data->compact_capacity = new_capacity;
+		data->compact_dirty |= RENDER_DIRTY_ALL;
+
+		// The pre-baked DMA_CALL chains (draw_vu1_with_colors) embed these
+		// buffers' addresses in DMA_REF tags -- a realloc here just moved
+		// them, so every cached chain now points at freed memory.
+		data->chain_version++;
+	}
+
+	if (!data->compact_dirty)
+		return;
+
+	bool cook_positions = data->compact_dirty & RENDER_DIRTY_POSITIONS;
+	bool cook_colors     = data->compact_dirty & RENDER_DIRTY_COLORS;
+	bool cook_normals    = (data->compact_dirty & RENDER_DIRTY_NORMALS) && data->normals;
+	bool cook_uvs        = (data->compact_dirty & RENDER_DIRTY_UVS) && data->texcoords;
+
+	data->compact_dirty = 0;
+
+	if (!cook_positions && !cook_colors && !cook_normals && !cook_uvs)
+		return;
+
+	// src walks the source arrays straight through; dst follows the padded
+	// layout, jumping to each group's aligned base. With no material table
+	// (compact_group_base NULL) the two stay equal and this degenerates to the
+	// old 1:1 copy.
+	for (int g = 0; g < (data->compact_group_base ? data->material_index_count : 1); g++) {
+		uint32_t src = data->compact_group_base ? (g == 0 ? 0 : (uint32_t)(data->material_indices[g-1].end + 1)) : 0;
+		uint32_t dst = data->compact_group_base ? data->compact_group_base[g] : 0;
+		uint32_t count = data->compact_group_base
+			? (uint32_t)(data->material_indices[g].end + 1) - src
+			: data->index_count;
+
+		// A material table that runs past the vertex array (hand-edited from
+		// JS, or a loader that mis-sized it) would otherwise read out of
+		// bounds here.
+		if (src >= data->index_count)
+			continue;
+		if (src + count > data->index_count)
+			count = data->index_count - src;
+
+		// One specialised pass per attribute instead of four per-vertex tests:
+		// the cook_* flags are loop-invariant, but GCC kept the branches (and
+		// their delay slots) inside the vertex loop.
+		if (cook_positions)
+			cook_positions_range(&data->compact_positions[dst], &data->positions[src], count);
+
+		if (cook_colors)
+			cook_colors_range(&data->compact_colors[dst], &data->colours[src], count);
+
+		if (cook_normals)
+			cook_normals_range(&data->compact_normals[dst], &data->normals[src], count);
+
+		if (cook_uvs)
+			cook_uvs_range(&data->compact_uvs[dst], &data->texcoords[src], count);
+	}
+
+	// These are read by the DMA controller (owl_add_unpack_data_ref_packed's
+	// DMA_REF inside the baked chains), never by the EE core, so the cook above
+	// has to be written back explicitly -- same reason render_build_chain syncs
+	// its own buffer. Only bites geometry re-cooked at runtime (the shadow
+	// projector rewrites its whole grid every draw); a mesh cooked once at load
+	// is evicted by ordinary cache pressure long before it is drawn, which is
+	// why this was never missed.
+	if (padded_total > 0) {
+		if (cook_positions) SyncDCache(data->compact_positions, &data->compact_positions[padded_total - 1]);
+		if (cook_normals)   SyncDCache(data->compact_normals,   &data->compact_normals[padded_total - 1]);
+		if (cook_colors)    SyncDCache(data->compact_colors,    &data->compact_colors[padded_total - 1]);
+		if (cook_uvs)       SyncDCache(data->compact_uvs,       &data->compact_uvs[padded_total - 1]);
+	}
+}
+
+// Origin of material_indices[i]'s slice inside the compact_* buffers.
+//
+// Deliberately NOT last_index+1, which is where that group lives in the SOURCE
+// arrays: the compact buffers use a padded layout that keeps every group on a
+// quadword boundary, because the DMA_REF a chunk hands the DMAC cannot start
+// anywhere else. See athena_render_data.compact_group_base for the full
+// reasoning. Falls back to the unpadded index when no layout has been built
+// (no material table), which keeps the degenerate single-group case identical
+// to before.
+static inline uint32_t render_compact_base(const athena_render_data *data, int i, int last_index) {
+	if (data->compact_group_base && i >= 0 && i < (int)data->compact_group_count)
+		return data->compact_group_base[i];
+
+	return (uint32_t)(last_index + 1);
+}
+
+void render_freeze_compact_vertices(athena_render_data *data) {
+	if (!data || data->frozen)
+		return;
+
+	// Make sure the compact cache reflects the latest data before the float
+	// source it was cooked from goes away for good.
+	render_cook_compact_vertices(data);
+
+	free(data->positions);
+	free(data->normals);
+	free(data->texcoords);
+	free(data->colours);
+
+	data->positions = NULL;
+	data->normals = NULL;
+	data->texcoords = NULL;
+	data->colours = NULL;
+
+	data->frozen = true;
+}
+
+// One sub-chain per material chunk: the unpacks (all DMA_REF) plus the
+// FLUSHA/NOP/ITOP/MSCALF-or-MSCNT trailer. Mirrors draw_vu1_with_colors'
+// chunk loop, including the last_index==-1 MSCALF-vs-MSCNT condition.
+
+// Bakes a tex_giftag slot: AD header + two inert AD pairs. The pairs default to
+// GIF_NOP because an untextured material's slot is never refreshed, and an AD
+// address of 0 is GS_PRIM -- zeroed memory would write PRIM=0 to the GS.
+static inline void render_bake_tex_giftag_header(owl_qword *slot) {
+	owl_qword header;
+	header.dword[1] = GIF_AD;
+	header.dword[0] = GIFTAG(2, 1, 0, 0, 0, 1);
+	slot[0] = header;
+
+	owl_qword nop_pair;
+	nop_pair.dword[1] = GIF_NOP;
+	nop_pair.dword[0] = 0;
+	slot[1] = nop_pair;
+	slot[2] = nop_pair;
+}
+
+// Which attribute set a chain slot was baked for. colors/lights/spec share the
+// same VU-mem slot numbering (colors just leaves the normals slot unwritten);
+// the reflection program uses a flat layout with no skin and no UVs.
+typedef enum {
+	CHAIN_COLORS,   // positions, colours, uvs
+	CHAIN_LIT,      // + normals  (lights and spec are identical here)
+	CHAIN_REF,      // positions, normals, colours; flat offsets, skips
+	                // materials without a ref texture
+} eChainKind;
+
+// Bakes one DMA_CALL sub-chain per material chunk: the unpacks (all DMA_REF)
+// plus the FLUSHA/NOP/ITOP/MSCALF-or-MSCNT trailer. Mirrors the caller's chunk
+// loop, including the last_index==-1 MSCALF-vs-MSCNT condition.
+static void render_build_chain(athena_object_data *obj, athena_chain_cache *chain,
+                               int pass_state, int batch_size, int mpg_addr,
+                               eChainKind kind) {
+	athena_render_data *data = obj->data;
+
+	// Everything below frees and rewrites buffers the DMAC reaches by reference.
+	// A rebuild triggered mid-frame (geometry or material table mutated between
+	// two draws of the same object) would pull them out from under a draw call
+	// that is still queued -- and the buffer is not just rewritten, it is freed.
+	render_chain_wait_if_queued(chain);
+
+	bool is_ref  = (kind == CHAIN_REF);
+	bool skinned = data->skin_data && !is_ref;
+	bool want_normals = (kind != CHAIN_COLORS);
+
+	// Lands at texGiftagAddr: the chunk's OUTPUT window, XGKICKed standalone
+	// ahead of kickAddress = texGiftagAddr+3. See RENDER_INBUF_SIZE.
+	int tex_giftag_dest = data->skeleton ? RENDER_SKINNED_INBUF_SIZE : RENDER_INBUF_SIZE;
+
+	// Slot numbering: skinned meshes spend slots 0..1 on the bone data.
+	int slot0 = skinned ? 2 : 0;
+	int dst_positions = is_ref ? 2 : 2 + batch_size * slot0;
+	int dst_normals   = is_ref ? 2 + batch_size     : 2 + batch_size * (slot0 + 1);
+	int dst_colours   = is_ref ? 2 + batch_size * 2 : 2 + batch_size * (slot0 + 2);
+	int dst_uvs       = 2 + batch_size * (slot0 + 3);
+
+	int chunk_cap = batch_size - (batch_size % 12);
+
+	// A material the caller will skip contributes no chunks, but still advances
+	// last_index -- keep both passes below in lockstep with the draw loop.
+	#define CHAIN_SKIPS(i) (is_ref && data->materials[data->material_indices[i].index].ref_texture_id == -1)
+
+	uint32_t chunk_count = 0;
+	int last_index = -1;
+	for (int i = 0; i < data->material_index_count; i++) {
+		if (!CHAIN_SKIPS(i)) {
+			int idxs_to_draw = (data->material_indices[i].end - last_index);
+			while (idxs_to_draw > 0) {
+				int count = idxs_to_draw < chunk_cap ? idxs_to_draw : chunk_cap;
+				idxs_to_draw -= count;
+				chunk_count++;
+			}
+		}
+		last_index = data->material_indices[i].end;
+	}
+
+	chain->mpg_addr = mpg_addr;
+	chain->built_version = data->chain_version;
+
+
+	if (chunk_count == 0) {
+		free(chain->buffer);
+		free(chain->chunk_offset);
+		free(chain->tex_giftag);
+		chain->buffer = NULL;
+		chain->chunk_offset = NULL;
+		chain->tex_giftag = NULL;
+		chain->qwc_alloc = 0;
+		chain->chunk_count = 0;
+		return;
+	}
+
+	// Worst case per chunk: tex_giftag + diffuse + skin + positions + normals +
+	// colours + uvs + trailer (2) + DMA_RET = 10. Built once, so slack is free.
+	uint32_t qwc_budget = chunk_count * 10;
+
+	if (chain->qwc_alloc < qwc_budget) {
+		free(chain->buffer);
+		chain->buffer = (owl_qword*)memalign(16, qwc_budget * sizeof(owl_qword));
+		chain->qwc_alloc = qwc_budget;
+	}
+
+	free(chain->chunk_offset);
+	chain->chunk_offset = (uint32_t*)malloc(chunk_count * sizeof(uint32_t));
+	chain->chunk_count = chunk_count;
+
+	// One 3-QW slot per material, shared by all its chunks. Baked with inert
+	// defaults so an untextured material's slot is well-formed even though
+	// render_update_tex_giftag never touches it.
+	free(chain->tex_giftag);
+	chain->tex_giftag = (owl_qword*)memalign(16, data->material_index_count * 3 * sizeof(owl_qword));
+
+	for (int i = 0; i < data->material_index_count; i++)
+		render_bake_tex_giftag_header(&chain->tex_giftag[i * 3]);
+
+	owl_packet chain_pkt = { 0 };
+	chain_pkt.ptr = chain->buffer;
+
+	uint32_t chunk_idx = 0;
+	last_index = -1;
+
+	for (int i = 0; i < data->material_index_count; i++) {
+		if (CHAIN_SKIPS(i)) {
+			last_index = data->material_indices[i].end;
+			continue;
+		}
+
+		const ath_mat *mat = &data->materials[data->material_indices[i].index];
+		bool texture_mapping = is_ref
+			? true
+			: (((mat->texture_id != -1) && data->attributes.texture_mapping) || pass_state);
+
+		uint32_t base = render_compact_base(data, i, last_index);
+		athena_compact_position* positions = &data->compact_positions[base];
+		athena_compact_normal*   normals   = &data->compact_normals[base];
+		athena_compact_color*    colours   = &data->compact_colors[base];
+		athena_compact_uv*       texcoords = (texture_mapping && !is_ref) ? &data->compact_uvs[base] : NULL;
+		vertex_skin_data*        skin_data = skinned ? &data->skin_data[last_index+1] : NULL;
+
+		int idxs_to_draw = (data->material_indices[i].end - last_index);
+		int idxs_drawn = 0;
+
+		while (idxs_to_draw > 0) {
+			int count = idxs_to_draw < chunk_cap ? idxs_to_draw : chunk_cap;
+
+			chain->chunk_offset[chunk_idx] = (uint32_t)(chain_pkt.ptr - chain->buffer);
+
+			owl_add_unpack_data_ref(&chain_pkt, tex_giftag_dest, &chain->tex_giftag[i * 3], 3, 1);
+			owl_add_unpack_data_ref(&chain_pkt, 1, (void*)&mat->diffuse, 1, 1);
+
+			if (skinned)
+				owl_add_unpack_data_ref(&chain_pkt, 2, &skin_data[idxs_drawn], count*2, 1);
+
+			owl_add_unpack_data_ref_packed(&chain_pkt, dst_positions, &positions[idxs_drawn], count, UNPACK_V3_32, sizeof(athena_compact_position), 1, 1);
+
+			if (want_normals)
+				owl_add_unpack_data_ref_packed(&chain_pkt, dst_normals, &normals[idxs_drawn], count, UNPACK_V4_8, sizeof(athena_compact_normal), 1, 0);
+
+			owl_add_unpack_data_ref_packed(&chain_pkt, dst_colours, &colours[idxs_drawn], count, UNPACK_V4_8, sizeof(athena_compact_color), 1, 1);
+
+			if (texcoords)
+				owl_add_unpack_data_ref_packed(&chain_pkt, dst_uvs, &texcoords[idxs_drawn], count, UNPACK_V2_16, sizeof(athena_compact_uv), 1, 0);
+
+			// FLUSHA waits for PATH1/2/3 to go idle. PATH3 is the load-bearing
+			// one: render_trigger_texture_upload fires a VIF interrupt whose
+			// handler queues the texture transfer on PATH3, running in parallel
+			// with this VIF1 unpack. Without the wait, the XGKICK below can
+			// reach the GS while that upload is still streaming.
+			owl_add_cnt_tag(&chain_pkt, 1, owl_vif_code_double(VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
+			owl_add_uint(&chain_pkt, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+			owl_add_uint(&chain_pkt, VIF_CODE(0, 0, VIF_NOP, 0));
+			owl_add_uint(&chain_pkt, VIF_CODE(count, 0, VIF_ITOP, 0));
+			owl_add_uint(&chain_pkt, VIF_CODE(mpg_addr, 0, (last_index == -1? VIF_MSCALF : VIF_MSCNT), 0));
+
+			owl_add_dma_ret(&chain_pkt);
+
+			idxs_to_draw -= count;
+			idxs_drawn += count;
+			chunk_idx++;
+		}
+
+		last_index = data->material_indices[i].end;
+	}
+
+	#undef CHAIN_SKIPS
+
+	SyncDCache(chain->buffer, &chain->buffer[qwc_budget - 1]);
+	SyncDCache(chain->tex_giftag, &chain->tex_giftag[data->material_index_count * 3 - 1]);
+}
+
+// Blocks until the DMAC is done with whatever this chain last queued, so its
+// buffers can be rewritten. No-op unless a draw call is genuinely still in
+// flight -- see athena_chain_cache.queued_gen.
+static void render_chain_wait_if_queued(athena_chain_cache *chain) {
+	if (!chain->has_queued || owl_generation_read(chain->queued_gen))
+		return;
+
+	owl_wait_generation(chain->queued_gen);
+}
+
+// Refreshes the TEX0/TEX1 quadwords of a tex_giftag slot (the header, slot[0],
+// is constant -- see render_bake_tex_giftag_header). Called from the material
+// loop of every draw_vu1_* whenever texture_mapping is true, NOT gated on
+// whether the texture was rebound: gsGlobal->PrimContext flips every frame
+// regardless, so the words really do change from one frame to the next.
+//
+// The slot is DMA_REF'd by the chunks, though, so it belongs to the last draw
+// call until the DMAC has read it. Drawing the SAME render data twice in one
+// frame with a different texture in between (setTexture, or a shared RenderData
+// swapped between two objects) would otherwise rewrite the slot under the first
+// draw and render both with the second texture. Hence: compute first, write only
+// if something actually changed, and wait the earlier draw out before it does.
+static void render_update_tex_giftag(athena_chain_cache *chain, int mat_id, GSSURFACE *tex) {
+	owl_qword *slot = &chain->tex_giftag[mat_id * 3];
+	int tw, th;
+	athena_set_tw_th(tex, &tw, &th);
+
+	owl_qword tex0, tex1;
+
+	tex0.dword[1] = GS_TEX0_1 + gsGlobal->PrimContext;
+	tex0.dword[0] = GS_SETREG_TEX0((tex->Vram & ~TRANSFER_REQUEST_MASK) / 256,
+	                                   tex->TBW,
+	                                   tex->PSM,
+	                                   tw, th,
+	                                   gsGlobal->PrimAlphaEnable,
+	                                   COLOR_MODULATE,
+	                                   (tex->VramClut & ~TRANSFER_REQUEST_MASK) / 256,
+	                                   tex->ClutPSM,
+	                                   0, 0,
+	                                   tex->VramClut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD);
+
+	tex1.dword[1] = GS_TEX1_1 + gsGlobal->PrimContext;
+	tex1.dword[0] = GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0);
+
+	// Rewriting the same values is not a hazard, and it is the common case
+	// (same texture, same context, every chunk of every object).
+	if (slot[1].dword[0] == tex0.dword[0] && slot[1].dword[1] == tex0.dword[1] &&
+	    slot[2].dword[0] == tex1.dword[0] && slot[2].dword[1] == tex1.dword[1])
+		return;
+
+	render_chain_wait_if_queued(chain);
+
+	slot[1] = tex0;
+	slot[2] = tex1;
+
+	// Read by the DMA controller (owl_add_unpack_data_ref's DMA_REF), not by
+	// the EE core, so it needs an explicit writeback -- the CPU write above
+	// can still be sitting in D-cache otherwise.
+	SyncDCache(&slot[1], &slot[2]);
+}
+
+static inline void render_trigger_texture_upload(owl_packet *packet, int texture_id) {
+	if (texture_id == -1)
+		return;
+
+	owl_add_cnt_tag(packet, 0, owl_vif_code_double(
+		VIF_CODE(0, 0, VIF_NOP, 1),
+		VIF_CODE(texture_id, 0, VIF_MARK, 0)));
+}
+
 void draw_vu1_with_colors(athena_object_data *obj, int pass_state) {
 	athena_render_data *data = obj->data;
+
+	render_cook_compact_vertices(data);
 
 	int batch_size = BATCH_SIZE, mpg_addr = 0;
 
 	if (data->skeleton) {
 		batch_size = BATCH_SIZE_SKINNED;
 
-		process_animation(obj);
-
-		update_bone_transforms(obj);
+		// The skeleton was advanced once already, by render_object() -- see the
+		// comment there. Objects drawn through several passes must not re-run it
+		// per pass, and the cull test upstream depends on it already being done.
 
 		mpg_addr = vu_mpg_preload(vu1_colors_skinned, true);
 	} else {
 		mpg_addr = vu_mpg_preload(vu1_colors, true);
 	}
 
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 14);
-
-	if (obj->bone_matrices) {
-		owl_add_unpack_data_ref(packet, 141, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
+	// One slot per pass_state: render_object() issues base/decal/bump
+	// back-to-back into the same unflushed ring. A stale mpg_addr (VU code
+	// cache eviction) also forces a rebuild -- rare enough that patching just
+	// the cached MSCALF/MSCNT immediates is not worth the bookkeeping.
+	athena_chain_cache *chain = &data->chain[PL_NO_LIGHTS][pass_state];
+	if (!chain->buffer || chain->built_version != data->chain_version
+	    || chain->mpg_addr != mpg_addr) {
+		render_build_chain(obj, chain, pass_state, batch_size, mpg_addr, CHAIN_COLORS);
 	}
 
-	owl_add_unpack_data_cnt(packet, 0, 1, 0);
-	owl_add_uquad_ptr(packet, &screen_scale);
+	// 8 unconditional quadwords (1 bone-matrix ref + 4+1 transform + 1+1
+	// bump offset) plus the view block only when it is actually stale.
+	// render_view_qwc() has to be read BEFORE render_upload_view() below,
+	// which is what marks the block resident.
+	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 8 + render_view_qwc());
 
-	owl_add_unpack_data_cnt(packet, 1, 4, 0);
-	owl_add_uquad_ptr(packet, &(world_screen[0]));
-	owl_add_uquad_ptr(packet, &(world_screen[4]));
-	owl_add_uquad_ptr(packet, &(world_screen[8]));
-	owl_add_uquad_ptr(packet, &(world_screen[12]));
+	if (obj->bone_matrices) {
+		owl_add_unpack_data_ref(packet, 880, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
+	}
+
+	render_upload_view(packet);
 
 	owl_add_unpack_data_cnt(packet, 5, 4, 0);
 	owl_add_uquad_ptr(packet, &(obj->transform[0]));
@@ -455,108 +1302,70 @@ void draw_vu1_with_colors(athena_object_data *obj, int pass_state) {
 	owl_add_uquad_ptr(packet, &(obj->transform[8]));
 	owl_add_uquad_ptr(packet, &(obj->transform[12]));
 
-	owl_add_unpack_data_cnt(packet, 269, 1, 0);
+	owl_add_unpack_data_cnt(packet, 16, 1, 0);
 	owl_add_uquad_ptr(packet, obj->bump_offset_buffer);
 
 	//owl_add_end_tag(packet);
 
+	// Never chunk against batch_size directly: it drives the VU-mem offset
+	// formulas (2+batch_size*N) and must match mem_layout.i's strides.
+	// chunk_cap floors to a multiple of 12 -- 4 for the unpack rounding, and
+	// 3 so a chunk boundary never splits a triangle across two XGKICKs.
+	int chunk_cap = batch_size - (batch_size % 12);
+
 	int last_index = -1;
 	GSSURFACE* tex = NULL;
 	int texture_id;
+	uint32_t chunk_idx = 0;
 	for(int i = 0; i < data->material_index_count; i++) {
 		bool texture_mapping = ((((data->materials[data->material_indices[i].index].texture_id != -1)) && data->attributes.texture_mapping) || pass_state);
 
 		if (texture_mapping) {
 			GSSURFACE *cur_tex = NULL;
 			switch (pass_state) {
-				case 1: // bump map 
+				case 1: // bump map
 					cur_tex = data->textures[data->materials[data->material_indices[i].index].bump_texture_id];
 					break;
 				case 2: // decal
 					cur_tex = data->textures[data->materials[data->material_indices[i].index].decal_texture_id];
 					break;
-				default: 
+				default:
 					cur_tex = data->textures[data->materials[data->material_indices[i].index].texture_id];
 			}
 
 			if (cur_tex != tex) {
 				texture_id = texture_manager_bind(gsGlobal, cur_tex, true);
 				tex = cur_tex;
+
+				owl_query_packet(CHANNEL_VIF1, 1);
+				render_trigger_texture_upload(packet, texture_id);
 			}
+
+			// Refreshed every draw call that hits this material, not just on
+			// rebind -- see render_update_tex_giftag's doc comment for why
+			// (gsGlobal->PrimContext). Plain memory write, no packet cost.
+			render_update_tex_giftag(chain, i, tex);
 		}
 
-		VECTOR* positions = &data->positions[last_index+1];
-		VECTOR* colours = &data->colours[last_index+1];
-		VECTOR* texcoords = texture_mapping? &data->texcoords[last_index+1] : NULL;
-		vertex_skin_data* skin_data = data->skin_data? &data->skin_data[last_index+1] : NULL;
-
 		int idxs_to_draw = (data->material_indices[i].end-last_index);
-		int idxs_drawn = 0;
 
 		while (idxs_to_draw > 0) {
-			owl_query_packet(CHANNEL_VIF1, texture_mapping? 20 : 10);    
+			owl_query_packet(CHANNEL_VIF1, 5);
 
-			int count = batch_size;
-			if (idxs_to_draw < batch_size)
+			int count = chunk_cap;
+			if (idxs_to_draw < chunk_cap)
 			{
 				count = idxs_to_draw;
 			}
 
-			if (texture_mapping) {
-				append_texture_tags(packet, tex, texture_id, COLOR_MODULATE);
-			}
-  
+			// bake_giftags stays dynamic: it embeds PrimContext. Everything else
+			// for this chunk lives in the pre-baked chain.
 			bake_giftags(packet, data, texture_mapping, i);
 
-			owl_add_unpack_data_ref(packet, 1, (void*)&data->materials[data->material_indices[i].index].diffuse, 1, 1);
-
-			if (data->skin_data) 
-				owl_add_unpack_data_ref(packet, 2, &skin_data[idxs_drawn], count*2, 1);
-
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 2 : 0), &positions[idxs_drawn], count, 1);
-			//owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 3 : 1), &normals[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 4 : 2), &colours[idxs_drawn], count, 1);
-
-			if (texcoords) 
-				owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 5 : 3), &texcoords[idxs_drawn], count, 1);
-
-			owl_add_cnt_tag(packet, texture_mapping? 5 : 1, owl_vif_code_double(VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
-
-			if (texture_mapping) {
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(3, 0, VIF_DIRECT, 0)); 
-
-				owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
-
-				int tw, th;
-				athena_set_tw_th(tex, &tw, &th);
-
-				owl_add_tag(packet, 
-					GS_TEX0_1+gsGlobal->PrimContext, 
-					GS_SETREG_TEX0((tex->Vram & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->TBW, 
-								  tex->PSM,
-								  tw, th, 
-								  gsGlobal->PrimAlphaEnable, 
-								  COLOR_MODULATE,
-								  (tex->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->ClutPSM, 
-								  0, 0, 
-								  tex->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
-				);
-
-				owl_add_tag(packet, GS_TEX1_1+gsGlobal->PrimContext, GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0));
-			}
-			
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));  
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
-			owl_add_uint(packet, VIF_CODE(mpg_addr, 0, (last_index == -1? VIF_MSCALF : VIF_MSCNT), 0)); 
+			owl_add_dma_call(packet, &chain->buffer[chain->chunk_offset[chunk_idx]]);
 
 			idxs_to_draw -= count;
-			idxs_drawn += count;
+			chunk_idx++;
 		}
 
 		last_index = data->material_indices[i].end;
@@ -565,37 +1374,46 @@ void draw_vu1_with_colors(athena_object_data *obj, int pass_state) {
 	owl_query_packet(CHANNEL_VIF1, 1);
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+
+	// Taken after the last chunk: the ring may have flushed mid-draw, so the
+	// chain this draw is riding is the current one.
+	chain->queued_gen = owl_flush_generation();
+	chain->has_queued = 1;
 }
 
 void draw_vu1_with_lights(athena_object_data *obj, int pass_state) {
 	athena_render_data *data = obj->data;
+
+	render_cook_compact_vertices(data);
 
 	int batch_size = BATCH_SIZE, mpg_addr = 0;
 
 	if (data->skeleton) {
 		batch_size = BATCH_SIZE_SKINNED;
 
-		process_animation(obj);
-
-		update_bone_transforms(obj);
+		// The skeleton was advanced once already, by render_object() -- see the
+		// comment there. Objects drawn through several passes must not re-run it
+		// per pass, and the cull test upstream depends on it already being done.
 
 		mpg_addr = vu_mpg_preload(vu1_lights_skinned, true);
 	} else {
 		mpg_addr = vu_mpg_preload(vu1_lights, true);
 	}
 
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 16); // 5 for unpack static data + 2 for flush with end
+	athena_chain_cache *chain = &data->chain[PL_DEFAULT][pass_state];
+	if (!chain->buffer || chain->built_version != data->chain_version
+	    || chain->mpg_addr != mpg_addr) {
+		render_build_chain(obj, chain, pass_state, batch_size, mpg_addr, CHAIN_LIT);
+	}
+
+	// 7 unconditional quadwords (FLUSHE tag + 4+1 transform + 1 bone-matrix
+	// ref) plus the view block only when stale. render_view_qwc() must be
+	// read before render_upload_view(), which marks the block resident.
+	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 7 + render_view_qwc());
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSHE, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
 
-	owl_add_unpack_data_cnt(packet, 0, 1, 0);
-	owl_add_uquad_ptr(packet, &screen_scale);
-
-	owl_add_unpack_data_cnt(packet, 1, 4, 0);
-	owl_add_uquad_ptr(packet, &(world_screen[0]));
-	owl_add_uquad_ptr(packet, &(world_screen[4]));
-	owl_add_uquad_ptr(packet, &(world_screen[8]));
-	owl_add_uquad_ptr(packet, &(world_screen[12]));
+	render_upload_view(packet);
 
 	owl_add_unpack_data_cnt(packet, 5, 4, 0);
 	owl_add_uquad_ptr(packet, &(obj->transform[0]));
@@ -603,16 +1421,20 @@ void draw_vu1_with_lights(athena_object_data *obj, int pass_state) {
 	owl_add_uquad_ptr(packet, &(obj->transform[8]));
 	owl_add_uquad_ptr(packet, &(obj->transform[12]));
 
-	owl_add_unpack_data_cnt(packet, 9, 1, 0);
-	owl_add_uquad_ptr(packet, getCameraPosition());
-
 	if (obj->bone_matrices) {
-		owl_add_unpack_data_ref(packet, 141, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
+		owl_add_unpack_data_ref(packet, 880, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
 	}
+
+	// Never chunk against batch_size directly: it drives the VU-mem offset
+	// formulas (2+batch_size*N) and must match mem_layout.i's strides.
+	// chunk_cap floors to a multiple of 12 -- 4 for the unpack rounding, and
+	// 3 so a chunk boundary never splits a triangle across two XGKICKs.
+	int chunk_cap = batch_size - (batch_size % 12);
 
 	int last_index = -1;
 	GSSURFACE* tex = NULL;
 	int texture_id;
+	uint32_t chunk_idx = 0;
 	for(int i = 0; i < data->material_index_count; i++) {
 		bool texture_mapping = (((data->materials[data->material_indices[i].index].texture_id != -1) && data->attributes.texture_mapping) || pass_state);
 
@@ -632,83 +1454,36 @@ void draw_vu1_with_lights(athena_object_data *obj, int pass_state) {
 			if (cur_tex != tex) {
 				texture_id = texture_manager_bind(gsGlobal, cur_tex, true);
 				tex = cur_tex;
+
+				// Hoisted out of the chunk loop: one MARK+IRQ per texture change
+				// instead of one per chunk.
+				owl_query_packet(CHANNEL_VIF1, 1);
+				render_trigger_texture_upload(packet, texture_id);
 			}
+
+			// Refreshed per draw, not per rebind: PrimContext flips every frame.
+			render_update_tex_giftag(chain, i, tex);
 		}
 
-		VECTOR* positions = &data->positions[last_index+1];
-		VECTOR* texcoords = texture_mapping? &data->texcoords[last_index+1] : NULL;
-		VECTOR* normals = &data->normals[last_index+1];
-		VECTOR* colours = &data->colours[last_index+1];
-		vertex_skin_data* skin_data = data->skin_data? &data->skin_data[last_index+1] : NULL;
-
 		int idxs_to_draw = (data->material_indices[i].end-last_index);
-		int idxs_drawn = 0;
 
 		while (idxs_to_draw > 0) {
-			owl_query_packet(CHANNEL_VIF1, texture_mapping? 22 : 12);
+			owl_query_packet(CHANNEL_VIF1, 5);
 
-			int count = batch_size;
-			if (idxs_to_draw < batch_size)
+			int count = chunk_cap;
+			if (idxs_to_draw < chunk_cap)
 			{
 				count = idxs_to_draw;
 			}
 
-			if (texture_mapping) {
-				append_texture_tags(packet, tex, texture_id, COLOR_MODULATE);
-			}
-
+			// bake_giftags stays dynamic: it embeds PrimContext. Everything else
+			// for this chunk lives in the pre-baked chain.
 			bake_giftags(packet, data, texture_mapping, i);
-			
-			owl_add_unpack_data_ref(packet, 1, (void*)&data->materials[data->material_indices[i].index].diffuse, 1, 1);
 
-			if (data->skin_data) 
-				owl_add_unpack_data_ref(packet, 2, &skin_data[idxs_drawn], count*2, 1);
-
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 2 : 0), &positions[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 3 : 1), &normals[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 4 : 2), &colours[idxs_drawn], count, 1);
-
-			if (texcoords) 
-				owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 5 : 3), &texcoords[idxs_drawn], count, 1);
-			
-			owl_add_cnt_tag(packet, texture_mapping? 5 : 1, owl_vif_code_double(VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
-
-			if (texture_mapping) {
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(3, 0, VIF_DIRECT, 0)); 
-
-				owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
-
-				int tw, th;
-				athena_set_tw_th(tex, &tw, &th);
-
-				owl_add_tag(packet, 
-					GS_TEX0_1+gsGlobal->PrimContext, 
-					GS_SETREG_TEX0((tex->Vram & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->TBW, 
-								  tex->PSM,
-								  tw, th, 
-								  gsGlobal->PrimAlphaEnable, 
-								  COLOR_MODULATE,
-								  (tex->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->ClutPSM, 
-								  0, 0, 
-								  tex->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
-				);
-
-				owl_add_tag(packet, GS_TEX1_1+gsGlobal->PrimContext, GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0));
-			}
-			
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
-			owl_add_uint(packet, VIF_CODE(mpg_addr, 0, (last_index == -1? VIF_MSCALF : VIF_MSCNT), 0)); 
+			owl_add_dma_call(packet, &chain->buffer[chain->chunk_offset[chunk_idx]]);
 
 			idxs_to_draw -= count;
-			idxs_drawn += count;
-			
+			chunk_idx++;
 		}
 
 		last_index = data->material_indices[i].end;
@@ -717,37 +1492,46 @@ void draw_vu1_with_lights(athena_object_data *obj, int pass_state) {
 	owl_query_packet(CHANNEL_VIF1, 1);
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+
+	// Taken after the last chunk: the ring may have flushed mid-draw, so the
+	// chain this draw is riding is the current one.
+	chain->queued_gen = owl_flush_generation();
+	chain->has_queued = 1;
 }
 
 void draw_vu1_with_spec_lights(athena_object_data *obj, int pass_state) {
 	athena_render_data *data = obj->data;
+
+	render_cook_compact_vertices(data);
 
 	int batch_size = BATCH_SIZE, mpg_addr = 0;
 
 	if (data->skeleton) {
 		batch_size = BATCH_SIZE_SKINNED;
 
-		process_animation(obj);
-
-		update_bone_transforms(obj);
+		// The skeleton was advanced once already, by render_object() -- see the
+		// comment there. Objects drawn through several passes must not re-run it
+		// per pass, and the cull test upstream depends on it already being done.
 
 		mpg_addr = vu_mpg_preload(vu1_specular_skinned, true);
 	} else {
 		mpg_addr = vu_mpg_preload(vu1_specular, true);
 	}
 
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 16); // 5 for unpack static data + 2 for flush with end
+	athena_chain_cache *chain = &data->chain[PL_SPECULAR][pass_state];
+	if (!chain->buffer || chain->built_version != data->chain_version
+	    || chain->mpg_addr != mpg_addr) {
+		render_build_chain(obj, chain, pass_state, batch_size, mpg_addr, CHAIN_LIT);
+	}
+
+	// 7 unconditional quadwords (FLUSHE tag + 4+1 transform + 1 bone-matrix
+	// ref) plus the view block only when stale. render_view_qwc() must be
+	// read before render_upload_view(), which marks the block resident.
+	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 7 + render_view_qwc());
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSHE, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
 
-	owl_add_unpack_data_cnt(packet, 0, 1, 0);
-	owl_add_uquad_ptr(packet, &screen_scale);
-
-	owl_add_unpack_data_cnt(packet, 1, 4, 0);
-	owl_add_uquad_ptr(packet, &(world_screen[0]));
-	owl_add_uquad_ptr(packet, &(world_screen[4]));
-	owl_add_uquad_ptr(packet, &(world_screen[8]));
-	owl_add_uquad_ptr(packet, &(world_screen[12]));
+	render_upload_view(packet);
 
 	owl_add_unpack_data_cnt(packet, 5, 4, 0);
 	owl_add_uquad_ptr(packet, &(obj->transform[0]));
@@ -755,18 +1539,22 @@ void draw_vu1_with_spec_lights(athena_object_data *obj, int pass_state) {
 	owl_add_uquad_ptr(packet, &(obj->transform[8]));
 	owl_add_uquad_ptr(packet, &(obj->transform[12]));
 
-	owl_add_unpack_data_cnt(packet, 9, 1, 0);
-	owl_add_uquad_ptr(packet, getCameraPosition());
-
 	if (obj->bone_matrices) {
-		owl_add_unpack_data_ref(packet, 141, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
+		owl_add_unpack_data_ref(packet, 880, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
 	}
 
 	//owl_add_end_tag(packet);
 
+	// Never chunk against batch_size directly: it drives the VU-mem offset
+	// formulas (2+batch_size*N) and must match mem_layout.i's strides.
+	// chunk_cap floors to a multiple of 12 -- 4 for the unpack rounding, and
+	// 3 so a chunk boundary never splits a triangle across two XGKICKs.
+	int chunk_cap = batch_size - (batch_size % 12);
+
 	int last_index = -1;
 	GSSURFACE* tex = NULL;
 	int texture_id;
+	uint32_t chunk_idx = 0;
 	for(int i = 0; i < data->material_index_count; i++) {
 		bool texture_mapping = (((data->materials[data->material_indices[i].index].texture_id != -1) && data->attributes.texture_mapping) || pass_state);
 
@@ -786,81 +1574,36 @@ void draw_vu1_with_spec_lights(athena_object_data *obj, int pass_state) {
 			if (cur_tex != tex) {
 				texture_id = texture_manager_bind(gsGlobal, cur_tex, true);
 				tex = cur_tex;
+
+				// Hoisted out of the chunk loop: one MARK+IRQ per texture change
+				// instead of one per chunk.
+				owl_query_packet(CHANNEL_VIF1, 1);
+				render_trigger_texture_upload(packet, texture_id);
 			}
+
+			// Refreshed per draw, not per rebind: PrimContext flips every frame.
+			render_update_tex_giftag(chain, i, tex);
 		}
 
-		VECTOR* positions = &data->positions[last_index+1];
-		VECTOR* texcoords = texture_mapping? &data->texcoords[last_index+1] : NULL;
-		VECTOR* normals = &data->normals[last_index+1];
-		VECTOR* colours = &data->colours[last_index+1];
-		vertex_skin_data* skin_data = data->skin_data? &data->skin_data[last_index+1] : NULL;
-
 		int idxs_to_draw = (data->material_indices[i].end-last_index);
-		int idxs_drawn = 0;
 
 		while (idxs_to_draw > 0) {
-			owl_query_packet(CHANNEL_VIF1, texture_mapping? 21 : 11);
+			owl_query_packet(CHANNEL_VIF1, 5);
 
-			int count = batch_size;
-			if (idxs_to_draw < batch_size)
+			int count = chunk_cap;
+			if (idxs_to_draw < chunk_cap)
 			{
 				count = idxs_to_draw;
 			}
-			if (texture_mapping) {
-				append_texture_tags(packet, tex, texture_id, COLOR_MODULATE);
-			}
 
+			// bake_giftags stays dynamic: it embeds PrimContext. Everything else
+			// for this chunk lives in the pre-baked chain.
 			bake_giftags(packet, data, texture_mapping, i);
-			
-			owl_add_unpack_data_ref(packet, 1, (void*)&data->materials[data->material_indices[i].index].diffuse, 1, 1);
 
-			if (data->skin_data) 
-				owl_add_unpack_data_ref(packet, 2, &skin_data[idxs_drawn], count*2, 1);
-
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 2 : 0), &positions[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 3 : 1), &normals[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 4 : 2), &colours[idxs_drawn], count, 1);
-
-			if (texcoords) 
-				owl_add_unpack_data_ref(packet, 2+batch_size*(data->skin_data? 5 : 3), &texcoords[idxs_drawn], count, 1);
-
-			owl_add_cnt_tag(packet, texture_mapping? 5 : 1, owl_vif_code_double(VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
-
-			if (texture_mapping) {
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(3, 0, VIF_DIRECT, 0)); 
-
-				owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
-
-				int tw, th;
-				athena_set_tw_th(tex, &tw, &th);
-
-				owl_add_tag(packet, 
-					GS_TEX0_1+gsGlobal->PrimContext, 
-					GS_SETREG_TEX0((tex->Vram & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->TBW, 
-								  tex->PSM,
-								  tw, th, 
-								  gsGlobal->PrimAlphaEnable, 
-								  COLOR_MODULATE,
-								  (tex->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->ClutPSM, 
-								  0, 0, 
-								  tex->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
-				);
-
-				owl_add_tag(packet, GS_TEX1_1+gsGlobal->PrimContext, GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0));
-			}
-			
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
-			owl_add_uint(packet, VIF_CODE(mpg_addr, 0, (last_index == -1? VIF_MSCALF : VIF_MSCNT), 0)); 
+			owl_add_dma_call(packet, &chain->buffer[chain->chunk_offset[chunk_idx]]);
 
 			idxs_to_draw -= count;
-			idxs_drawn += count;
+			chunk_idx++;
 		}
 
 		last_index = data->material_indices[i].end;
@@ -869,39 +1612,48 @@ void draw_vu1_with_spec_lights(athena_object_data *obj, int pass_state) {
 	owl_query_packet(CHANNEL_VIF1, 1);
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+
+	// Taken after the last chunk: the ring may have flushed mid-draw, so the
+	// chain this draw is riding is the current one.
+	chain->queued_gen = owl_flush_generation();
+	chain->has_queued = 1;
 }
 
 void draw_vu1_with_lights_ref(athena_object_data *obj, int pass_state) {
 	athena_render_data *data = obj->data;
+
+	render_cook_compact_vertices(data);
 
 	int batch_size = BATCH_SIZE, mpg_addr = 0;
 
 	if (data->skeleton) {
 		batch_size = BATCH_SIZE_SKINNED;
 
-		process_animation(obj);
-
-		update_bone_transforms(obj);
+		// The skeleton was advanced once already, by render_object() -- see the
+		// comment there. Objects drawn through several passes must not re-run it
+		// per pass, and the cull test upstream depends on it already being done.
 
 		mpg_addr = vu_mpg_preload(vu1_lights_reflection, true);
 	} else {
 		mpg_addr = vu_mpg_preload(vu1_lights_reflection, true);
 	}
+
+	athena_chain_cache *chain = &data->ref_chain;
+	if (!chain->buffer || chain->built_version != data->chain_version
+	    || chain->mpg_addr != mpg_addr) {
+		render_build_chain(obj, chain, pass_state, batch_size, mpg_addr, CHAIN_REF);
+	}
 		
 	
 
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 16); // 5 for unpack static data + 2 for flush with end
+	// 7 unconditional quadwords (FLUSHE tag + 4+1 transform + 1 bone-matrix
+	// ref) plus the view block only when stale. render_view_qwc() must be
+	// read before render_upload_view(), which marks the block resident.
+	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 7 + render_view_qwc());
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSHE, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
 
-	owl_add_unpack_data_cnt(packet, 0, 1, 0);
-	owl_add_uquad_ptr(packet, &screen_scale);
-
-	owl_add_unpack_data_cnt(packet, 1, 4, 0);
-	owl_add_uquad_ptr(packet, &(world_screen[0]));
-	owl_add_uquad_ptr(packet, &(world_screen[4]));
-	owl_add_uquad_ptr(packet, &(world_screen[8]));
-	owl_add_uquad_ptr(packet, &(world_screen[12]));
+	render_upload_view(packet);
 
 	owl_add_unpack_data_cnt(packet, 5, 4, 0);
 	owl_add_uquad_ptr(packet, &(obj->transform[0]));
@@ -909,18 +1661,22 @@ void draw_vu1_with_lights_ref(athena_object_data *obj, int pass_state) {
 	owl_add_uquad_ptr(packet, &(obj->transform[8]));
 	owl_add_uquad_ptr(packet, &(obj->transform[12]));
 
-	owl_add_unpack_data_cnt(packet, 9, 1, 0);
-	owl_add_uquad_ptr(packet, getCameraPosition());
-
 	if (obj->bone_matrices) {
-		owl_add_unpack_data_ref(packet, 141, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
+		owl_add_unpack_data_ref(packet, 880, (void*)obj->bone_matrices, data->skeleton->bone_count*4, 0);
 	}
 
 	//owl_add_end_tag(packet);
 
+	// Never chunk against batch_size directly: it drives the VU-mem offset
+	// formulas (2+batch_size*N) and must match mem_layout.i's strides.
+	// chunk_cap floors to a multiple of 12 -- 4 for the unpack rounding, and
+	// 3 so a chunk boundary never splits a triangle across two XGKICKs.
+	int chunk_cap = batch_size - (batch_size % 12);
+
 	int last_index = -1;
 	GSSURFACE* tex = NULL;
 	int texture_id;
+	uint32_t chunk_idx = 0;
 	for(int i = 0; i < data->material_index_count; i++) {
 		bool texture_mapping = ((data->materials[data->material_indices[i].index].ref_texture_id != -1));
 
@@ -929,82 +1685,41 @@ void draw_vu1_with_lights_ref(athena_object_data *obj, int pass_state) {
 			if (cur_tex != tex) {
 				texture_id = texture_manager_bind(gsGlobal, cur_tex, true);
 				tex = cur_tex;
+
+				// Hoisted out of the chunk loop: one MARK+IRQ per texture change
+				// instead of one per chunk.
+				owl_query_packet(CHANNEL_VIF1, 1);
+				render_trigger_texture_upload(packet, texture_id);
 			}
 		} else {
+			// last_index must still advance past this material: it is the running
+			// cursor into the vertex arrays, not a "last drawn" marker.
+			last_index = data->material_indices[i].end;
 			continue;
 		}
 
-		VECTOR* positions = &data->positions[last_index+1];
-		VECTOR* normals = &data->normals[last_index+1];
-		VECTOR* colours = &data->colours[last_index+1];
-		vertex_skin_data* skin_data = data->skin_data? &data->skin_data[last_index+1] : NULL;
-
 		int idxs_to_draw = (data->material_indices[i].end-last_index);
-		int idxs_drawn = 0;
+
+		// Refreshed per draw, not per rebind: PrimContext flips every frame.
+		render_update_tex_giftag(chain, i, tex);
 
 		while (idxs_to_draw > 0) {
-			owl_query_packet(CHANNEL_VIF1, texture_mapping? 21 : 11);
+			owl_query_packet(CHANNEL_VIF1, 5);
 
-			int count = batch_size;
-			if (idxs_to_draw < batch_size)
+			int count = chunk_cap;
+			if (idxs_to_draw < chunk_cap)
 			{
 				count = idxs_to_draw;
 			}
 
-			if (texture_mapping) {
-				append_texture_tags(packet, tex, texture_id, COLOR_MODULATE);
-			}
-
+			// bake_giftags stays dynamic: it embeds PrimContext. Everything else
+			// for this chunk lives in the pre-baked chain.
 			bake_giftags(packet, data, texture_mapping, i);
-			
-			owl_add_unpack_data_ref(packet, 1, (void*)&data->materials[data->material_indices[i].index].diffuse, 1, 1);
 
-			if (data->skin_data) {
-				// unpack_list_append(packet, &skin_data[idxs_drawn], count*2);
-			}
-
-			owl_add_unpack_data_ref(packet, 2,                &positions[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+batch_size,     &normals[idxs_drawn], count, 1);
-			owl_add_unpack_data_ref(packet, 2+(batch_size*2), &colours[idxs_drawn], count, 1);
-
-			owl_add_cnt_tag(packet, texture_mapping? 5 : 1, owl_vif_code_double(VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
-
-			if (texture_mapping) {
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(3, 0, VIF_DIRECT, 0)); 
-
-				owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
-
-				int tw, th;
-				athena_set_tw_th(tex, &tw, &th);
-
-				owl_add_tag(packet, 
-					GS_TEX0_1+gsGlobal->PrimContext, 
-					GS_SETREG_TEX0((tex->Vram & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->TBW, 
-								  tex->PSM,
-								  tw, th, 
-								  gsGlobal->PrimAlphaEnable, 
-								  COLOR_MODULATE,
-								  (tex->VramClut & ~TRANSFER_REQUEST_MASK)/256, 
-								  tex->ClutPSM, 
-								  0, 0, 
-								  tex->VramClut? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
-				);
-
-				owl_add_tag(packet, GS_TEX1_1+gsGlobal->PrimContext, GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0));
-			}
-			
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
-			owl_add_uint(packet, VIF_CODE(mpg_addr, 0, (last_index == -1? VIF_MSCALF : VIF_MSCNT), 0)); 
+			owl_add_dma_call(packet, &chain->buffer[chain->chunk_offset[chunk_idx]]);
 
 			idxs_to_draw -= count;
-			idxs_drawn += count;
-			
+			chunk_idx++;
 		}
 
 		last_index = data->material_indices[i].end;
@@ -1013,4 +1728,9 @@ void draw_vu1_with_lights_ref(athena_object_data *obj, int pass_state) {
 	owl_query_packet(CHANNEL_VIF1, 1);
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+
+	// Taken after the last chunk: the ring may have flushed mid-draw, so the
+	// chain this draw is riding is the current one.
+	chain->queued_gen = owl_flush_generation();
+	chain->has_queued = 1;
 }

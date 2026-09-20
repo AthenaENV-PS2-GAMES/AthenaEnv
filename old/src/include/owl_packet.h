@@ -80,6 +80,29 @@ owl_packet *owl_query_packet(owl_channel channel, size_t size);
 // flush a requested packet
 void owl_flush_packet();
 
+// Index of the chain currently being filled: anything appended to the packet
+// right now goes into chain owl_flush_generation(), which the DMAC only reads
+// once a later flush has sent it.
+//
+// A caller that hands the DMAC a DMA_REF to its own memory (rather than copying
+// it into the packet) must not overwrite that memory before the chain has been
+// read, or the DMAC ends up reading whatever the CPU wrote afterwards. Record
+// the generation after queueing the draw, and pass it to owl_wait_generation()
+// before touching the buffer again.
+uint32_t owl_flush_generation();
+
+// Non-blocking: has the DMAC finished reading the given chain? Conservative --
+// the answer only turns true at a flush, so a chain that has actually drained
+// still reads as busy until then. Meant for picking a free buffer out of a pool
+// without touching the DMAC.
+int owl_generation_read(uint32_t generation);
+
+// Blocks until the DMAC has read the given chain. Returns immediately when that
+// already happened, which is the common case -- the ring flushes on its own
+// several times a frame. Otherwise it costs a pipeline bubble: the chain gets
+// sent early if it is still being filled, and then waited on.
+void owl_wait_generation(uint32_t generation);
+
 owl_controller *owl_get_controller();
 
 void vu1_set_double_buffer_settings(uint32_t base, uint32_t offset);
@@ -140,6 +163,53 @@ inline void owl_add_unpack_data_cnt(owl_packet *packet, uint32_t t_dest_address,
     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_CNT, 0, 0, 0));
     owl_add_uint(packet, VIF_CODE(0x0101 | (0 << 8), 0, VIF_STCYCL, 0));
     owl_add_uint(packet, VIF_CODE(t_dest_address | ((uint32_t)1 << 14) | ((uint32_t)t_use_top << 15), ((t_size == 256) ? 0 : t_size), UNPACK_V4_32 | ((uint32_t)0 << 4) | 0x60, 0));
+}
+
+// Like owl_add_unpack_data_ref, but for source formats narrower than V4_32
+// (e.g. UNPACK_V3_32, UNPACK_V4_8, UNPACK_V2_16). t_usn selects the VIF USN
+// bit: 1 = zero-extend (unsigned), 0 = sign-extend (signed) for 8/16-bit
+// component formats; it has no effect on 32-bit formats.
+//
+// The VIF's own unpack consumption is word-granular (real hardware rounds
+// consumed bytes up to the nearest 4-byte word, not quadword), but a
+// DMA_REF's QWC is inherently quadword-granular -- the DMAC cannot inject a
+// fractional quadword. If QWC*16 were simply ceil(count*bytes_per_elem) and
+// left leftover slack bytes in the final quadword, the VIF does NOT discard
+// them: it keeps decoding the VIFcode stream byte-continuously, so those
+// leftover bytes get misread as the start of the next VIFcode, desyncing
+// VIF1 entirely ("Unknown VifCmd"). Rounding t_count up to a multiple of 4
+// instead makes count*bytes_per_elem an exact multiple of 16 for every
+// compact format here (all of them are already word-sized: 12 or 4 bytes),
+// so QWC*16 always exactly matches what the VIF consumes -- zero slack, by
+// construction, rather than by hoping the leftover bytes happen to be NOP.
+// Callers must keep their own true (unrounded) count for anything that
+// controls how many vertices actually get drawn (GIFtag NLOOP, VIF_ITOP);
+// this only pads how many elements get *decoded* into VU mem, and source
+// arrays must have a few spare elements past the logical end to cover the
+// resulting over-read (see render_cook_compact_vertices's +4 capacity).
+inline void owl_add_unpack_data_ref_packed(owl_packet *packet, uint32_t t_dest_address, void *t_data, uint32_t t_count, uint32_t t_format, uint32_t t_bytes_per_elem, uint8_t t_use_top, uint8_t t_usn) {
+    uint32_t rounded_count = (t_count + 3) & ~3u;
+    uint32_t qwc = (rounded_count * t_bytes_per_elem) / 16;
+
+    owl_add_ulong(packet, DMA_TAG(qwc, 0, DMA_REF, 0, t_data, 0));
+    owl_add_uint(packet, VIF_CODE(0x0101 | (0 << 8), 0, VIF_STCYCL, 0));
+    owl_add_uint(packet, VIF_CODE(t_dest_address | ((uint32_t)(t_usn ? 1 : 0) << 14) | ((uint32_t)t_use_top << 15), ((rounded_count == 256) ? 0 : rounded_count), t_format | 0x60, 0));
+}
+
+// Jumps the DMA channel to a pre-baked sub-chain at t_chain_addr: transfers
+// zero inline quadwords (this tag carries no payload of its own) and saves
+// the tag right after this one as the return address, which the sub-chain
+// resumes via owl_add_dma_ret(). Used to skip re-authoring (branch+store
+// into the uncached packet ring) the parts of a draw call's chain that are
+// identical frame-to-frame for a static mesh -- see render_build_chain.
+inline void owl_add_dma_call(owl_packet *packet, void *t_chain_addr) {
+    owl_add_tag(packet, 0, DMA_TAG(0, 0, DMA_CALL, 0, t_chain_addr, 0));
+}
+
+// Terminates a pre-baked sub-chain reached via owl_add_dma_call(), resuming
+// the caller's chain at the saved return address.
+inline void owl_add_dma_ret(owl_packet *packet) {
+    owl_add_tag(packet, 0, DMA_TAG(0, 0, DMA_RET, 0, 0, 0));
 }
 
 inline void owl_add_unpack_data_auto(owl_packet *packet, uint32_t t_dest_address, void *t_data, uint32_t t_size, uint8_t t_use_top) {

@@ -13691,23 +13691,40 @@ static no_inline __exception int js_add_slow(JSContext *ctx, JSValue *sp)
 
     if ((tag1 == JS_TAG_INT || JS_TAG_IS_FLOAT32(tag1) || JS_TAG_IS_FLOAT64(tag1)) &&
         (tag2 == JS_TAG_INT || JS_TAG_IS_FLOAT32(tag2) || JS_TAG_IS_FLOAT64(tag2))) {
-        float f1, f2;
-        if (JS_ToFloat32Free(ctx, &f1, op1)) {
-            JS_FreeValue(ctx, op2);
-            goto exception;
+        /* Only narrow to float32 when a float32 is actually involved.
+         *
+         * This used to convert BOTH operands with JS_ToFloat32Free
+         * unconditionally, so any mixed pair that missed the interpreter's
+         * fast paths came back as float32 even with no float32 in sight:
+         *   - `1 + 0.1` (int + float64) gave 1.10000002384... instead of 1.1
+         *   - int + int that overflowed into here (the `goto add_slow` above)
+         *     lost precision instead of widening to double, so
+         *     2147483647 + 1 no longer produced an exact 2147483648
+         * The float64+float64 block that used to follow was unreachable for
+         * the same reason - this condition already subsumed it - so it has
+         * been folded into the else below.
+         *
+         * float32 staying contagious when it IS present matches
+         * js_binary_arith_slow, which is deliberate for this fork. */
+        if (JS_TAG_IS_FLOAT32(tag1) || JS_TAG_IS_FLOAT32(tag2)) {
+            float f1, f2;
+            if (JS_ToFloat32Free(ctx, &f1, op1)) {
+                JS_FreeValue(ctx, op2);
+                goto exception;
+            }
+            if (JS_ToFloat32Free(ctx, &f2, op2))
+                goto exception;
+            sp[-2] = JS_NewFloat32(ctx, f1 + f2);
+        } else {
+            double d1, d2;
+            if (JS_ToFloat64Free(ctx, &d1, op1)) {
+                JS_FreeValue(ctx, op2);
+                goto exception;
+            }
+            if (JS_ToFloat64Free(ctx, &d2, op2))
+                goto exception;
+            sp[-2] = __JS_NewFloat64(ctx, d1 + d2);
         }
-        if (JS_ToFloat32Free(ctx, &f2, op2))
-            goto exception;
-        sp[-2] = JS_NewFloat32(ctx, f1 + f2);
-        return 0;
-
-    }
-
-    if (tag1 == JS_TAG_FLOAT64 && tag2 == JS_TAG_FLOAT64) {
-        double d1, d2;
-        d1 = JS_VALUE_GET_FLOAT64(op1);
-        d2 = JS_VALUE_GET_FLOAT64(op2);
-        sp[-2] = __JS_NewFloat64(ctx, d1 + d2);
         return 0;
     }
 
@@ -14056,10 +14073,6 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
         }
         JS_FreeValue(ctx, op1);
         JS_FreeValue(ctx, op2);
-    } else if ((tag1 <= JS_TAG_NULL || tag1 == JS_TAG_FLOAT64) &&
-               (tag2 <= JS_TAG_NULL || tag2 == JS_TAG_FLOAT64)) {
-        /* fast path for float64/int */
-        goto float64_compare;
     } else if ((tag1 <= JS_TAG_NULL || tag1 == JS_CUSTOM_TAG_FLOAT32) &&
                (tag2 <= JS_TAG_NULL || tag2 == JS_CUSTOM_TAG_FLOAT32)) {
         float f1, f2;
@@ -14090,6 +14103,22 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
         }
 
         goto done;
+    } else if ((tag1 <= JS_TAG_NULL || tag1 == JS_TAG_FLOAT64 ||
+                tag1 == JS_CUSTOM_TAG_FLOAT32) &&
+               (tag2 <= JS_TAG_NULL || tag2 == JS_TAG_FLOAT64 ||
+                tag2 == JS_CUSTOM_TAG_FLOAT32)) {
+        /* fast path for float64/float32/int, in any combination.
+         * The float32-only case is handled above; this catches the MIXED
+         * ones - notably float32 vs float64, which previously matched no
+         * branch at all and fell through to the bigint path below, ending up
+         * in float64_compare with a float32 tag that it read via
+         * JS_VALUE_GET_INT - i.e. comparing the float's raw bit pattern as an
+         * integer. `2.44 <= 0.072f` came out true because 0.072f's bits are
+         * 0x3D937400 = 1033053184. Mixing the two is easy to hit from JS: any
+         * expression built only from `f` literals is float32, while anything
+         * returning a plain double (a native call's result, Math.*, JSON) is
+         * float64. */
+        goto float64_compare;
     } else {
         if (((tag1 == JS_TAG_BIG_INT && tag2 == JS_TAG_STRING) ||
              (tag2 == JS_TAG_BIG_INT && tag1 == JS_TAG_STRING)) &&
@@ -14141,14 +14170,22 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
             double d1, d2;
 
         float64_compare:
-            /* can use floating point comparison */
+            /* can use floating point comparison. float32 must be widened
+             * explicitly: without this it fell into the int branch below and
+             * the float's bit pattern was compared as an integer. Widening
+             * float32 to double is exact, so this is also correct for the
+             * float32-vs-float32 case. */
             if (tag1 == JS_TAG_FLOAT64) {
                 d1 = JS_VALUE_GET_FLOAT64(op1);
+            } else if (tag1 == JS_CUSTOM_TAG_FLOAT32) {
+                d1 = (double)JS_VALUE_GET_FLOAT32(op1);
             } else {
                 d1 = JS_VALUE_GET_INT(op1);
             }
             if (tag2 == JS_TAG_FLOAT64) {
                 d2 = JS_VALUE_GET_FLOAT64(op2);
+            } else if (tag2 == JS_CUSTOM_TAG_FLOAT32) {
+                d2 = (double)JS_VALUE_GET_FLOAT32(op2);
             } else {
                 d2 = JS_VALUE_GET_INT(op2);
             }
@@ -14620,8 +14657,18 @@ static no_inline __exception int js_add_slow(JSContext *ctx, JSValue *sp)
     op2 = sp[-1];
     tag1 = JS_VALUE_GET_TAG(op1);
     tag2 = JS_VALUE_GET_TAG(op2);
-    if ((tag1 == JS_TAG_INT || JS_TAG_IS_FLOAT32(tag1) || JS_TAG_IS_FLOAT64(tag1)) &&
+    if ((JS_TAG_IS_FLOAT32(tag1) || JS_TAG_IS_FLOAT32(tag2)) &&
+        (tag1 == JS_TAG_INT || JS_TAG_IS_FLOAT32(tag1) || JS_TAG_IS_FLOAT64(tag1)) &&
         (tag2 == JS_TAG_INT || JS_TAG_IS_FLOAT32(tag2) || JS_TAG_IS_FLOAT64(tag2))) {
+        /* Only narrow when a float32 is actually one of the operands. The
+         * float32 test used to be missing, so this branch also swallowed
+         * int+float64 and int+int-overflow and pushed them through float32:
+         * `1 + 0.1` gave 1.10000002384..., and 2147483647 + 1 came back as
+         * 2147483520 instead of an exact 2147483648. It also made the
+         * int/float64 branch just below unreachable.
+         *
+         * NOTE: this is the non-CONFIG_BIGNUM copy of js_add_slow. The file
+         * carries two, and only this one is compiled now that bignum is gone. */
         float f1, f2;
         if (JS_ToFloat32Free(ctx, &f1, op1)) {
             JS_FreeValue(ctx, op2);
@@ -14962,6 +15009,12 @@ static BOOL js_strict_eq2(JSContext *ctx, JSValue op1, JSValue op2,
             goto number_test;
         } else if (tag2 == JS_TAG_FLOAT64) {
             d2 = JS_VALUE_GET_FLOAT64(op2);
+            goto number_test;
+        } else if (tag2 == JS_CUSTOM_TAG_FLOAT32) {
+            /* Mirror of the float32 handling in the JS_TAG_FLOAT64 case just
+             * below: an int and a float32 are both Numbers, so `5 === 5.0f`
+             * has to be true. Without this it returned FALSE outright. */
+            d2 = (double)JS_VALUE_GET_FLOAT32(op2);
             goto number_test;
         } else {
             res = FALSE;
@@ -54657,6 +54710,36 @@ int JS_GetFunctionBytecodeInfo(JSContext *ctx, JSValueConst func_val,
     info->arg_count = b->arg_count;
     info->var_count = b->var_count;
     info->stack_size = b->stack_size;
+    info->cpool = b->cpool;
+    info->cpool_count = b->cpool_count;
+    info->closure_var_count = b->closure_var_count;
     
     return 0;
+}
+
+JSValueConst JS_GetFunctionClosureVarValue(JSContext *ctx, JSValueConst func_val,
+                                           int idx)
+{
+    JSObject *p;
+    JSFunctionBytecode *b;
+    JSVarRef **var_refs;
+
+    (void)ctx;
+    if (JS_VALUE_GET_TAG(func_val) != JS_TAG_OBJECT)
+        return JS_UNDEFINED;
+    p = JS_VALUE_GET_OBJ(func_val);
+    if (!p)
+        return JS_UNDEFINED;
+    if (p->class_id != JS_CLASS_BYTECODE_FUNCTION &&
+        p->class_id != JS_CLASS_GENERATOR_FUNCTION &&
+        p->class_id != JS_CLASS_ASYNC_FUNCTION &&
+        p->class_id != JS_CLASS_ASYNC_GENERATOR_FUNCTION)
+        return JS_UNDEFINED;
+    b = p->u.func.function_bytecode;
+    if (!b || idx < 0 || idx >= b->closure_var_count)
+        return JS_UNDEFINED;
+    var_refs = p->u.func.var_refs;
+    if (!var_refs || !var_refs[idx] || !var_refs[idx]->pvalue)
+        return JS_UNDEFINED;
+    return *var_refs[idx]->pvalue;
 }

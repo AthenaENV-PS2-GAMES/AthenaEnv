@@ -57,6 +57,11 @@ bool native_array_push_i32(NativeDynamicArray *arr, int32_t value);
 bool native_array_push_u32(NativeDynamicArray *arr, uint32_t value);
 bool native_array_push_f32(NativeDynamicArray *arr, float value);
 
+/* Bits variant: the JIT passes float values as raw 32-bit patterns in a GPR
+ * (integer arg register), so this wrapper avoids the float-in-FPU calling
+ * convention entirely by reinterpreting the bit pattern back into a float. */
+bool native_array_push_f32_bits(NativeDynamicArray *arr, uint32_t value_bits);
+
 /* Pop element from end */
 bool native_array_pop_i32(NativeDynamicArray *arr, int32_t *out_value);
 bool native_array_pop_u32(NativeDynamicArray *arr, uint32_t *out_value);

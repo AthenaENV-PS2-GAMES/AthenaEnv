@@ -24,7 +24,9 @@
 
     lq             st_offset, BUMP_OFFSET(vi00)
 
-    lq.w           bfc_multiplier, CLIPFAN_OFFSET(vi00)
+    ; w = culling direction (+1 back, -1 front, 0 off), x = winding flip:
+    ; -1 for a tristrip, whose winding alternates every vertex, else +1.
+    lq.xw           bfc_multiplier, CLIPFAN_OFFSET(vi00)
 
     ftoi0.w        bfc_sign_mask, bfc_multiplier
     mtir           z_sign_mask, bfc_sign_mask[w]
@@ -59,12 +61,29 @@ cull_init:
 culled_init:
     xtop    iBase
     xitop   vertCount
+    lq.w           bfc_multiplier, CLIPFAN_OFFSET(vi00) ; restart strip parity
 
     lq      primTag,        0(iBase) ; GIF tag - tell GS how many data we will send
     lq      matDiffuse,     1(iBase) ; RGBA
                                      ; u32 : R, G, B, A (0-128)
 
-    iaddiu    kickAddress,    iBase,  INBUF_SIZE       ; pointer for XGKICK
+    ; texGiftagAddr: 3 QW written directly by the EE (an AD giftag header +
+    ; TEX0 + TEX1, see render_build_chain tex_giftag unpack -- EOP=1,
+    ; a complete standalone packet), landing in the same double-buffered
+    ; window this chunk other input data does. Sent on its own, right now,
+    ; BEFORE the vertex loop -- not chained onto kickAddress below. That
+    ; ordering is required, not just tidy: a scissored triangle further down
+    ; can fire its own mid-loop XGKICK (see process_scissor_clip_offset.i)
+    ; that carries no texture state of its own, only whatever TEX0/TEX1 the
+    ; GS already has latched -- so this chunk texture state must reach the
+    ; GS before that can happen. Same PATH1, so XGKICK order is GS order.
+    iaddiu    texGiftagAddr,    iBase,  INBUF_SIZE
+    xgkick    texGiftagAddr
+
+    ; kickAddress = where WE store our own PRIM giftag + vertex stream, same
+    ; as always -- untouched by the texGiftagAddr split above, so
+    ; process_scissor_clip_offset.i keeps working unmodified.
+    iaddiu    kickAddress,    texGiftagAddr,  3
     iaddiu    destAddress,    kickAddress,  1       ; helper pointer for data inserting
     ;////////////////////////////////////////////
 
@@ -81,11 +100,16 @@ culled_init:
     iadd vertexCounter, vi00, vertCount ; loop vertCount times
     vertexLoop:
 
-        ;////////// --- Load loop data --- ////////// 
-        lq vertex,  POSITION_OFFSET(iBase)  
-        lq inColor, COLOR_OFFSET(iBase)  
-        lq stq,     TEXCOORD_OFFSET(iBase)          
-        ;////////////////////////////////////////////    
+        ;////////// --- Load loop data --- //////////
+        lq vertex,  POSITION_OFFSET(iBase)
+        DecompressPositionW vertex
+
+        lq inColorPacked, COLOR_OFFSET(iBase)
+        DecompressColor8 inColor, inColorPacked
+
+        lq stqPacked, TEXCOORD_OFFSET(iBase)
+        DecompressUV16 stq, stqPacked
+        ;////////////////////////////////////////////
 
 
         ;////////////// --- Vertex --- //////////////
@@ -110,13 +134,24 @@ culled_init:
 
 	    sub.xyz		vector, vertex3, vertex2
 
-        mulw.xyz       vector, vector, bfc_multiplier
 	    opmula.xyz	acc, vector, oldvector
 	    opmsub.xyz	crossproduct, oldvector, vector
 
+	    ; The direction factor scales the RESULT, not an edge: oldvector is last
+	    ; iteration edge and would carry last iteration factor, so with a factor
+	    ; that alternates (tristrip) the two would cancel out instead of flipping.
+	    mulw.z	crossproduct, crossproduct, bfc_multiplier
+
 	    fmand		z_sign, z_sign_mask
-        iaddiu		z_sign, z_sign, 0xFFE0
+        ; z_sign = 0x20 when the cross product is negative (back-facing): +0x7FE0
+        ; carries that into bit 15 of w, the GS ADC bit. Was 0xFFE0 -- inverted, and
+        ; over 15 bits, so VCL skipped the line outright and culling never ran.
+        iaddiu		z_sign, z_sign, 0x7FE0
         ior        iADC, iADC, z_sign
+
+        ; Next vertex of a tristrip is wound the other way round; x is -1 there
+        ; and +1 for a triangle list, where this is a no-op.
+        mulx.w        bfc_multiplier, bfc_multiplier, bfc_multiplier
         
         mfir.w		vertex, iADC
         ftoi4.xy    vertex, vertex
@@ -151,9 +186,10 @@ culled_init:
         iaddi   vertexCounter,  vertexCounter,  -1	; decrement the loop counter 
         ibne    vertexCounter,  vi00,   vertexLoop	; and repeat if needed
 
-    ;//////////////////////////////////////////// 
+    ;////////////////////////////////////////////
 
-    xgkick kickAddress ; dispatch to the GS rasterizer.
+    xgkick kickAddress ; dispatch our primTag+vertices. Texture state already
+                        ; went out earlier, standalone, via texGiftagAddr.
 
 --barrier
 --cont
@@ -170,11 +206,26 @@ scissor_init:
 init:
     xtop    iBase
     xitop   vertCount
+    lq.w           bfc_multiplier, CLIPFAN_OFFSET(vi00) ; restart strip parity
 
     lq      primTag,        0(iBase) ; GIF tag - tell GS how many data we will send
     lq      matDiffuse,     1(iBase) ; material diffuse color
 
-    iaddiu     kickAddress,    iBase, INBUF_SIZE
+    ; See the comment in culled_init: texGiftagAddr holds the EE-written AD
+    ; giftag (TEX0/TEX1) and gets XGKICKed standalone, right now, before this
+    ; triangle vertex processing starts. That ordering matters MORE here
+    ; than in culled_init: this is the accurate-clipping path, and a
+    ; scissored triangle below can fire its own mid-loop XGKICK (see
+    ; process_scissor_clip_offset.i "triangle fan" section) that carries no
+    ; texture state of its own -- it draws with whatever TEX0/TEX1 the GS
+    ; already has latched. Sending texGiftagAddr up front, before any of that
+    ; can run, is what keeps a scissored triangle from drawing with the
+    ; PREVIOUS chunk texture.
+    iaddiu     texGiftagAddr,    iBase, INBUF_SIZE
+    xgkick     texGiftagAddr
+
+    ; kickAddress = where we store our own PRIM giftag chain, same as always.
+    iaddiu     kickAddress,    texGiftagAddr,  3
     ;////////////////////////////////////////////
 
     ;/////////// --- Store tags --- /////////////
@@ -197,10 +248,15 @@ init:
     loop:
 
         ;////////// --- Load loop data --- //////////
-        lq inVert, POSITION_OFFSET(iBase)   
-        lq inColor, COLOR_OFFSET(iBase)    
-        lq stq,    TEXCOORD_OFFSET(iBase)       
-        ;////////////////////////////////////////////    
+        lq inVert, POSITION_OFFSET(iBase)
+        DecompressPositionW inVert
+
+        lq inColorPacked, COLOR_OFFSET(iBase)
+        DecompressColor8 inColor, inColorPacked
+
+        lq stqPacked, TEXCOORD_OFFSET(iBase)
+        DecompressUV16 stq, stqPacked
+        ;////////////////////////////////////////////
 
 
         ;////////////// --- Vertex --- //////////////
