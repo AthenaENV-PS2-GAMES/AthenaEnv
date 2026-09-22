@@ -35,9 +35,7 @@ static JSValue screen_flip(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     if (!flipScreen)
         return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
-    dbgprintf("[Screen] flip begin\n");
     flipScreen();
-    dbgprintf("[Screen] flip complete\n");
     return JS_UNDEFINED;
 }
 
@@ -48,6 +46,8 @@ static JSValue screen_clear(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     if (argc == 1 && !screen_color(ctx, argv[0], &color))
         return JS_EXCEPTION;
+    if (!getGSGLOBAL())
+        return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
     clearScreen(color);
     return JS_UNDEFINED;
 }
@@ -83,7 +83,19 @@ static JSValue screen_memory_stats(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (argc == 1 && JS_ToUint32(ctx, &mode, argv[0]))
         return JS_EXCEPTION;
+    if (mode < VRAM_SIZE || mode > VRAM_USED_DYNAMIC)
+        return JS_ThrowRangeError(ctx, "Screen.getMemoryStats mode is invalid");
     return JS_NewUint32(ctx, (uint32_t)getFreeVRAM(mode));
+}
+
+static JSValue screen_free_vram(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    if (!screen_argc(ctx, argc, 0, 0, "Screen.getFreeVRAM"))
+        return JS_EXCEPTION;
+    if (!getGSGLOBAL())
+        return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
+    return JS_NewUint32(ctx, (uint32_t)getFreeVRAM(VRAM_SIZE) -
+        (uint32_t)getFreeVRAM(VRAM_USED_TOTAL));
 }
 
 static JSValue screen_fps(JSContext *ctx, JSValueConst this_val, int argc,
@@ -124,7 +136,8 @@ static JSValue screen_get_mode(JSContext *ctx, JSValueConst this_val, int argc,
 static int screen_property_int(JSContext *ctx, JSValueConst object,
     const char *name, int32_t *result) {
     JSValue value = JS_GetPropertyStr(ctx, object, name);
-    int failed = JS_IsException(value) || JS_ToInt32(ctx, result, value);
+    int failed = JS_IsException(value) || JS_IsUndefined(value) ||
+        JS_ToInt32(ctx, result, value);
     JS_FreeValue(ctx, value);
     return !failed;
 }
@@ -133,6 +146,14 @@ static int screen_property_bool(JSContext *ctx, JSValueConst object,
     const char *name, bool *result) {
     JSValue value = JS_GetPropertyStr(ctx, object, name);
     if (JS_IsException(value)) {
+        JS_FreeValue(ctx, value);
+        return 0;
+    }
+    if (JS_IsUndefined(value)) {
+        JS_FreeValue(ctx, value);
+        return 0;
+    }
+    if (!JS_IsBool(value)) {
         JS_FreeValue(ctx, value);
         return 0;
     }
@@ -150,7 +171,7 @@ static JSValue screen_set_mode(JSContext *ctx, JSValueConst this_val, int argc,
     int32_t pass_count = 0;
     if (!screen_argc(ctx, argc, 1, 1, "Screen.setMode"))
         return JS_EXCEPTION;
-    if (!JS_IsObject(argv[0]) ||
+    if (!JS_IsObject(argv[0]) || JS_IsArray(ctx, argv[0]) ||
         !screen_property_int(ctx, argv[0], "mode", &mode) ||
         !screen_property_int(ctx, argv[0], "width", &width) ||
         !screen_property_int(ctx, argv[0], "height", &height) ||
@@ -180,10 +201,30 @@ static JSValue screen_set_mode(JSContext *ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, value);
     }
-    if (width <= 0 || height <= 0 || pass_count < 0)
-        return JS_ThrowRangeError(ctx, "Screen.setMode dimensions are invalid");
-    setVideoMode((s16)mode, width, height, psm, (s16)interlace, (s16)field,
-        zbuffering, psmz, double_buffering, (uint8_t)pass_count);
+    if (pass_count != 0)
+        return JS_ThrowRangeError(ctx,
+            "Screen.setMode pass_count is not supported");
+    if (width <= 0 || width > 2048 || (width % 64) != 0 ||
+        height <= 0 || height > 2048)
+        return JS_ThrowRangeError(ctx,
+            "Screen.setMode dimensions must be positive, width-aligned, and <= 2048");
+    if (interlace != GS_INTERLACED && interlace != GS_NONINTERLACED)
+        return JS_ThrowRangeError(ctx, "Screen.setMode interlace is invalid");
+    if (field != GS_FIELD && field != GS_FRAME)
+        return JS_ThrowRangeError(ctx, "Screen.setMode field is invalid");
+    if (psm != GS_PSM_CT16 && psm != GS_PSM_CT16S &&
+        psm != GS_PSM_CT24 && psm != GS_PSM_CT32)
+        return JS_ThrowRangeError(ctx, "Screen.setMode psm is invalid");
+    if (psmz != GS_ZBUF_16 && psmz != GS_ZBUF_16S &&
+        psmz != GS_ZBUF_24 && psmz != GS_ZBUF_32)
+        return JS_ThrowRangeError(ctx, "Screen.setMode psmz is invalid");
+    if (mode != GS_MODE_NTSC && mode != GS_MODE_PAL &&
+        mode != GS_MODE_DTV_480P && mode != GS_MODE_DTV_576P &&
+        mode != GS_MODE_DTV_720P && mode != GS_MODE_DTV_1080I)
+        return JS_ThrowRangeError(ctx, "Screen.setMode mode is invalid");
+    if (setVideoMode((s16)mode, width, height, psm, (s16)interlace, (s16)field,
+        zbuffering, psmz, double_buffering, (uint8_t)pass_count) < 0)
+        return JS_ThrowInternalError(ctx, "Screen.setMode failed to allocate video buffers");
     return JS_UNDEFINED;
 }
 
@@ -196,6 +237,9 @@ static JSValue screen_alpha_equation(JSContext *ctx, JSValueConst this_val,
         JS_ToInt32(ctx, &c, argv[2]) || JS_ToInt32(ctx, &d, argv[3]) ||
         JS_ToInt32(ctx, &fix, argv[4]))
         return JS_EXCEPTION;
+    if (a < 0 || a > 2 || b < 0 || b > 2 || c < 0 || c > 2 ||
+        d < 0 || d > 2 || fix < 0 || fix > 255)
+        return JS_ThrowRangeError(ctx, "Screen.alphaEquation values are invalid");
     return JS_NewInt64(ctx, ALPHA_EQUATION(a, b, c, d, fix));
 }
 
@@ -209,14 +253,52 @@ static int screen_param_value(JSContext *ctx, int param, JSValueConst value,
         *result = JS_ToBool(ctx, value);
         return 1;
     case ALPHA_TEST_METHOD:
-    case ALPHA_TEST_REF:
-    case ALPHA_TEST_FAIL:
-    case DST_ALPHA_TEST_METHOD:
-    case DEPTH_TEST_METHOD:
-    case COLOR_CLAMP_MODE:
     {
         int64_t integer;
-        if (JS_ToInt64(ctx, &integer, value))
+        if (JS_ToInt64(ctx, &integer, value) || integer < ALPHA_NEVER ||
+            integer > ALPHA_NEQUAL)
+            return 0;
+        *result = (uint64_t)integer;
+        return 1;
+    }
+    case ALPHA_TEST_FAIL:
+        {
+            int64_t integer;
+            if (JS_ToInt64(ctx, &integer, value) || integer < ALPHA_FAIL_NO_UPDATE ||
+                integer > ALPHA_FAIL_RGB_ONLY)
+                return 0;
+            *result = (uint64_t)integer;
+            return 1;
+        }
+    case DST_ALPHA_TEST_METHOD:
+        {
+            int64_t integer;
+            if (JS_ToInt64(ctx, &integer, value) || integer < DEST_ALPHA_ZERO ||
+                integer > DEST_ALPHA_ONE)
+                return 0;
+            *result = (uint64_t)integer;
+            return 1;
+        }
+    case DEPTH_TEST_METHOD:
+        {
+            int64_t integer;
+            if (JS_ToInt64(ctx, &integer, value) || integer < DEPTH_NEVER ||
+                integer > DEPTH_GREATER)
+                return 0;
+            *result = (uint64_t)integer;
+            return 1;
+        }
+    case COLOR_CLAMP_MODE:
+        {
+            int64_t integer;
+            if (JS_ToInt64(ctx, &integer, value) || integer < 0 || integer > 1)
+                return 0;
+            *result = (uint64_t)integer;
+            return 1;
+        }
+    case ALPHA_TEST_REF: {
+        int64_t integer;
+        if (JS_ToInt64(ctx, &integer, value) || integer < 0 || integer > 255)
             return 0;
         *result = (uint64_t)integer;
         return 1;
@@ -230,6 +312,9 @@ static int screen_param_value(JSContext *ctx, int param, JSValueConst value,
             !screen_property_int(ctx, value, "d", &d) ||
             !screen_property_int(ctx, value, "fix", &fix))
             return 0;
+        if (a < 0 || a > 2 || b < 0 || b > 2 || c < 0 || c > 2 ||
+            d < 0 || d > 2 || fix < 0 || fix > 255)
+            return 0;
         *result = ALPHA_EQUATION(a, b, c, d, fix);
         return 1;
     }
@@ -240,6 +325,10 @@ static int screen_param_value(JSContext *ctx, int param, JSValueConst value,
             !screen_property_int(ctx, value, "y0", &y0) ||
             !screen_property_int(ctx, value, "x1", &x1) ||
             !screen_property_int(ctx, value, "y1", &y1))
+            return 0;
+        if (x0 < 0 || y0 < 0 || x1 < x0 || y1 < y0 ||
+            !getGSGLOBAL() || x1 >= getGSGLOBAL()->Width ||
+            y1 >= getGSGLOBAL()->Height)
             return 0;
         *result = GS_SETREG_SCISSOR_1(x0, x1, y0, y1);
         return 1;
@@ -256,6 +345,7 @@ static JSValue screen_set_param(JSContext *ctx, JSValueConst this_val,
     if (!screen_argc(ctx, argc, 2, 2, "Screen.setParam"))
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &param, argv[0]) ||
+        param < ALPHA_TEST_ENABLE || param > COLOR_CLAMP_MODE ||
         !screen_param_value(ctx, param, argv[1], &value))
         return JS_ThrowTypeError(ctx, "Screen.setParam received an invalid value");
     set_screen_param((uint8_t)param, value);
@@ -270,6 +360,8 @@ static JSValue screen_get_param(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &param, argv[0]))
         return JS_EXCEPTION;
+    if (param < ALPHA_TEST_ENABLE || param > COLOR_CLAMP_MODE)
+        return JS_ThrowRangeError(ctx, "Screen.getParam received an invalid parameter");
     value = get_screen_param((uint8_t)param);
     switch (param) {
     case ALPHA_BLEND_EQUATION: {
@@ -323,6 +415,7 @@ static const JSCFunctionListEntry screen_funcs[] = {
     JS_CFUNC_DEF("setVSync", 1, screen_set_vsync),
     JS_CFUNC_DEF("setFrameCounter", 1, screen_set_frame_counter),
     JS_CFUNC_DEF("getMemoryStats", 1, screen_memory_stats),
+    JS_CFUNC_DEF("getFreeVRAM", 0, screen_free_vram),
     JS_CFUNC_DEF("getFPS", 1, screen_fps),
     JS_CFUNC_DEF("getMode", 0, screen_get_mode),
     JS_CFUNC_DEF("setMode", 1, screen_set_mode),

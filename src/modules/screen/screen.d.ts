@@ -26,7 +26,7 @@ declare namespace Screen {
         zbuffering: boolean;
         /** Enables double-buffered presentation. */
         double_buffering: boolean;
-        /** Optional rendering pass count; defaults to zero. */
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
         pass_count?: number;
     }
 
@@ -57,13 +57,15 @@ declare namespace Screen {
     function setVSync(enabled: boolean): void;
     /** Enables or disables the on-screen frame counter. */
     function setFrameCounter(enabled: boolean): void;
-    /** Returns free VRAM for the selected `VRAM_*` accounting mode. */
+    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
     function getMemoryStats(mode?: number): number;
+    /** Returns currently unallocated VRAM in bytes. */
+    function getFreeVRAM(): number;
     /** Returns the measured FPS over the requested positive frame interval. */
     function getFPS(interval: number): number;
     /** Returns the active video configuration. */
     function getMode(): VideoMode;
-    /** Reconfigures the video mode and render targets. */
+    /** Reconfigures the video mode and render targets; invalid modes throw. */
     function setMode(mode: VideoMode): void;
     /** Packs the five GS alpha-equation fields into a register value. */
     function alphaEquation(a: number, b: number, c: number, d: number,
@@ -74,7 +76,7 @@ declare namespace Screen {
     function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
     /** Switches the active GS context and returns its native result code. */
     function switchContext(): number;
-    /** Flushes queued graphics commands without presenting a frame. */
+    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
     function flush(): void;
 
     const VRAM_SIZE: number;

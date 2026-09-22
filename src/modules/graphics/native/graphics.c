@@ -880,6 +880,7 @@ static void flipScreenSingleBuffering()
 
 	dmaKit_wait(DMA_CHANNEL_GIF, 0);
 
+	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	texture_manager_nextFrame(gsGlobal);
 }
 
@@ -896,6 +897,7 @@ static void flipScreenSingleBufferingPerf()
 
 	dmaKit_wait(DMA_CHANNEL_GIF, 0);
 
+	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	texture_manager_nextFrame(gsGlobal);
 
 	processFrameCounter();
@@ -963,6 +965,7 @@ static void flipScreenSingleBufferingNoVSync()
 
 	dmaKit_wait(DMA_CHANNEL_GIF, 0);
 
+	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	texture_manager_nextFrame(gsGlobal);
 }
 
@@ -975,6 +978,7 @@ static void flipScreenSingleBufferingPerfNoVSync()
 
 	dmaKit_wait(DMA_CHANNEL_GIF, 0);
 
+	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	texture_manager_nextFrame(gsGlobal);
 
 	processFrameCounter();
@@ -1453,7 +1457,7 @@ void set_display_offset(GSCONTEXT *gsGlobal, int x, int y)
 			gsGlobal->DH - 1);		// Display area height
 }
 
-void setup_buffer_textures() {
+int setup_buffer_textures() {
    	draw_buffer.Width = gsGlobal->Width;
 	draw_buffer.Height = gsGlobal->Height;
 	draw_buffer.PSM = gsGlobal->PSM;
@@ -1466,7 +1470,8 @@ void setup_buffer_textures() {
 	draw_buffer.PageAligned = true;
 	draw_buffer.Filter = GS_FILTER_NEAREST;
 
-	graphics_surface_lock_and_bind(&draw_buffer, false);
+	if (graphics_surface_lock_and_bind(&draw_buffer, false) < 0)
+		goto fail;
 
    	display_buffer.Width = gsGlobal->Width;
 	display_buffer.Height = gsGlobal->Height;
@@ -1481,7 +1486,8 @@ void setup_buffer_textures() {
 	display_buffer.Filter = GS_FILTER_NEAREST;
 
 	if (gsGlobal->DoubleBuffering) {
-		graphics_surface_lock_and_bind(&display_buffer, false);
+		if (graphics_surface_lock_and_bind(&display_buffer, false) < 0)
+			goto fail;
 	}
 
    	depth_buffer.Width = gsGlobal->Width;
@@ -1497,15 +1503,26 @@ void setup_buffer_textures() {
 	depth_buffer.Filter = GS_FILTER_NEAREST;
 
 	if (gsGlobal->ZBuffering) {
-		graphics_surface_lock_and_bind(&depth_buffer, false);
+		if (graphics_surface_lock_and_bind(&depth_buffer, false) < 0)
+			goto fail;
 	}
 
 	gsGlobal->ScreenBuffer[0] = draw_buffer.Vram;
 	gsGlobal->ScreenBuffer[1] = display_buffer.Vram;
 	gsGlobal->ZBuffer = depth_buffer.Vram;
+	return 0;
+
+fail:
+	graphics_surface_release(&draw_buffer);
+	graphics_surface_release(&display_buffer);
+	graphics_surface_release(&depth_buffer);
+	memset(&draw_buffer, 0, sizeof(draw_buffer));
+	memset(&display_buffer, 0, sizeof(display_buffer));
+	memset(&depth_buffer, 0, sizeof(depth_buffer));
+	return -1;
 }
 
-void setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 field, bool zbuffering, int psmz, bool double_buffering, uint8_t pass_count) {
+int setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 field, bool zbuffering, int psmz, bool double_buffering, uint8_t pass_count) {
 	gsGlobal->Mode = mode;
 	gsGlobal->Width = width;
 	if ((interlace == GS_INTERLACED) && (field == GS_FRAME))
@@ -1528,7 +1545,8 @@ void setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 f
 
 	texture_manager_init(gsGlobal);
 
-	setup_buffer_textures();
+	if (setup_buffer_textures() < 0)
+		return -1;
 
 	init_screen(gsGlobal);
 
@@ -1543,6 +1561,7 @@ void setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 f
 	switchFlipScreenFunction();
 	
 	set_display_offset(gsGlobal, 0, 0);
+	return 0;
 }
  
 void init_graphics() {
@@ -1585,7 +1604,10 @@ void init_graphics() {
 
 	texture_manager_init(gsGlobal);
 
-	setup_buffer_textures();
+	if (setup_buffer_textures() < 0) {
+		graphics_service_initialized = false;
+		return;
+	}
 
 	init_screen(gsGlobal);
 
