@@ -48,3 +48,6 @@ ee_modules/loader/loader.elf: ee_modules/loader
 
 $(EE_EMBED_DIR)loader_elf.c: ee_modules/loader/loader.elf | $(EE_EMBED_DIR)
 	$(BIN2S) $< $@ loader_elf
+
+$(EE_EMBED_DIR)quicksand_regular.c: assets/fonts/Quicksand-Regular.ttf | $(EE_EMBED_DIR)
+	$(BIN2S) $< $@ quicksand_regular

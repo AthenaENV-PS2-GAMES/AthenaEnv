@@ -55,8 +55,9 @@ IOP_MODULES = iomanx.o filexio.o sio2man.o mcman.o mcserv.o padman.o \
               freeram.o poweroff.o
 
 EMBEDDED_ELFS = loader_elf.o
+EMBEDDED_FONTS = quicksand_regular.o
 
-EE_OBJS = $(APP_CORE) $(INI_READER) $(JS_CORE) $(JS_ENGINE) $(MODULE_OBJS) $(IOP_MODULES) $(EMBEDDED_ELFS)
+EE_OBJS = $(APP_CORE) $(INI_READER) $(JS_CORE) $(JS_ENGINE) $(MODULE_OBJS) $(IOP_MODULES) $(EMBEDDED_ELFS) $(EMBEDDED_FONTS)
 EE_OBJS := $(EE_OBJS:%=$(EE_OBJ_DIR)%)
 
 EE_BIN := $(EE_BIN_DIR)$(EE_BIN_PREF)$(EE_EXT)
