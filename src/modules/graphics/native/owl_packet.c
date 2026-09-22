@@ -20,6 +20,8 @@ void owl_init(void *ptr, size_t size) {
 }
 
 void owl_flush_packet() {
+    owl_qword *chain_base;
+
     if (controller.alloc == 0) {
         return;
     }
@@ -28,7 +30,9 @@ void owl_flush_packet() {
 
     dmaKit_wait(controller.channel, 0);
 
-	dmaKit_send_chain_ucab(controller.channel, (void *)((uint32_t)(controller.base + (controller.context? controller.size : 0))));
+    chain_base = controller.base + (controller.context ? controller.size : 0);
+    SyncDCache(chain_base, (uint8_t *)internal_packet.ptr);
+	dmaKit_send_chain_ucab(controller.channel, (void *)chain_base);
 
     controller.context = (!controller.context); 
 

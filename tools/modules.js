@@ -192,7 +192,8 @@ function commandConfigure(selectedArg) {
 
         if (qjs.global_alias) {
             bootstrapJs += `import * as ${qjs.global_alias} from '${modName}';\\n`;
-            bootstrapJs += `globalThis.${qjs.global_alias} = ${qjs.global_alias};\\n`;
+            const globalValue = qjs.global_export || qjs.global_alias;
+            bootstrapJs += `globalThis.${qjs.global_alias} = ${globalValue};\\n`;
         }
     }
 

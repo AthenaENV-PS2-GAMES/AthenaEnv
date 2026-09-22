@@ -338,6 +338,16 @@ int graphics_surface_bind(GSSURFACE *surface, bool async)
 	return result;
 }
 
+int graphics_surface_bind_sync(GSSURFACE *surface)
+{
+	int result = graphics_surface_bind(surface, false);
+
+	if (result >= 0)
+		dmaKit_wait(DMA_CHANNEL_GIF, 0);
+
+	return result;
+}
+
 int graphics_surface_lock_and_bind(GSSURFACE *surface, bool async)
 {
 	int result = graphics_surface_bind(surface, async);
@@ -823,9 +833,8 @@ void setactive(GSCONTEXT *gsGlobal)
 /* Copy of sync_screen_flip, but without the 'flip' */
 static void sync_screen(GSCONTEXT *gsGlobal)
 {
-   if (!gsGlobal->FirstFrame) WaitSema(vsync_sema_id);
-   while (PollSema(vsync_sema_id) >= 0)
-   	;
+   if (!gsGlobal->FirstFrame)
+      graphicWaitVblankStart();
 }
 
 /* Copy of sync_screen_flip, but without the 'sync' */
@@ -894,18 +903,25 @@ static void flipScreenSingleBufferingPerf()
 
 static void flipScreenDoubleBuffering()
 {	
+	dbgprintf("[Graphics] flip wait GIF\n");
 	dmaKit_wait(DMA_CHANNEL_GIF, 0);
+	dbgprintf("[Graphics] flip wait VIF1\n");
 	dmaKit_wait(DMA_CHANNEL_VIF1, 0);
 	
+	dbgprintf("[Graphics] flip queue FINISH\n");
 	set_finish();
 
+	dbgprintf("[Graphics] flip flush packet\n");
 	owl_flush_packet();
 
+	dbgprintf("[Graphics] flip wait submitted DMA\n");
+	dmaKit_wait(DMA_CHANNEL_VIF1, 0);
+	dmaKit_wait(DMA_CHANNEL_GIF, 0);
+
+	dbgprintf("[Graphics] flip wait VBlank\n");
 	sync_screen(gsGlobal);
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
+	dbgprintf("[Graphics] flip present\n");
 	GS_SETREG_CSR_FINISH(1);
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;

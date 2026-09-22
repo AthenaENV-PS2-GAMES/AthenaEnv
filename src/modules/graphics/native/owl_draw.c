@@ -370,9 +370,9 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 
     int texture_id = graphics_surface_bind(source, true);
 
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_id != -1? 13 : 9);
+	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_id != -1? 15 : 11);
 
-	owl_add_cnt_tag(packet, texture_id != -1? 12 : 8, 0); 
+	owl_add_cnt_tag(packet, texture_id != -1? 14 : 10, 0);
 
 	if (texture_id != -1) {
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
@@ -392,9 +392,10 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-	owl_add_uint(packet, VIF_CODE(7, 0, VIF_DIRECT, 0)); 
+	owl_add_uint(packet, VIF_CODE(9, 0, VIF_DIRECT, 0));
 	
-	owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
+	owl_add_tag(packet, GIF_AD, GIFTAG(3, 1, 0, 0, 0, 1));
+	owl_add_tag(packet, GS_TEXFLUSH, 0);
 
 	int tw, th;
 	athena_set_tw_th(source, &tw, &th);

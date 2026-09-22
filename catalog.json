@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-20T18:26:26.253Z",
+  "generatedAt": "2026-09-20T18:56:23.916Z",
   "modules": [
     {
       "id": "color",
@@ -33,10 +33,29 @@
         "iop": [],
         "ee_libs": [
           "-L$(PS2DEV)/gsKit/lib",
-          "-ldmakit"
+          "-ldmakit",
+          "-ljpeg",
+          "-lpng"
         ]
       },
       "global_alias": null
+    },
+    {
+      "id": "image",
+      "name": "Image",
+      "description": "Image loading, texture ownership, and textured drawing.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Image"
     },
     {
       "id": "iop",

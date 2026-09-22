@@ -554,7 +554,7 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 	if (tex->Vram == 0)
 		ttransfer = 1;
 
-	if (tex->VramClut == 0)
+	if (tex->Clut != NULL && tex->VramClut == 0)
 		ctransfer = 1;
 
 	if (ttransfer) {
@@ -567,7 +567,9 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		athena_calculate_tbw(tex);
 
 		if (tex->Mem) {
-			SyncDCache(tex->Mem, (u8 *)(tex->Mem) + tsize);
+			SyncDCache(tex->Mem,
+				(u8 *)(tex->Mem) + athena_surface_size(
+					tex->Width, tex->Height, tex->PSM));
 
 			if (async) {
 				tex->Vram |= TRANSFER_REQUEST_MASK;
@@ -608,7 +610,9 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 	block->iUseCount++;
 
 	if (!async && (ttransfer || ctransfer)) {
-		owl_add_end_tag(async_upload_packet, 0);
+		owl_add_end_tag(async_upload_packet, 2);
+		owl_add_tag(async_upload_packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
+		owl_add_tag(async_upload_packet, GS_TEXFLUSH, 0);
 		owl_send_packet(async_upload_packet);
 	}
 

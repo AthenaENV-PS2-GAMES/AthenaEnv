@@ -99,6 +99,7 @@ typedef struct gsSurface GSSURFACE;
 int graphics_surface_init(GSSURFACE *surface);
 void graphics_surface_release(GSSURFACE *surface);
 int graphics_surface_bind(GSSURFACE *surface, bool async);
+int graphics_surface_bind_sync(GSSURFACE *surface);
 int graphics_surface_lock_and_bind(GSSURFACE *surface, bool async);
 int graphics_surface_lock(GSSURFACE *surface);
 int graphics_surface_unlock(GSSURFACE *surface);

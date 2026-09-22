@@ -11,7 +11,8 @@
     "native/owl_draw.c",
     "native/owl_packet.c",
     "native/texture_manager.c",
-    "native/vif.c"
+    "native/vif.c",
+    "native/image_loaders.c"
   ],
   "includes": [
     ".",
@@ -23,7 +24,9 @@
     "iop": [],
     "ee_libs": [
       "-L$(PS2DEV)/gsKit/lib",
-      "-ldmakit"
+      "-ldmakit",
+      "-ljpeg",
+      "-lpng"
     ]
   },
   "types": null

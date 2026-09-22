@@ -35,7 +35,9 @@ static JSValue screen_flip(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     if (!flipScreen)
         return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
+    dbgprintf("[Screen] flip begin\n");
     flipScreen();
+    dbgprintf("[Screen] flip complete\n");
     return JS_UNDEFINED;
 }
 

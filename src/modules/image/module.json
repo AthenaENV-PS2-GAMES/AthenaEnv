@@ -1,0 +1,34 @@
+{
+  "id": "image",
+  "name": "Image",
+  "description": "Image loading, texture ownership, and textured drawing.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/image.c",
+    "quickjs/ath_image.c"
+  ],
+  "includes": [
+    ".",
+    "native",
+    "quickjs",
+    "../graphics"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "Image",
+    "global_alias": "Image",
+    "global_export": "Image.Image",
+    "init_func": "athena_image_init",
+    "header": "quickjs/ath_image.h"
+  },
+  "types": "image.d.ts"
+}

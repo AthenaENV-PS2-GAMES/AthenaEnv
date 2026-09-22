@@ -116,16 +116,20 @@ static int qjs_handle_fh(JSContext *ctx, FILE *f, const char *filename) {
         dbgprintf("[AthenaCore] Evaluating module bootstrap\n");
         const char *modules_bootstrap = athena_get_modules_bootstrap_script();
         if (modules_bootstrap && modules_bootstrap[0] != '\0') {
+            dbgprintf("[AthenaCore] Module bootstrap source ready\n");
             rc = qjs_eval_buf(ctx, modules_bootstrap, strlen(modules_bootstrap), "<bootstrap-modules>", JS_EVAL_TYPE_MODULE);
             dbgprintf("[AthenaCore] Module bootstrap returned %d\n", rc);
             if (rc != 0) {
                 free(buf);
                 return retval;
             }
+            dbgprintf("[AthenaCore] Module bootstrap completed; evaluating entry body\n");
         }
     }
 
+    dbgprintf("[AthenaCore] Evaluating entry body: %s\n", filename);
     rc = qjs_eval_buf(ctx, (void *) buf, bufoff - 1, filename, JS_EVAL_TYPE_MODULE);
+    dbgprintf("[AthenaCore] Entry body evaluation completed: %s (%d)\n", filename, rc);
     free(buf);
     
     if (rc != 0) { 
