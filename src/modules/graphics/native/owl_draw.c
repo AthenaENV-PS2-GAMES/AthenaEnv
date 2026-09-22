@@ -18,6 +18,21 @@ static int texture_upload_pending(int texture_id)
 	return texture_id >= 0;
 }
 
+static int draw_list_capacity(size_t base_size, size_t item_size)
+{
+	owl_controller *controller = owl_get_controller();
+
+	if (!controller || item_size == 0 || controller->size <= base_size + 1)
+		return 0;
+
+	return (int)((controller->size - base_size - 1) / item_size);
+}
+
+static int draw_coord(float value)
+{
+	return (int)lroundf(value);
+}
+
 const int16_t OWL_XYOFFSET[8] qw_aligned = { 2048, 2048, 0, 0, 2048, 2048, 0, 0 };
 const uint16_t OWL_XYMAX[8] qw_aligned =   { 4095, 4095, 0, 0, 4095, 4095, 0, 0 };
 
@@ -26,10 +41,24 @@ const uint16_t OWL_XYMAX_FIXED[8] qw_aligned =   { ftoi4(int, 4095), ftoi4(int, 
 
 void draw_point_list(float x, float y, prim_point *list, int list_size)
 {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 5+list_size);
+	int offset = 0;
+	int capacity;
 
-	owl_add_cnt_tag_fill(packet, 4+list_size); 
-	owl_add_direct(packet, 3+list_size);
+	if (!list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(5, 1);
+	if (capacity <= 0)
+		return;
+
+	while (offset < list_size) {
+		int count = list_size - offset;
+		owl_packet *packet;
+		if (count > capacity)
+			count = capacity;
+		packet = owl_query_packet(CHANNEL_VIF1, 5 + count);
+
+		owl_add_cnt_tag_fill(packet, 4 + count);
+		owl_add_direct(packet, 3 + count);
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 
@@ -37,27 +66,45 @@ void draw_point_list(float x, float y, prim_point *list, int list_size)
 
 	owl_add_tag(packet, 
 					   ((uint64_t)(GS_RGBAQ) << 0 | (uint64_t)(GS_XYZ2) << 4), 
-					   	VU_GS_GIFTAG(list_size, 
+						VU_GS_GIFTAG(count,
 							1, NO_CUSTOM_DATA, 0, 
 							0,
     						1, 2)
 						);
 
-	for (int i = 0; i < list_size; i++) {
-		owl_add_rgba_xy(packet, list[i].rgba, x + list[i].x, y + list[i].y); 
+		for (int i = 0; i < count; i++) {
+			owl_add_rgba_xy(packet, list[offset + i].rgba,
+				draw_coord(x + list[offset + i].x),
+				draw_coord(y + list[offset + i].y));
+		}
+		offset += count;
 	}
 } 
 
 void draw_line_list(float x, float y, prim_line *list, int list_size) 
 {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 3+(list_size*2));
+	int offset = 0;
+	int capacity;
 
-	owl_add_cnt_tag_fill(packet, 2+(list_size*2)); 
-	owl_add_direct(packet, 1+(list_size*2));
+	if (!list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(3, 2);
+	if (capacity <= 0)
+		return;
 
-	owl_add_tag(packet, 
+	while (offset < list_size) {
+		int count = list_size - offset;
+		owl_packet *packet;
+		if (count > capacity)
+			count = capacity;
+		packet = owl_query_packet(CHANNEL_VIF1, 3 + count * 2);
+
+		owl_add_cnt_tag_fill(packet, 2 + count * 2);
+		owl_add_direct(packet, 1 + count * 2);
+
+		owl_add_tag(packet,
 					   ((uint64_t)(GS_PRIM)  << 0 | (uint64_t)(GS_RGBAQ)  << 4 | (uint64_t)(GS_XYZ2) << 8 | (uint64_t)(GS_XYZ2) << 12), 
-					   	VU_GS_GIFTAG(list_size, 
+						VU_GS_GIFTAG(count,
 							1, NO_CUSTOM_DATA, 0, 
 							0,
     						1, 4)
@@ -65,18 +112,37 @@ void draw_line_list(float x, float y, prim_line *list, int list_size)
 
 	uint64_t prim = VU_GS_PRIM(GS_PRIM_PRIM_LINE, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0);
 
-	for (int i = 0; i < list_size; i++) {
-		owl_add_tag(packet, list[i].rgba, prim);
-		owl_add_xy_2x(packet, x + list[i].x, y + list[i].y, x + list[i].x2, y + list[i].y2);
+		for (int i = 0; i < count; i++) {
+			prim_line *item = &list[offset + i];
+			owl_add_tag(packet, item->rgba, prim);
+			owl_add_xy_2x(packet, draw_coord(x + item->x),
+				draw_coord(y + item->y), draw_coord(x + item->x2),
+				draw_coord(y + item->y2));
+		}
+		offset += count;
 	}
 }
 
 void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size) 
 {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 5+(list_size*2));
+	int offset = 0;
+	int capacity;
 
-	owl_add_cnt_tag_fill(packet, 4+(list_size*2)); 
-	owl_add_direct(packet, 3+(list_size*2));
+	if (!list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(5, 2);
+	if (capacity <= 0)
+		return;
+
+	while (offset < list_size) {
+		int count = list_size - offset;
+		owl_packet *packet;
+		if (count > capacity)
+			count = capacity;
+		packet = owl_query_packet(CHANNEL_VIF1, 5 + count * 2);
+
+		owl_add_cnt_tag_fill(packet, 4 + count * 2);
+		owl_add_direct(packet, 3 + count * 2);
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 
@@ -84,23 +150,42 @@ void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_
 
 	owl_add_tag(packet, 
 					   ((uint64_t)(GS_RGBAQ)  << 0 | (uint64_t)(GS_XYZ2) << 4), 
-					   	VU_GS_GIFTAG(list_size*2, 
+						VU_GS_GIFTAG(count * 2,
 							1, NO_CUSTOM_DATA, 0, 
 							0,
     						1, 2)
 						);
 
-	for (int i = 0; i < list_size; i++) {
-		owl_add_rgba_xy(packet, list[i].rgba,  x + list[i].x,  y + list[i].y); 
-		owl_add_rgba_xy(packet, list[i].rgba2, x + list[i].x2, y + list[i].y2); 
+		for (int i = 0; i < count; i++) {
+			prim_gouraud_line *item = &list[offset + i];
+			owl_add_rgba_xy(packet, item->rgba, draw_coord(x + item->x),
+				draw_coord(y + item->y));
+			owl_add_rgba_xy(packet, item->rgba2, draw_coord(x + item->x2),
+				draw_coord(y + item->y2));
+		}
+		offset += count;
 	}
 }
 
 void draw_triangle_list(float x, float y, prim_triangle *list, int list_size) {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 5+(list_size*2));
+	int offset = 0;
+	int capacity;
 
-	owl_add_cnt_tag_fill(packet, 4+(list_size*2)); 
-	owl_add_direct(packet, 3+(list_size*2));
+	if (!list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(5, 2);
+	if (capacity <= 0)
+		return;
+
+	while (offset < list_size) {
+		int count = list_size - offset;
+		owl_packet *packet;
+		if (count > capacity)
+			count = capacity;
+		packet = owl_query_packet(CHANNEL_VIF1, 5 + count * 2);
+
+		owl_add_cnt_tag_fill(packet, 4 + count * 2);
+		owl_add_direct(packet, 3 + count * 2);
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 
@@ -108,24 +193,45 @@ void draw_triangle_list(float x, float y, prim_triangle *list, int list_size) {
 
 	owl_add_tag(packet, 
 					   ((uint64_t)(GS_RGBAQ) << 0 | (uint64_t)(GS_XYZ2) << 4 | (uint64_t)(GS_XYZ2) << 8 | (uint64_t)(GS_XYZ2) << 12), 
-					   	VU_GS_GIFTAG(list_size, 
+						VU_GS_GIFTAG(count,
 							1, NO_CUSTOM_DATA, 0, 
 							0,
     						1, 4)
 						);
 
 
-	for (int i = 0; i < list_size; i++) {
-		owl_add_ulong(packet, list[i].rgba); owl_add_xy(packet, x + list[i].x, y + list[i].y);
-		owl_add_xy_2x(packet, x + list[i].x2, y + list[i].y2, x + list[i].x3, y + list[i].y3);
+		for (int i = 0; i < count; i++) {
+			prim_triangle *item = &list[offset + i];
+			owl_add_ulong(packet, item->rgba);
+			owl_add_xy(packet, draw_coord(x + item->x),
+				draw_coord(y + item->y));
+			owl_add_xy_2x(packet, draw_coord(x + item->x2),
+				draw_coord(y + item->y2), draw_coord(x + item->x3),
+				draw_coord(y + item->y3));
+		}
+		offset += count;
 	}
 }
 
 void draw_triangle_gouraud_list(float x, float y, prim_gouraud_triangle *list, int list_size) {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 5+(list_size*3));
+	int offset = 0;
+	int capacity;
 
-	owl_add_cnt_tag_fill(packet, 4+(list_size*3)); 
-	owl_add_direct(packet, 3+(list_size*3));
+	if (!list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(5, 3);
+	if (capacity <= 0)
+		return;
+
+	while (offset < list_size) {
+		int count = list_size - offset;
+		owl_packet *packet;
+		if (count > capacity)
+			count = capacity;
+		packet = owl_query_packet(CHANNEL_VIF1, 5 + count * 3);
+
+		owl_add_cnt_tag_fill(packet, 4 + count * 3);
+		owl_add_direct(packet, 3 + count * 3);
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 
@@ -133,20 +239,43 @@ void draw_triangle_gouraud_list(float x, float y, prim_gouraud_triangle *list, i
 
 	owl_add_tag(packet, 
 					   ((uint64_t)(GS_RGBAQ)  << 0 | (uint64_t)(GS_XYZ2) << 4), 
-					   	VU_GS_GIFTAG(list_size*3, 
+						VU_GS_GIFTAG(count * 3,
 							1, NO_CUSTOM_DATA, 0, 
 							0,
     						1, 2)
 						);
 
-	for (int i = 0; i < list_size; i++) {
-		owl_add_rgba_xy(packet, list[i].rgba,  x + list[i].x,  y + list[i].y); 
-		owl_add_rgba_xy(packet, list[i].rgba2, x + list[i].x2, y + list[i].y2); 
-		owl_add_rgba_xy(packet, list[i].rgba3, x + list[i].x3, y + list[i].y3); 
+		for (int i = 0; i < count; i++) {
+			prim_gouraud_triangle *item = &list[offset + i];
+			owl_add_rgba_xy(packet, item->rgba, draw_coord(x + item->x),
+				draw_coord(y + item->y));
+			owl_add_rgba_xy(packet, item->rgba2, draw_coord(x + item->x2),
+				draw_coord(y + item->y2));
+			owl_add_rgba_xy(packet, item->rgba3, draw_coord(x + item->x3),
+				draw_coord(y + item->y3));
+		}
+		offset += count;
 	}
 }
 
 void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triangle *list, int list_size) {
+	int capacity;
+	if (!source || !list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(11, 3);
+	if (capacity <= 0)
+		return;
+	if (list_size > capacity) {
+		int offset = 0;
+		while (offset < list_size) {
+			int count = list_size - offset;
+			if (count > capacity)
+				count = capacity;
+			draw_tex_triangle_list(source, x, y, list + offset, count);
+			offset += count;
+		}
+		return;
+	}
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
@@ -164,7 +293,8 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 		owl_add_tag(packet, GIF_NOP, 0);
 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+		owl_add_uint(packet, VIF_CODE(0, 0,
+			texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
@@ -172,7 +302,8 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0,
+		texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(5+(list_size*3), 0, VIF_DIRECT, 0)); 
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(3, 1, 0, 0, 0, 1));
@@ -214,6 +345,23 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 }
 
 void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_tex_gouraud_triangle *list, int list_size) {
+	int capacity;
+	if (!source || !list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(11, 5);
+	if (capacity <= 0)
+		return;
+	if (list_size > capacity) {
+		int offset = 0;
+		while (offset < list_size) {
+			int count = list_size - offset;
+			if (count > capacity)
+				count = capacity;
+			draw_tex_triangle_gouraud_list(source, x, y, list + offset, count);
+			offset += count;
+		}
+		return;
+	}
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
@@ -233,7 +381,8 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 		owl_add_tag(packet, GIF_NOP, 0);
 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+		owl_add_uint(packet, VIF_CODE(0, 0,
+			texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
@@ -241,7 +390,8 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0,
+		texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(5+packet_list_size, 0, VIF_DIRECT, 0)); 
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(3, 1, 0, 0, 0, 1));
@@ -294,6 +444,23 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 
 void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list, int list_size)
 {
+	int capacity;
+	if (!source || !list || list_size <= 0)
+		return;
+	capacity = draw_list_capacity(10, 3);
+	if (capacity <= 0)
+		return;
+	if (list_size > capacity) {
+		int offset = 0;
+		while (offset < list_size) {
+			int count = list_size - offset;
+			if (count > capacity)
+				count = capacity;
+			draw_image_list(source, x, y, list + offset, count);
+			offset += count;
+		}
+		return;
+	}
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
@@ -319,7 +486,8 @@ void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list,
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0,
+		texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(4+(list_size*3), 0, VIF_DIRECT, 0)); 
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
@@ -404,7 +572,8 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0,
+		texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(7, 0, VIF_DIRECT, 0));
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(2, 1, 0, 0, 0, 1));
@@ -475,7 +644,8 @@ void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float h
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0,
+		texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(13, 0, VIF_DIRECT, 0)); 
 	
 	owl_add_tag(packet, GIF_AD, GIFTAG(3, 1, 0, 0, 0, 1));
@@ -546,7 +716,7 @@ void draw_point(float x, float y, Color color)
 
 	owl_add_tag(packet, VU_GS_PRIM(GS_PRIM_PRIM_POINT, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0), 0);
 
-	owl_add_rgba_xy(packet, color, x, y); 
+	owl_add_rgba_xy(packet, color, draw_coord(x), draw_coord(y));
 } 
 
 void draw_line(float x, float y, float x2, float y2, Color color) 
@@ -566,7 +736,8 @@ void draw_line(float x, float y, float x2, float y2, Color color)
 
 	owl_add_tag(packet, color, VU_GS_PRIM(GS_PRIM_PRIM_LINE, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0));
 
-	owl_add_xy_2x(packet, x, y, x2, y2);
+	owl_add_xy_2x(packet, draw_coord(x), draw_coord(y),
+		draw_coord(x2), draw_coord(y2));
 }
 
 
@@ -587,7 +758,8 @@ void draw_sprite(float x, float y, int width, int height, Color color)
 
 	owl_add_tag(packet, color, VU_GS_PRIM(GS_PRIM_PRIM_SPRITE, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0));
 
-	owl_add_xy_2x(packet, x, y, x+width, y+height);
+	owl_add_xy_2x(packet, draw_coord(x), draw_coord(y),
+		draw_coord(x + width), draw_coord(y + height));
 }
 
 void draw_triangle(float x, float y, float x2, float y2, float x3, float y3, Color color)
@@ -610,9 +782,10 @@ void draw_triangle(float x, float y, float x2, float y2, float x3, float y3, Col
 
 	owl_add_tag(packet, color, VU_GS_PRIM(GS_PRIM_PRIM_TRIANGLE, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0));
 
-	owl_add_xy_2x(packet, x, y, x2, y2);
+	owl_add_xy_2x(packet, draw_coord(x), draw_coord(y),
+		draw_coord(x2), draw_coord(y2));
 
-	owl_add_xy_2x(packet, x3, y3, 0, 0);
+	owl_add_xy_2x(packet, draw_coord(x3), draw_coord(y3), 0, 0);
 }
 
 void draw_triangle_gouraud(float x, float y, float x2, float y2, float x3, float y3, Color color, Color color2, Color color3)
@@ -634,61 +807,21 @@ void draw_triangle_gouraud(float x, float y, float x2, float y2, float x3, float
     						1, 2)
 						);
 
-	owl_add_rgba_xy(packet, color,  x,  y); 
-	owl_add_rgba_xy(packet, color2, x2, y2); 
-	owl_add_rgba_xy(packet, color3, x3, y3); 
+	owl_add_rgba_xy(packet, color, draw_coord(x), draw_coord(y));
+	owl_add_rgba_xy(packet, color2, draw_coord(x2), draw_coord(y2));
+	owl_add_rgba_xy(packet, color3, draw_coord(x3), draw_coord(y3));
 }
 
 void draw_quad(float x, float y, float x2, float y2, float x3, float y3, float x4, float y4, Color color)
 {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 6);
-
-	owl_add_cnt_tag_fill(packet, 5); 
-	owl_add_direct(packet, 4);
-
-	owl_add_tag(packet, 
-					   ((uint64_t)(GS_PRIM)  << 0 | 
-						(uint64_t)(GS_RGBAQ) << 4 | 
-						(uint64_t)(GS_XYZ2) << 8 | 
-						(uint64_t)(GS_XYZ2) << 12 | 
-						(uint64_t)(GS_XYZ2) << 16 | 
-						(uint64_t)(GS_XYZ2) << 20), 
-					   	VU_GS_GIFTAG(1, 
-							1, NO_CUSTOM_DATA, 0, 
-							0,
-    						1, 6)
-						);
-
-	owl_add_tag(packet, color, VU_GS_PRIM(GS_PRIM_PRIM_TRISTRIP, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0));
-
-	owl_add_xy_2x(packet, x, y, x2, y2);
-
-	owl_add_xy_2x(packet, x3, y3, x4, y4);
+	draw_triangle(x, y, x2, y2, x3, y3, color);
+	draw_triangle(x, y, x3, y3, x4, y4, color);
 }
 
 void draw_quad_gouraud(float x, float y, float x2, float y2, float x3, float y3, float x4, float y4, Color color, Color color2, Color color3, Color color4)
 {
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 9);
-
-	owl_add_cnt_tag_fill(packet, 8); 
-	owl_add_direct(packet, 7);
-	
-	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-
-	owl_add_tag(packet, GS_PRIM, VU_GS_PRIM(GS_PRIM_PRIM_TRISTRIP, 1, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0));
-
-	owl_add_tag(packet, 
-					   ((uint64_t)(GS_RGBAQ)  << 0 | (uint64_t)(GS_XYZ2) << 4), 
-					   	VU_GS_GIFTAG(4, 
-							1, NO_CUSTOM_DATA, 0, 
-							0,
-    						1, 2)
-						);
-
-	owl_add_rgba_xy(packet, color,  x,  y); 
-	owl_add_rgba_xy(packet, color2, x2, y2); 
-	owl_add_rgba_xy(packet, color3, x3, y3); 
-	owl_add_rgba_xy(packet, color4, x4, y4); 
+	draw_triangle_gouraud(x, y, x2, y2, x3, y3, color, color2, color3);
+	draw_triangle_gouraud(x, y, x3, y3, x4, y4, color, color3, color4);
 }
 
 void draw_circle(float x, float y, float radius, u64 color, u8 filled)
@@ -715,7 +848,9 @@ void draw_circle(float x, float y, float radius, u64 color, u8 filled)
 						);
 
 	for (int a = 0; a < 36; a++) {
-		owl_add_xy(packet, (athena_cosf(a * (M_PI*2)/36) * radius) + x, (athena_sinf(a * (M_PI*2)/36) * radius) + y);
+		float angle = (float)a * (2.0f * (float)M_PI / 36.0f);
+		owl_add_xy(packet, draw_coord(athena_cosf(angle) * radius + x),
+			draw_coord(athena_sinf(angle) * radius + y));
 	}
 
 	if (!filled) { // using 2x to round it to 38
