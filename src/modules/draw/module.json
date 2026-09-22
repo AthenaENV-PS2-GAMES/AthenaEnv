@@ -1,0 +1,31 @@
+{
+  "id": "draw",
+  "name": "Draw",
+  "description": "Immediate-mode 2D primitive drawing.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "quickjs/ath_draw.c"
+  ],
+  "includes": [
+    ".",
+    "../graphics"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "color"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "Draw",
+    "global_alias": "Draw",
+    "init_func": "athena_draw_init",
+    "header": "quickjs/ath_draw.h"
+  },
+  "types": "draw.d.ts"
+}

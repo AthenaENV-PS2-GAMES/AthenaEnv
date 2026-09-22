@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-22T18:15:51.519Z",
+  "generatedAt": "2026-09-22T20:07:32.904Z",
   "modules": [
     {
       "id": "color",
@@ -19,6 +19,24 @@
         "ee_libs": []
       },
       "global_alias": "Color"
+    },
+    {
+      "id": "draw",
+      "name": "Draw",
+      "description": "Immediate-mode 2D primitive drawing.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Draw"
     },
     {
       "id": "graphics",
