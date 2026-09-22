@@ -72,6 +72,43 @@ AthenaImage *athena_image_create(const char *path, bool delayed)
 	return image;
 }
 
+int athena_image_load_path(AthenaImage *image, const char *path)
+{
+	AthenaImage *loaded;
+	GSSURFACE *old_surface;
+	char *old_path;
+
+	if (!image || !image->surface || !path ||
+		graphics_surface_is_locked(image->surface))
+		return -1;
+
+	loaded = athena_image_create(path, image->delayed);
+	if (!loaded) {
+		image->failed = true;
+		return -1;
+	}
+
+	old_surface = image->surface;
+	old_path = image->path;
+	image->surface = loaded->surface;
+	image->path = loaded->path;
+	image->loaded = loaded->loaded;
+	image->failed = false;
+	image->width = loaded->width;
+	image->height = loaded->height;
+	image->startx = loaded->startx;
+	image->starty = loaded->starty;
+	image->endx = loaded->endx;
+	image->endy = loaded->endy;
+	image->angle = loaded->angle;
+	image->color = loaded->color;
+	loaded->owns_surface = false;
+	loaded->surface = old_surface;
+	loaded->path = old_path;
+	athena_image_destroy(loaded);
+	return 0;
+}
+
 AthenaImage *athena_image_wrap(GSSURFACE *surface, bool delayed)
 {
 	AthenaImage *image;

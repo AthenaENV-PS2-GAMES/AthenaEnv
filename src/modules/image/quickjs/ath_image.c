@@ -16,6 +16,20 @@ static AthenaImage *image_this(JSContext *ctx, JSValueConst value)
 	return JS_GetOpaque2(ctx, value, image_class_id);
 }
 
+AthenaImage *athena_image_from_value(JSContext *ctx, JSValueConst value)
+{
+	return image_this(ctx, value);
+}
+
+JSValue athena_image_to_value(JSContext *ctx, AthenaImage *image)
+{
+	JSValue object = JS_NewObjectClass(ctx, image_class_id);
+	if (JS_IsException(object))
+		return object;
+	JS_SetOpaque(object, image);
+	return object;
+}
+
 static int image_argc(JSContext *ctx, int argc, int minimum, int maximum,
 	const char *name)
 {
@@ -205,6 +219,20 @@ static JSValue image_ready(JSContext *ctx, JSValueConst this_val,
 	int argc, JSValueConst *argv)
 {
 	return JS_NewBool(ctx, athena_image_is_loaded(image_this(ctx, this_val)));
+}
+
+static JSValue image_loading(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+	return JS_NewBool(ctx, image && image->loading);
+}
+
+static JSValue image_failed(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+	return JS_NewBool(ctx, image && image->failed);
 }
 
 static JSValue image_free(JSContext *ctx, JSValueConst this_val,
@@ -509,6 +537,8 @@ static JSClassDef image_class = {
 static const JSCFunctionListEntry image_proto_funcs[] = {
 	JS_CFUNC_DEF("draw", 2, image_draw),
 	JS_CFUNC_DEF("ready", 0, image_ready),
+	JS_CFUNC_DEF("loading", 0, image_loading),
+	JS_CFUNC_DEF("failed", 0, image_failed),
 	JS_CFUNC_DEF("free", 0, image_free),
 	JS_CFUNC_DEF("lock", 0, image_lock),
 	JS_CFUNC_DEF("unlock", 0, image_unlock),

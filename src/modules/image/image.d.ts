@@ -87,6 +87,10 @@ declare module "Image" {
 
         /** True when dimensions, pixel data and indexed palette data are valid. */
         ready(): boolean;
+        /** True while an ImageList request is waiting or being processed. */
+        loading(): boolean;
+        /** True when the most recent ImageList request failed. */
+        failed(): boolean;
         /** Queues a textured sprite at `(x, y)` for the current frame. */
         draw(x: number, y: number, options?: ImageDrawOptions): void;
         /** Uploads the image synchronously and pins its VRAM allocation. */

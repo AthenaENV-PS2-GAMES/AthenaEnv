@@ -11,6 +11,8 @@ typedef struct AthenaImage {
 	GSSURFACE *surface;
 	bool delayed;
 	bool loaded;
+	bool loading;
+	bool failed;
 	bool owns_surface;
 	Color color;
 	float width;
@@ -24,6 +26,7 @@ typedef struct AthenaImage {
 
 AthenaImage *athena_image_create(const char *path, bool delayed);
 AthenaImage *athena_image_create_empty(bool delayed);
+int athena_image_load_path(AthenaImage *image, const char *path);
 AthenaImage *athena_image_wrap(GSSURFACE *surface, bool delayed);
 void athena_image_destroy(AthenaImage *image);
 bool athena_image_is_loaded(const AthenaImage *image);
