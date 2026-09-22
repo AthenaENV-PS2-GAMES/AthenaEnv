@@ -36,62 +36,145 @@ declare function clearImmediate(handle?: any): void;
 
 
 /* === Module: Color (color) === */
+/**
+ * Packs RGBA components into the 32-bit color format used by AthenaEnv.
+ *
+ * The component order in the returned value is `0xAABBGGRR`:
+ * red occupies the least-significant byte and alpha the most-significant.
+ * Component values are converted to unsigned 8-bit values.
+ *
+ * The default alpha used by `new()` is `0x80`, matching the PS2 GS default
+ * convention. Color helpers are pure and return a new packed value.
+ *
+ * @example
+ * ```js
+ * let tint = Color.new(255, 128, 0, 255);
+ * tint = Color.setA(tint, 192);
+ * console.log(Color.getR(tint), Color.getA(tint));
+ * ```
+ */
 declare namespace Color {
+    /** Packed `0xAABBGGRR` color value. */
     type Value = number;
 
+    /** Creates a packed color from red, green, blue and optional alpha. */
     function new(r: number, g: number, b: number, a?: number): Value;
+    /** Reads the red component in the range 0..255. */
     function getR(color: Value): number;
+    /** Reads the green component in the range 0..255. */
     function getG(color: Value): number;
+    /** Reads the blue component in the range 0..255. */
     function getB(color: Value): number;
+    /** Reads the alpha component in the range 0..255. */
     function getA(color: Value): number;
+    /** Returns `color` with its red component replaced. */
     function setR(color: Value, value: number): Value;
+    /** Returns `color` with its green component replaced. */
     function setG(color: Value, value: number): Value;
+    /** Returns `color` with its blue component replaced. */
     function setB(color: Value, value: number): Value;
+    /** Returns `color` with its alpha component replaced. */
     function setA(color: Value, value: number): Value;
 }
 
 
 /* === Module: Image (image) === */
+/**
+ * Image loading, CPU pixel access and textured 2D drawing.
+ *
+ * `Image` accepts paths understood by the active PS2 filesystem driver,
+ * including paths relative to the boot directory. A newly loaded image is
+ * CPU-resident; call `lock()` when it must remain resident in VRAM.
+ *
+ * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
+ * images, `pixels` contains four bytes per pixel. Palette data is used only
+ * by indexed 4-bit and 8-bit formats.
+ *
+ * @example
+ * ```js
+ * const logo = new Image('my_image.png');
+ * if (!logo.ready()) throw new Error('image load failed');
+ * logo.color = Color.new(255, 255, 255, 255);
+ * logo.lock();
+ * logo.draw(100, 80);
+ * Screen.flip();
+ * ```
+ */
 declare module "Image" {
+    /** Optional destination, source-rectangle and tint overrides for `draw()`. */
     type ImageDrawOptions = {
+        /** Destination width in pixels; defaults to `width`. */
         width?: number;
+        /** Destination height in pixels; defaults to `height`. */
         height?: number;
+        /** Source rectangle's left coordinate in texture pixels. */
         startx?: number;
+        /** Source rectangle's top coordinate in texture pixels. */
         starty?: number;
+        /** Source rectangle's right coordinate in texture pixels. */
         endx?: number;
+        /** Source rectangle's bottom coordinate in texture pixels. */
         endy?: number;
+        /** Rotation angle in radians. */
         angle?: number;
+        /** Packed RGBA tint, normally created with `Color.new()`. */
         color?: number;
     };
 
     class Image {
+        /** Loads an image from `path`, or creates an empty image when omitted. */
         constructor(path?: string);
+        /** Linear size in bytes of the current pixel buffer. */
         readonly size: number;
+        /** Whether the image uses deferred texture upload behavior. */
         readonly delayed: boolean;
+        /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
         pixels: ArrayBuffer;
+        /** CPU palette buffer for indexed images; assigning it copies the buffer. */
         palette: ArrayBuffer;
+        /** Texture width in pixels. Set before assigning pixels for new images. */
         texWidth: number;
+        /** Texture height in pixels. Set before assigning pixels for new images. */
         texHeight: number;
+        /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel. */
         bpp: number;
+        /** Texture filter mode, usually a GS nearest/linear constant. */
         filter: number;
+        /** Whether dimensions and a valid pixel buffer are available for drawing. */
         renderable: boolean;
+        /** Destination draw width in pixels. */
         width: number;
+        /** Destination draw height in pixels. */
         height: number;
+        /** Source rectangle's left coordinate in texture pixels. */
         startx: number;
+        /** Source rectangle's top coordinate in texture pixels. */
         starty: number;
+        /** Source rectangle's right coordinate in texture pixels. */
         endx: number;
+        /** Source rectangle's bottom coordinate in texture pixels. */
         endy: number;
+        /** Rotation angle in radians used by `draw()`. */
         angle: number;
+        /** Packed RGBA tint multiplied with sampled texture color. */
         color: number;
 
+        /** True when the image has valid dimensions and CPU pixel data. */
         ready(): boolean;
+        /** Queues a textured sprite at `(x, y)` for the current frame. */
         draw(x: number, y: number, options?: ImageDrawOptions): void;
+        /** Uploads the image synchronously and pins its VRAM allocation. */
         lock(): boolean;
+        /** Allows the texture manager to evict the image from VRAM. */
         unlock(): boolean;
+        /** Returns whether the image is currently pinned in VRAM. */
         locked(): boolean;
+        /** Converts supported 24-bit textures to a PS2-native 16-bit format. */
         optimize(): boolean;
+        /** Releases the native image and its CPU/VRAM resources. */
         free(): void;
 
+        /** Copies a rectangular VRAM region between two resident images. */
         static copyVRAMBlock(
             source: Image,
             sourceX: number,
@@ -248,19 +331,39 @@ declare namespace Mutex {
 
 
 /* === Module: Screen (screen) === */
+/**
+ * Display, frame synchronization, VRAM statistics and GS state controls.
+ *
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
+ */
 declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
     interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
         mode: number;
+        /** Visible width in pixels. */
         width: number;
+        /** Visible height in pixels. */
         height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
         psm: number;
+        /** Interlaced/progressive mode. */
         interlace: number;
+        /** Field/frame timing mode. */
         field: number;
+        /** Depth-buffer pixel storage format. */
         psmz: number;
+        /** Enables depth buffering. */
         zbuffering: boolean;
+        /** Enables double-buffered presentation. */
         double_buffering: boolean;
+        /** Optional rendering pass count; defaults to zero. */
+        pass_count?: number;
     }
 
+    /** Arguments for the GS alpha blend equation. */
     interface AlphaEquation {
         a: number;
         b: number;
@@ -269,6 +372,7 @@ declare namespace Screen {
         fix: number;
     }
 
+    /** Pixel bounds used by the GS scissor register. */
     interface ScissorBounds {
         x0: number;
         y0: number;
@@ -276,20 +380,34 @@ declare namespace Screen {
         y1: number;
     }
 
+    /** Presents the completed draw buffer and synchronizes the frame. */
     function flip(): void;
+    /** Clears the current draw buffer using a packed RGBA color. */
     function clear(color?: number): void;
+    /** Blocks until the next vertical blank starts. */
     function waitVblankStart(): void;
+    /** Enables or disables synchronization with vertical blank. */
     function setVSync(enabled: boolean): void;
+    /** Enables or disables the on-screen frame counter. */
     function setFrameCounter(enabled: boolean): void;
+    /** Returns free VRAM for the selected `VRAM_*` accounting mode. */
     function getMemoryStats(mode?: number): number;
+    /** Returns the measured FPS over the requested positive frame interval. */
     function getFPS(interval: number): number;
+    /** Returns the active video configuration. */
     function getMode(): VideoMode;
+    /** Reconfigures the video mode and render targets. */
     function setMode(mode: VideoMode): void;
+    /** Packs the five GS alpha-equation fields into a register value. */
     function alphaEquation(a: number, b: number, c: number, d: number,
         fix: number): bigint;
+    /** Reads a supported GS parameter by its `Screen` constant. */
     function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
+    /** Writes a supported GS parameter by its `Screen` constant. */
     function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
+    /** Switches the active GS context and returns its native result code. */
     function switchContext(): number;
+    /** Flushes queued graphics commands without presenting a frame. */
     function flush(): void;
 
     const VRAM_SIZE: number;
