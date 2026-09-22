@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <malloc.h>
 #include <kernel.h>
+#include <string.h>
 
 #include <graphics.h>
 #include <owl_packet.h>
@@ -493,6 +494,8 @@ void texture_manager_init(GSCONTEXT *gsGlobal)
 
 	// Allocate the initial free block
 	__head = _blockCreate(0, 4*1024*1024);
+	texture_upload_queue_top = 0;
+	memset(texture_upload_queue, 0, sizeof(texture_upload_queue));
 
 	*VIF1_MARK = VIF1_MARK_CLEAN;
 
@@ -507,6 +510,9 @@ void texture_manager_init(GSCONTEXT *gsGlobal)
 
 int texture_manager_push(GSSURFACE *tex) {
 	int id = texture_upload_queue_top;
+	if (!tex || texture_upload_queue[id] != NULL)
+		return GRAPHICS_BIND_ERROR;
+
 	texture_upload_queue[id] = tex;
 
 	texture_upload_queue_top = ( texture_upload_queue_top + 1 ) & (TEXTURE_UPLOAD_QUEUE_SIZE-1);
@@ -517,6 +523,7 @@ int texture_manager_push(GSSURFACE *tex) {
 
 int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 	struct SVramBlock * block;
+	bool block_created = false;
 	unsigned int ttransfer = 0;
 	unsigned int ctransfer = 0;
 	unsigned int tsize;
@@ -542,6 +549,7 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		block = _blockAlloc(tsize + csize, tex->PageAligned);
 		if (block == NULL)
 			return GRAPHICS_BIND_ERROR;
+		block_created = true;
 		block->tex = tex;
 		block->iUseCount = 0;
 		block->iUseCountPrev = 1;
@@ -616,9 +624,23 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		owl_send_packet(async_upload_packet);
 	}
 
-	if (async)
-		return (ttransfer|ctransfer) ? texture_manager_push(tex) :
-			GRAPHICS_BIND_RESIDENT;
+	if (async) {
+		int upload_id;
+		if (!(ttransfer || ctransfer))
+			return GRAPHICS_BIND_RESIDENT;
+
+		upload_id = texture_manager_push(tex);
+		if (upload_id == GRAPHICS_BIND_ERROR) {
+			if (ttransfer)
+				tex->Vram = 0;
+			if (ctransfer)
+				tex->VramClut = 0;
+			if (block_created)
+				texture_manager_free(tex);
+			return GRAPHICS_BIND_ERROR;
+		}
+		return upload_id;
+	}
 
 	return (ttransfer|ctransfer);
 }

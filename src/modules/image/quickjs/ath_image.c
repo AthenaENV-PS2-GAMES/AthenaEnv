@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <ath_env.h>
 #include <graphics.h>
@@ -19,8 +20,12 @@ static int image_argc(JSContext *ctx, int argc, int minimum, int maximum,
 	const char *name)
 {
 	if (argc < minimum || argc > maximum) {
-		JS_ThrowTypeError(ctx, "%s expects between %d and %d arguments",
-			name, minimum, maximum);
+		if (minimum == maximum)
+			JS_ThrowTypeError(ctx, "%s expects exactly %d arguments",
+				name, minimum);
+		else
+			JS_ThrowTypeError(ctx, "%s expects between %d and %d arguments",
+				name, minimum, maximum);
 		return 0;
 	}
 	return 1;
@@ -40,9 +45,45 @@ static uint32_t image_size(const AthenaImage *image)
 
 static void image_update_ready(AthenaImage *image)
 {
-	if (image && image->surface && image->surface->Mem &&
-		image->surface->Width && image->surface->Height)
-		image->loaded = true;
+	uint32_t size;
+
+	if (!image || !image->surface)
+		return;
+
+	size = image_size(image);
+	image->loaded = image->surface->Mem != NULL &&
+		image->surface->Width > 0 &&
+		image->surface->Height > 0 &&
+		size > 0 &&
+		size != UINT32_MAX &&
+		(image->surface->PSM != GS_PSM_T4 &&
+		 image->surface->PSM != GS_PSM_T8 ||
+		 image->surface->Clut != NULL);
+}
+
+static int image_invalidate_storage(JSContext *ctx, AthenaImage *image)
+{
+	if (!image || !image->surface)
+		return 0;
+	if (graphics_surface_is_locked(image->surface)) {
+		JS_ThrowTypeError(ctx, "cannot change a locked Image");
+		return 0;
+	}
+
+	graphics_surface_release(image->surface);
+	free(image->surface->Mem);
+	free(image->surface->Clut);
+	image->surface->Mem = NULL;
+	image->surface->Clut = NULL;
+	image->surface->Vram = 0;
+	image->surface->VramClut = 0;
+	image->loaded = false;
+	return 1;
+}
+
+static int image_float_valid(float value, int nonnegative)
+{
+	return isfinite(value) && (!nonnegative || value >= 0.0f);
 }
 
 static int image_set_buffer(JSContext *ctx, AthenaImage *image,
@@ -81,29 +122,69 @@ static void image_finalizer(JSRuntime *rt, JSValue value)
 	}
 }
 
+static int image_parse_options(JSContext *ctx, JSValueConst value,
+	bool *delayed)
+{
+	JSValue delayed_value;
+
+	if (!JS_IsObject(value) || JS_IsArray(ctx, value))
+		return JS_ThrowTypeError(ctx, "Image options must be an object");
+
+	delayed_value = JS_GetPropertyStr(ctx, value, "delayed");
+	if (JS_IsException(delayed_value))
+		return 0;
+	if (!JS_IsUndefined(delayed_value)) {
+		if (!JS_IsBool(delayed_value)) {
+			JS_FreeValue(ctx, delayed_value);
+			JS_ThrowTypeError(ctx, "Image options.delayed must be a boolean");
+			return 0;
+		}
+		*delayed = JS_ToBool(ctx, delayed_value) != 0;
+	}
+	JS_FreeValue(ctx, delayed_value);
+	return 1;
+}
+
 static JSValue image_constructor(JSContext *ctx, JSValueConst new_target,
 	int argc, JSValueConst *argv)
 {
 	AthenaImage *image;
 	JSValue prototype, object;
 	const char *path = NULL;
+	bool delayed = true;
+	int options_index = -1;
 
-	if (!image_argc(ctx, argc, 0, 1, "Image"))
+	if (!image_argc(ctx, argc, 0, 2, "Image"))
 		return JS_EXCEPTION;
-	if (argc == 1) {
+	if (argc >= 1 && JS_IsObject(argv[0]) && !JS_IsArray(ctx, argv[0]))
+		options_index = 0;
+	else if (argc >= 1 && !JS_IsUndefined(argv[0])) {
 		path = JS_ToCString(ctx, argv[0]);
 		if (!path)
 			return JS_EXCEPTION;
-		dbgprintf("[Image] loading '%s'\n", path);
+	}
+	if (argc == 2) {
+		if (options_index != -1) {
+			if (!JS_IsUndefined(argv[1]))
+				return JS_ThrowTypeError(ctx,
+					"Image accepts either options or path plus options");
+		} else {
+			options_index = 1;
+		}
+	}
+	if (options_index != -1 &&
+		!image_parse_options(ctx, argv[options_index], &delayed)) {
+		if (path)
+			JS_FreeCString(ctx, path);
+		return JS_EXCEPTION;
 	}
 
-	image = path ? athena_image_create(path, true) :
-		athena_image_create_empty(true);
+	image = path ? athena_image_create(path, delayed) :
+		athena_image_create_empty(delayed);
 	if (path)
 		JS_FreeCString(ctx, path);
 	if (!image)
 		return JS_ThrowInternalError(ctx, "failed to create Image");
-	dbgprintf("[Image] image object created\n");
 
 	prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
 	if (JS_IsException(prototype)) {
@@ -150,6 +231,8 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 		return JS_ThrowInternalError(ctx, "image is not loaded");
 	if (JS_ToFloat32(ctx, &x, argv[0]) || JS_ToFloat32(ctx, &y, argv[1]))
 		return JS_EXCEPTION;
+	if (!image_float_valid(x, 0) || !image_float_valid(y, 0))
+		return JS_ThrowRangeError(ctx, "Image.draw coordinates must be finite");
 
 	width = image->width;
 	height = image->height;
@@ -188,6 +271,15 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 		}
 		JS_FreeValue(ctx, value);
 	}
+
+	if (!image_float_valid(width, 1) || !image_float_valid(height, 1) ||
+		!image_float_valid(startx, 1) || !image_float_valid(starty, 1) ||
+		!image_float_valid(endx, 1) || !image_float_valid(endy, 1) ||
+		!image_float_valid(angle, 0))
+		return JS_ThrowRangeError(ctx, "Image.draw options must be finite and non-negative");
+	if (endx < startx || endy < starty ||
+		endx > image->surface->Width || endy > image->surface->Height)
+		return JS_ThrowRangeError(ctx, "Image.draw source rectangle is outside the image");
 
 	athena_image_draw(image, x, y, width, height, startx, starty, endx, endy,
 		angle, color);
@@ -240,6 +332,8 @@ static JSValue image_set(JSContext *ctx, JSValueConst this_val, JSValue value,
 	float number;
 	if (!image || JS_ToFloat32(ctx, &number, value))
 		return JS_EXCEPTION;
+	if (!image_float_valid(number, magic >= 0 && magic <= 5))
+		return JS_ThrowRangeError(ctx, "Image property must be finite and non-negative");
 	switch (magic) {
 	case 0: image->width = number; break;
 	case 1: image->height = number; break;
@@ -304,24 +398,52 @@ static JSValue image_set_uint(JSContext *ctx, JSValueConst this_val,
 	surface = image->surface;
 	switch (magic) {
 	case 0: image->color = number; break;
-	case 1: surface->Filter = number; break;
+	case 1:
+		if (number != GS_FILTER_NEAREST && number != GS_FILTER_LINEAR)
+			return JS_ThrowRangeError(ctx,
+				"Image.filter must be GS_FILTER_NEAREST or GS_FILTER_LINEAR");
+		surface->Filter = number;
+		break;
 	case 3:
+		if (number != 4 && number != 8 && number != 16 &&
+			number != 24 && number != 32)
+			return JS_ThrowRangeError(ctx, "unsupported Image.bpp");
+		if ((number == 4 && surface->PSM == GS_PSM_T4) ||
+			(number == 8 && surface->PSM == GS_PSM_T8) ||
+			(number == 16 && (surface->PSM == GS_PSM_CT16 ||
+				surface->PSM == GS_PSM_CT16S)) ||
+			(number == 24 && surface->PSM == GS_PSM_CT24) ||
+			(number == 32 && surface->PSM == GS_PSM_CT32))
+			break;
+		if (!image_invalidate_storage(ctx, image))
+			return JS_EXCEPTION;
 		switch (number) {
 		case 4: surface->PSM = GS_PSM_T4; break;
 		case 8: surface->PSM = GS_PSM_T8; break;
 		case 16: surface->PSM = GS_PSM_CT16S; break;
 		case 24: surface->PSM = GS_PSM_CT24; break;
 		case 32: surface->PSM = GS_PSM_CT32; break;
-		default: return JS_ThrowRangeError(ctx, "unsupported Image.bpp");
 		}
 		break;
 	case 5:
+		if (graphics_surface_is_locked(surface)) {
+			JS_ThrowTypeError(ctx, "cannot change a locked Image");
+			return JS_EXCEPTION;
+		}
 		if (!image_set_buffer(ctx, image, value, &surface->Mem,
 			image_size(image), "Image.pixels"))
 			return JS_EXCEPTION;
+		graphics_surface_release(surface);
 		image_update_ready(image);
 		break;
 	case 6: {
+		if (surface->PSM != GS_PSM_T4 && surface->PSM != GS_PSM_T8)
+			return JS_ThrowTypeError(ctx,
+				"Image.palette is only valid for indexed images");
+		if (graphics_surface_is_locked(surface)) {
+			JS_ThrowTypeError(ctx, "cannot change a locked Image");
+			return JS_EXCEPTION;
+		}
 		uint32_t size = surface->PSM == GS_PSM_T4 ?
 			athena_surface_size(8, 2, GS_PSM_CT32) :
 			(surface->PSM == GS_PSM_T8 ?
@@ -329,10 +451,26 @@ static JSValue image_set_uint(JSContext *ctx, JSValueConst this_val,
 		if (!size || !image_set_buffer(ctx, image, value, &surface->Clut,
 			size, "Image.palette"))
 			return JS_EXCEPTION;
+		graphics_surface_release(surface);
+		image_update_ready(image);
 		break;
 	}
-	case 7: surface->Width = number; image_update_ready(image); break;
-	case 8: surface->Height = number; image_update_ready(image); break;
+	case 7:
+		if (number < 1 || number > 1024)
+			return JS_ThrowRangeError(ctx, "Image.texWidth must be between 1 and 1024");
+		if (number != surface->Width && !image_invalidate_storage(ctx, image))
+			return JS_EXCEPTION;
+		surface->Width = number;
+		image_update_ready(image);
+		break;
+	case 8:
+		if (number < 1 || number > 1024)
+			return JS_ThrowRangeError(ctx, "Image.texHeight must be between 1 and 1024");
+		if (number != surface->Height && !image_invalidate_storage(ctx, image))
+			return JS_EXCEPTION;
+		surface->Height = number;
+		image_update_ready(image);
+		break;
 	case 9: surface->PageAligned = number != 0; break;
 	default: break;
 	}
@@ -354,9 +492,12 @@ static JSValue image_copy_vram_block(JSContext *ctx, JSValueConst this_val,
 		JS_ToInt32(ctx, &destination_x, argv[4]) ||
 		JS_ToInt32(ctx, &destination_y, argv[5]))
 		return JS_EXCEPTION;
+	if (source_x < 0 || source_y < 0 || destination_x < 0 || destination_y < 0)
+		return JS_ThrowRangeError(ctx, "Image.copyVRAMBlock coordinates must be non-negative");
 	if (!athena_image_copy_vram_block(source, source_x, source_y,
 		destination, destination_x, destination_y))
-		return JS_ThrowInternalError(ctx, "failed to copy Image VRAM block");
+		return JS_ThrowInternalError(ctx,
+			"failed to copy Image VRAM block; images must be resident and coordinates must fit");
 	return JS_UNDEFINED;
 }
 
@@ -398,29 +539,23 @@ static const JSCFunctionListEntry image_static_funcs[] = {
 static int image_module_init(JSContext *ctx, JSModuleDef *module)
 {
 	JSValue prototype, constructor;
-	dbgprintf("[Image] module initialization started\n");
 	JS_NewClassID(&image_class_id);
 	JS_NewClass(JS_GetRuntime(ctx), image_class_id, &image_class);
-	dbgprintf("[Image] class registered\n");
 	prototype = JS_NewObject(ctx);
 	JS_SetPropertyFunctionList(ctx, prototype, image_proto_funcs,
 		countof(image_proto_funcs));
-	dbgprintf("[Image] prototype configured\n");
-	constructor = JS_NewCFunction2(ctx, image_constructor, "Image", 1,
+	constructor = JS_NewCFunction2(ctx, image_constructor, "Image", 2,
 		JS_CFUNC_constructor, 0);
 	JS_SetConstructor(ctx, constructor, prototype);
 	JS_SetClassProto(ctx, image_class_id, prototype);
 	JS_SetPropertyFunctionList(ctx, constructor, image_static_funcs,
 		countof(image_static_funcs));
-	dbgprintf("[Image] constructor configured\n");
 	JS_SetModuleExport(ctx, module, "Image", constructor);
-	dbgprintf("[Image] module initialization finished\n");
 	return 0;
 }
 
 JSModuleDef *athena_image_init(JSContext *ctx)
 {
-	dbgprintf("[Image] module registered\n");
 	JSModuleDef *module = JS_NewCModule(ctx, "Image", image_module_init);
 	if (!module)
 		return NULL;

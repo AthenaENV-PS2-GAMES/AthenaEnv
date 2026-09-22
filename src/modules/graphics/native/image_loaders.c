@@ -69,7 +69,8 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 	png_structp png_ptr;
 	png_infop info_ptr;
 	png_uint_32 width, height;
-	png_bytep *row_pointers;
+	png_bytep *row_pointers = NULL;
+	png_bytep row_data = NULL;
 
 	u32 sig_read = 0;
         int row, i, k=0, j, bit_depth, color_type, interlace_type;
@@ -96,6 +97,12 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 	if(setjmp(png_jmpbuf(png_ptr)))
 	{
 		dbgprintf("Got PNG Error!\n");
+		free(row_data);
+		free(row_pointers);
+		free(tex->Mem);
+		free(tex->Clut);
+		tex->Mem = NULL;
+		tex->Clut = NULL;
 		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 		fclose(File);
 		return -1;
@@ -108,6 +115,19 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 	png_read_info(png_ptr, info_ptr);
 
 	png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type,&interlace_type, NULL, NULL);
+	if (width == 0 || height == 0 || width > 1024 || height > 1024) {
+		dbgprintf("PNG dimensions exceed the PS2 texture limit\n");
+		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+		fclose(File);
+		return -1;
+	}
+	if (color_type == PNG_COLOR_TYPE_PALETTE &&
+		bit_depth != 4 && bit_depth != 8) {
+		dbgprintf("PNG palette depth must be 4 or 8 bits\n");
+		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+		fclose(File);
+		return -1;
+	}
 
 	if (bit_depth == 16) 
 		png_set_strip_16(png_ptr);
@@ -115,7 +135,10 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 	if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA || bit_depth < 4) 
 		png_set_expand(png_ptr);
 
-	png_set_filler(png_ptr, 0xff, PNG_FILLER_AFTER);
+	if (color_type == PNG_COLOR_TYPE_GRAY)
+		png_set_gray_to_rgb(png_ptr);
+	if (color_type == PNG_COLOR_TYPE_GRAY)
+		png_set_filler(png_ptr, 0xff, PNG_FILLER_AFTER);
 
 	png_read_update_info(png_ptr, info_ptr);
 
@@ -133,10 +156,16 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 		int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
 		tex->PSM = GS_PSM_CT32;
 		tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
+		if (!tex->Mem)
+			goto png_fail;
 
 		row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
+		row_data = (png_bytep)malloc((size_t)row_bytes * height);
+		if (!row_pointers || !row_data)
+			goto png_fail;
 
-		for (row = 0; row < height; row++) row_pointers[row] = (png_bytep)malloc(row_bytes);
+		for (row = 0; row < height; row++)
+			row_pointers[row] = row_data + row * row_bytes;
 
 		png_read_image(png_ptr, row_pointers);
 
@@ -150,19 +179,26 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 			}
 		}
 
-		for(row = 0; row < height; row++) free(row_pointers[row]);
-
+		free(row_data);
 		free(row_pointers);
+		row_data = NULL;
+		row_pointers = NULL;
 	}
 	else if(color_type == PNG_COLOR_TYPE_RGB)
 	{
 		int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
 		tex->PSM = GS_PSM_CT24;
 		tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
+		if (!tex->Mem)
+			goto png_fail;
 
 		row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
+		row_data = (png_bytep)malloc((size_t)row_bytes * height);
+		if (!row_pointers || !row_data)
+			goto png_fail;
 
-		for(row = 0; row < height; row++) row_pointers[row] = (png_bytep)malloc(row_bytes);
+		for (row = 0; row < height; row++)
+			row_pointers[row] = row_data + row * row_bytes;
 
 		png_read_image(png_ptr, row_pointers);
 
@@ -171,13 +207,14 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 
 		for (i = 0; i < tex->Height; i++) {
 			for (j = 0; j < tex->Width; j++) {
-				memcpy(&Pixels[k++], &row_pointers[i][4 * j], 3);
+				memcpy(&Pixels[k++], &row_pointers[i][3 * j], 3);
 			}
 		}
 
-		for(row = 0; row < height; row++) free(row_pointers[row]);
-
+		free(row_data);
 		free(row_pointers);
+		row_data = NULL;
+		row_pointers = NULL;
 	}
 	else if(color_type == PNG_COLOR_TYPE_PALETTE){
 
@@ -193,18 +230,28 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
         tex->ClutPSM = GS_PSM_CT32;
 
 		if (bit_depth == 4) {
+            if (width & 1 || num_pallete > 16)
+                goto png_fail;
 
-			int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-			tex->PSM = GS_PSM_T4;
-			tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
+            int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
+            tex->PSM = GS_PSM_T4;
+            tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
+            if (!tex->Mem)
+                goto png_fail;
 
-			row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
+            row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
+            row_data = (png_bytep)malloc((size_t)row_bytes * height);
+            if (!row_pointers || !row_data)
+                goto png_fail;
 
-			for(row = 0; row < height; row++) row_pointers[row] = (png_bytep)malloc(row_bytes);
+            for (row = 0; row < height; row++)
+                row_pointers[row] = row_data + row * row_bytes;
 
 			png_read_image(png_ptr, row_pointers);
 
             tex->Clut = memalign(128, athena_surface_size(8, 2, GS_PSM_CT32));
+            if (!tex->Clut)
+                goto png_fail;
             memset(tex->Clut, 0, athena_surface_size(8, 2, GS_PSM_CT32));
 
             unsigned char *pixel = (unsigned char *)tex->Mem;
@@ -237,22 +284,33 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 
     		for (byte = 0; byte < athena_surface_size(tex->Width, tex->Height, tex->PSM); byte++) tmpdst[byte] = (tmpsrc[byte] << 4) | (tmpsrc[byte] >> 4);
 
-			for(row = 0; row < height; row++) free(row_pointers[row]);
-
+			free(row_data);
 			free(row_pointers);
+			row_data = NULL;
+			row_pointers = NULL;
 
         } else if (bit_depth == 8) {
+			if (num_pallete > 256)
+				goto png_fail;
 			int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
 			tex->PSM = GS_PSM_T8;
 			tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
+			if (!tex->Mem)
+				goto png_fail;
 
 			row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
+			row_data = (png_bytep)malloc((size_t)row_bytes * height);
+			if (!row_pointers || !row_data)
+				goto png_fail;
 
-			for(row = 0; row < height; row++) row_pointers[row] = (png_bytep)malloc(row_bytes);
+			for (row = 0; row < height; row++)
+				row_pointers[row] = row_data + row * row_bytes;
 
 			png_read_image(png_ptr, row_pointers);
 
             tex->Clut = memalign(128, athena_surface_size(16, 16, GS_PSM_CT32));
+            if (!tex->Clut)
+                goto png_fail;
             memset(tex->Clut, 0, athena_surface_size(16, 16, GS_PSM_CT32));
 
             unsigned char *pixel = (unsigned char *)tex->Mem;
@@ -289,9 +347,10 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
     		    }
     		}
 
-			for(row = 0; row < height; row++) free(row_pointers[row]);
-
+			free(row_data);
 			free(row_pointers);
+			row_data = NULL;
+			row_pointers = NULL;
         }
 	}
 	else
@@ -309,6 +368,22 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 
 	return 0;
 
+png_fail:
+	if (row_data)
+		free(row_data);
+	if (row_pointers)
+		free(row_pointers);
+	if (tex->Mem) {
+		free(tex->Mem);
+		tex->Mem = NULL;
+	}
+	if (tex->Clut) {
+		free(tex->Clut);
+		tex->Clut = NULL;
+	}
+	png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
+	fclose(File);
+	return -1;
 }
 
 int athena_load_bmp(GSSURFACE* tex, FILE* File, bool delayed)

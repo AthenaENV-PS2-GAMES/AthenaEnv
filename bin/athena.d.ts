@@ -121,24 +121,31 @@ declare module "Image" {
         color?: number;
     };
 
+    /** Options controlling image creation and texture upload behavior. */
+    type ImageOptions = {
+        /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
+        delayed?: boolean;
+    };
+
     class Image {
         /** Loads an image from `path`, or creates an empty image when omitted. */
-        constructor(path?: string);
+        constructor(options?: ImageOptions);
+        constructor(path: string, options?: ImageOptions);
         /** Linear size in bytes of the current pixel buffer. */
         readonly size: number;
-        /** Whether the image uses deferred texture upload behavior. */
+        /** Whether texture uploads use the deferred VIF1 path. */
         readonly delayed: boolean;
         /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
         pixels: ArrayBuffer;
-        /** CPU palette buffer for indexed images; assigning it copies the buffer. */
+        /** CPU palette buffer for indexed images; required for indexed images. */
         palette: ArrayBuffer;
-        /** Texture width in pixels. Set before assigning pixels for new images. */
+        /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
         texWidth: number;
-        /** Texture height in pixels. Set before assigning pixels for new images. */
+        /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
         texHeight: number;
-        /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel. */
+        /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
         bpp: number;
-        /** Texture filter mode, usually a GS nearest/linear constant. */
+        /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
         filter: number;
         /** Whether dimensions and a valid pixel buffer are available for drawing. */
         renderable: boolean;
@@ -159,7 +166,7 @@ declare module "Image" {
         /** Packed RGBA tint multiplied with sampled texture color. */
         color: number;
 
-        /** True when the image has valid dimensions and CPU pixel data. */
+        /** True when dimensions, pixel data and indexed palette data are valid. */
         ready(): boolean;
         /** Queues a textured sprite at `(x, y)` for the current frame. */
         draw(x: number, y: number, options?: ImageDrawOptions): void;
@@ -169,7 +176,7 @@ declare module "Image" {
         unlock(): boolean;
         /** Returns whether the image is currently pinned in VRAM. */
         locked(): boolean;
-        /** Converts supported 24-bit textures to a PS2-native 16-bit format. */
+        /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
         optimize(): boolean;
         /** Releases the native image and its CPU/VRAM resources. */
         free(): void;

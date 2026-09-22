@@ -2,7 +2,6 @@
 #include <string.h>
 
 #include <graphics.h>
-#include <dbgprintf.h>
 
 #include "image.h"
 
@@ -58,7 +57,6 @@ AthenaImage *athena_image_create(const char *path, bool delayed)
 
 	if (path) {
 		image->path = strdup(path);
-		dbgprintf("[Image] calling load_image\n");
 		if (!image->path || load_image(image->surface, path, delayed) < 0) {
 			athena_image_destroy(image);
 			return NULL;
@@ -69,8 +67,6 @@ AthenaImage *athena_image_create(const char *path, bool delayed)
 		image->height = (float)image->surface->Height;
 		image->endx = image->width;
 		image->endy = image->height;
-		dbgprintf("[Image] load_image completed (%ux%u)\n",
-			image->surface->Width, image->surface->Height);
 	}
 
 	return image;
@@ -129,7 +125,6 @@ void athena_image_draw(AthenaImage *image, float x, float y, float width,
 		draw_image(image->surface, x, y, width, height,
 			startx, starty, endx, endy, color);
 	}
-	dbgprintf("[Image] draw command queued\n");
 }
 
 bool athena_image_lock(AthenaImage *image)
@@ -138,6 +133,8 @@ bool athena_image_lock(AthenaImage *image)
 
 	if (!athena_image_is_loaded(image))
 		return false;
+	if (graphics_surface_is_locked(image->surface))
+		return true;
 
 	/*
 	 * Locking must leave the texture resident. An asynchronous bind only
@@ -147,13 +144,10 @@ bool athena_image_lock(AthenaImage *image)
 	 * pending forever.
 	 */
 	result = graphics_surface_bind_sync(image->surface);
-	dbgprintf("[Image] synchronous bind result=%d vram=0x%08x psm=%u tbw=%u\n",
-		result, image->surface->Vram, image->surface->PSM, image->surface->TBW);
 	if (result == GRAPHICS_BIND_ERROR)
 		return false;
 
 	result = graphics_surface_lock(image->surface);
-	dbgprintf("[Image] lock result=%d\n", result);
 	return result != 0;
 }
 
@@ -175,7 +169,10 @@ bool athena_image_optimize(AthenaImage *image)
 	if (!athena_image_is_loaded(image) ||
 		image->surface->PSM != GS_PSM_CT24)
 		return false;
+	if (graphics_surface_is_locked(image->surface))
+		return false;
 
+	graphics_surface_release(image->surface);
 	athena_texture_optimize(image->surface);
 	return true;
 }
