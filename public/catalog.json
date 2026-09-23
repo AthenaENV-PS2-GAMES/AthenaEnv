@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-23T14:46:54.572Z",
+  "generatedAt": "2026-09-23T16:21:55.113Z",
   "modules": [
     {
       "id": "color",
@@ -209,6 +209,24 @@
         "ee_libs": []
       },
       "global_alias": "Thread"
+    },
+    {
+      "id": "tilemap",
+      "name": "TileMap",
+      "description": "VU1-accelerated batched sprite and tilemap rendering.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "TileMap"
     },
     {
       "id": "timer",

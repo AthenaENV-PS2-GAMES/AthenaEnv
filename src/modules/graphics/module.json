@@ -12,6 +12,7 @@
     "native/owl_packet.c",
     "native/texture_manager.c",
     "native/vif.c",
+    "native/mpg_manager.c",
     "native/image_loaders.c"
   ],
   "includes": [

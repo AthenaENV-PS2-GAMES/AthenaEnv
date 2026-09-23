@@ -40,7 +40,8 @@ JS_CORE = quickjs/cutils.o quickjs/libbf.o quickjs/libregexp.o quickjs/libunicod
 
 -include Makefile.modules
 
-MODULE_OBJS = $(MODULE_SRCS:src/%.c=%.o)
+# Modules may ship C sources and prebuilt VU microprograms (.vsm).
+MODULE_OBJS = $(patsubst src/%.vsm,%.o,$(patsubst src/%.c,%.o,$(MODULE_SRCS)))
 EE_LIBS += $(MODULE_LIBS)
 EE_INCS += $(MODULE_INCS)
 
@@ -114,6 +115,12 @@ $(EE_OBJ_DIR)%.o: $(EE_SRC_DIR)%.S | $(EE_OBJ_DIR)
 	@echo AS - $<
 	$(DIR_GUARD)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
+
+# Prebuilt VU microprograms; vcl is not part of the toolchain image.
+$(EE_OBJ_DIR)%.o: $(EE_SRC_DIR)%.vsm | $(EE_OBJ_DIR)
+	@echo DVP - $<
+	$(DIR_GUARD)
+	$(EE_DVP) $< -o $@
 
 $(EE_OBJ_DIR)%.o: $(EE_EMBED_DIR)%.c | $(EE_OBJ_DIR)
 	@echo BIN2C - $<

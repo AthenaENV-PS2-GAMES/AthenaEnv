@@ -138,6 +138,8 @@ int main(int argc, char **argv) {
     dbgprintf("\n========================================\n");
     dbgprintf("       AthenaEnv Core (Minimal)      \n");
     dbgprintf("========================================\n");
+    /* Identifies the binary in logs, e.g. to confirm a rebuilt ELF ran. */
+    dbgprintf("[AthenaCore] Build: %s %s\n", __DATE__, __TIME__);
     dbgprintf("[AthenaCore] Boot path: %s\n", boot_path);
 
     if (argc > 1) {

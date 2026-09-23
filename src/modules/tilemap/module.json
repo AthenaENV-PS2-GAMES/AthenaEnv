@@ -1,0 +1,37 @@
+{
+  "id": "tilemap",
+  "name": "TileMap",
+  "description": "VU1-accelerated batched sprite and tilemap rendering.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/tilemap.c",
+    "vu1/draw_2D_tile_list.vsm",
+    "quickjs/ath_tilemap.c"
+  ],
+  "includes": [
+    ".",
+    "native",
+    "quickjs",
+    "../graphics",
+    "../image",
+    "../image/quickjs"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "image"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "module_name": "TileMap",
+    "global_alias": "TileMap",
+    "init_func": "athena_tilemap_init",
+    "header": "quickjs/ath_tilemap.h"
+  },
+  "types": "tilemap.d.ts"
+}

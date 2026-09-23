@@ -304,22 +304,28 @@ static const JSCFunctionListEntry font_exports[] = {
 
 static int font_module_init(JSContext *ctx, JSModuleDef *module)
 {
-    JSValue font_proto_value, font_class, render_proto_value;
+    JSValue font_proto_value, font_constructor, render_proto_value;
 
     if (!font_system_initialized) {
         fntInit();
         font_system_initialized = 1;
     }
     JS_NewClassID(&font_class_id);
+    /*
+     * `font_class` must be the static JSClassDef. A local JSValue with the
+     * same name used to shadow it, so the class was registered from stack
+     * garbage: a bogus `exotic` pointer made every Font property lookup read
+     * near address 0, and the finalizer and call hooks were garbage too.
+     */
     JS_NewClass(JS_GetRuntime(ctx), font_class_id, &font_class);
     font_proto_value = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, font_proto_value, font_proto,
         countof(font_proto));
     JS_SetClassProto(ctx, font_class_id, font_proto_value);
-    font_class = JS_NewCFunction2(ctx, font_ctor, "Font", 1,
+    font_constructor = JS_NewCFunction2(ctx, font_ctor, "Font", 1,
         JS_CFUNC_constructor, 0);
-    JS_SetConstructor(ctx, font_class, font_proto_value);
-    JS_SetPropertyFunctionList(ctx, font_class, font_exports,
+    JS_SetConstructor(ctx, font_constructor, font_proto_value);
+    JS_SetPropertyFunctionList(ctx, font_constructor, font_exports,
         countof(font_exports));
 
     JS_NewClassID(&render_class_id);
@@ -329,7 +335,7 @@ static int font_module_init(JSContext *ctx, JSModuleDef *module)
         countof(render_proto));
     JS_SetClassProto(ctx, render_class_id, render_proto_value);
 
-    JS_SetModuleExport(ctx, module, "Font", font_class);
+    JS_SetModuleExport(ctx, module, "Font", font_constructor);
     return 0;
 }
 
