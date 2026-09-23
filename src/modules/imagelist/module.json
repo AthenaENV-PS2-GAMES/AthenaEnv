@@ -12,13 +12,17 @@
   "includes": [
     ".",
     "quickjs",
+    "../thread",
+    "../mutex",
     "../image",
     "../image/quickjs",
     "../graphics"
   ],
   "dependencies": {
     "modules": [
-      "image"
+      "image",
+      "thread",
+      "mutex"
     ],
     "iop": [],
     "ee_libs": []

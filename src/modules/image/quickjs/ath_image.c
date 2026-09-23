@@ -21,6 +21,11 @@ AthenaImage *athena_image_from_value(JSContext *ctx, JSValueConst value)
 	return image_this(ctx, value);
 }
 
+AthenaImage *athena_image_peek(JSValueConst value)
+{
+	return JS_GetOpaque(value, image_class_id);
+}
+
 JSValue athena_image_to_value(JSContext *ctx, AthenaImage *image)
 {
 	JSValue object = JS_NewObjectClass(ctx, image_class_id);
@@ -233,6 +238,63 @@ static JSValue image_failed(JSContext *ctx, JSValueConst this_val,
 {
 	AthenaImage *image = image_this(ctx, this_val);
 	return JS_NewBool(ctx, image && image->failed);
+}
+
+static JSValue image_status(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+
+	if (!image)
+		return JS_EXCEPTION;
+	athena_image_refresh_status(image);
+	switch (image->status) {
+	case ATHENA_IMAGE_STATUS_LOADING:
+		return JS_NewString(ctx, "loading");
+	case ATHENA_IMAGE_STATUS_READY:
+		return JS_NewString(ctx, "ready");
+	case ATHENA_IMAGE_STATUS_DECODED:
+		return JS_NewString(ctx, "decoded");
+	case ATHENA_IMAGE_STATUS_UPLOAD_PENDING:
+		return JS_NewString(ctx, "upload_pending");
+	case ATHENA_IMAGE_STATUS_FAILED:
+		return JS_NewString(ctx, "failed");
+	case ATHENA_IMAGE_STATUS_CANCELLED:
+		return JS_NewString(ctx, "cancelled");
+	case ATHENA_IMAGE_STATUS_QUEUED:
+	default:
+		return JS_NewString(ctx, "queued");
+	}
+}
+
+JSValue athena_image_error_value(JSContext *ctx, const AthenaImage *image,
+	const char *path)
+{
+	JSValue error = JS_NewObject(ctx);
+
+	if (JS_IsException(error))
+		return error;
+	if (path)
+		JS_SetPropertyStr(ctx, error, "path", JS_NewString(ctx, path));
+	JS_SetPropertyStr(ctx, error, "code",
+		JS_NewString(ctx, athena_image_error_code_name(image->error_code)));
+	JS_SetPropertyStr(ctx, error, "stage",
+		JS_NewString(ctx, image->error_stage));
+	JS_SetPropertyStr(ctx, error, "message",
+		JS_NewString(ctx, image->error_message));
+	return error;
+}
+
+static JSValue image_error(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+
+	if (!image)
+		return JS_EXCEPTION;
+	if (!image->failed)
+		return JS_UNDEFINED;
+	return athena_image_error_value(ctx, image, image->path);
 }
 
 static JSValue image_free(JSContext *ctx, JSValueConst this_val,
@@ -539,6 +601,8 @@ static const JSCFunctionListEntry image_proto_funcs[] = {
 	JS_CFUNC_DEF("ready", 0, image_ready),
 	JS_CFUNC_DEF("loading", 0, image_loading),
 	JS_CFUNC_DEF("failed", 0, image_failed),
+	JS_CFUNC_DEF("status", 0, image_status),
+	JS_CFUNC_DEF("error", 0, image_error),
 	JS_CFUNC_DEF("free", 0, image_free),
 	JS_CFUNC_DEF("lock", 0, image_lock),
 	JS_CFUNC_DEF("unlock", 0, image_unlock),

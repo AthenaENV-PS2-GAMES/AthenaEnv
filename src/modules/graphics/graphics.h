@@ -395,6 +395,17 @@ float FPSCounter(int interval);
 
 int setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 field, bool zbuffering, int psmz, bool double_buffering, uint8_t pass_count);
 
+typedef enum {
+	ATHENA_IMAGE_LOAD_OK = 0,
+	ATHENA_IMAGE_LOAD_OPEN = 1,
+	ATHENA_IMAGE_LOAD_FORMAT = 2,
+	ATHENA_IMAGE_LOAD_DECODE = 3,
+	ATHENA_IMAGE_LOAD_SURFACE = 4,
+	ATHENA_IMAGE_LOAD_UPLOAD = 5
+} AthenaImageLoadError;
+
+int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
+	AthenaImageLoadError *error);
 int load_image(GSSURFACE* image, const char* path, bool delayed);
 
 void draw_image(GSSURFACE* source, float x, float y, float width, float height, float startx, float starty, float endx, float endy, Color color);

@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-22T21:58:10.501Z",
+  "generatedAt": "2026-09-23T14:46:54.572Z",
   "modules": [
     {
       "id": "color",
@@ -105,7 +105,9 @@
       "default": true,
       "dependencies": {
         "modules": [
-          "image"
+          "image",
+          "thread",
+          "mutex"
         ],
         "iop": [],
         "ee_libs": []

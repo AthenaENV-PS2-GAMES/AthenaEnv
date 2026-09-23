@@ -46,7 +46,8 @@ void athena_set_tw_th(const GSSURFACE *Texture, int *tw, int *th)
 
 static bool vsync = true;
 static bool perf = false;
-static int vsync_sema_id = 0;
+static int vsync_sema_id = -1;
+static int vsync_handler_id = -1;
 static clock_t curtime = 0;
 static float fps = 0.0f;
 
@@ -1620,7 +1621,7 @@ void init_graphics() {
 	main_screen_buffer[DEPTH_BUFFER] = &depth_buffer;
 
 	DIntr();
-	(void)AddIntcHandler(INTC_VBLANK_S, vsync_handler, 0);
+	vsync_handler_id = AddIntcHandler(INTC_VBLANK_S, vsync_handler, 0);
 	EnableIntc(INTC_VBLANK_S);
 	// Unmask VSync interrupt
 	GsPutIMR(GsGetIMR() & ~0x0800);
@@ -1638,6 +1639,16 @@ void graphics_service_init()
 }
 
 void graphicWaitVblankStart(){
+	/*
+	 * Block on the vblank interrupt so lower-priority threads, such as the
+	 * ImageList decoder, run while the frame waits. A vblank signalled
+	 * earlier is dropped first so the wait always ends on the next one.
+	 */
+	if (vsync_sema_id >= 0 && vsync_handler_id >= 0) {
+		while (PollSema(vsync_sema_id) >= 0);
+		WaitSema(vsync_sema_id);
+		return;
+	}
 	*GS_CSR = *GS_CSR & 8;
 	while(!(*GS_CSR & 8));
 }

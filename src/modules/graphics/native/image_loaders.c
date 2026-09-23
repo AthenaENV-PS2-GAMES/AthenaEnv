@@ -356,7 +356,7 @@ int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
 	else
 	{
 		dbgprintf("This texture depth is not supported yet!\n");
-		return -1;
+		goto png_fail;
 	}
 
 	tex->Filter = GS_FILTER_NEAREST;
@@ -705,6 +705,8 @@ static void  _ps2_load_JPEG_generic(GSSURFACE *Texture, struct jpeg_decompress_s
 	dbgprintf("Texture Size = %i\n",textureSize);
 	#endif
 	Texture->Mem = (uint32_t*)memalign(128, textureSize);
+	if (!Texture->Mem)
+		(*cinfo->err->error_exit)((j_common_ptr)cinfo);
 
 	unsigned int row_stride = textureSize/Texture->Height;
 	unsigned char *row_pointer = (unsigned char *)Texture->Mem;
@@ -742,8 +744,8 @@ int athena_load_jpeg(GSSURFACE* tex, FILE* fp, bool scale_down, bool delayed)
 		*/
 		jpeg_destroy_decompress(&cinfo);
 		fclose(fp);
-		if (tex->Mem)
-			free(tex->Mem);
+		free(tex->Mem);
+		tex->Mem = NULL;
 		dbgprintf("jpeg: error during processing file\n");
 		return -1;
 	}
@@ -762,23 +764,34 @@ int athena_load_jpeg(GSSURFACE* tex, FILE* fp, bool scale_down, bool delayed)
 
 }
 
-int load_image(GSSURFACE* image, const char* path, bool delayed) {
+int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
+	AthenaImageLoadError *error) {
 	FILE* file;
 	uint16_t magic;
 	int result = -1;
 
-	if (!image || !path)
+	if (error)
+		*error = ATHENA_IMAGE_LOAD_DECODE;
+	if (!image || !path) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_SURFACE;
 		return -1;
+	}
 
 	image->Delayed = delayed;
 	image->PageAligned = false;
 	image->Macroblock = false;
 
 	file = fopen(path, "rb");
-	if (!file)
+	if (!file) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_OPEN;
 		return -1;
+	}
 	if (fread(&magic, sizeof(magic), 1, file) != 1) {
 		fclose(file);
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_DECODE;
 		return -1;
 	}
 	fseek(file, 0, SEEK_SET);
@@ -788,8 +801,17 @@ int load_image(GSSURFACE* image, const char* path, bool delayed) {
 		result = athena_load_jpeg(image, file, false, delayed);
 	else if (magic == 0x5089)
 		result = athena_load_png(image, file, delayed);
-	else
+	else {
 		fclose(file);
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_FORMAT;
+	}
 
+	if (result == 0 && error)
+		*error = ATHENA_IMAGE_LOAD_OK;
 	return result;
+}
+
+int load_image(GSSURFACE* image, const char* path, bool delayed) {
+	return load_image_ex(image, path, delayed, NULL);
 }

@@ -55,6 +55,8 @@ MODULE_INCS = \
 	-Isrc/modules/image/../graphics \
 	-Isrc/modules/imagelist \
 	-Isrc/modules/imagelist/quickjs \
+	-Isrc/modules/imagelist/../thread \
+	-Isrc/modules/imagelist/../mutex \
 	-Isrc/modules/imagelist/../image \
 	-Isrc/modules/imagelist/../image/quickjs \
 	-Isrc/modules/imagelist/../graphics \
