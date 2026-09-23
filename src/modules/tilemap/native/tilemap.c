@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -218,34 +219,336 @@ static void tilemap_texture_tags(owl_packet *packet, GSSURFACE *tex)
 		GS_SETREG_TEX1(1, 0, tex->Filter, tex->Filter, 0, 0, 0));
 }
 
-void athena_tilemap_render(const AthenaTileMaterial *materials,
-	uint32_t material_count, GSSURFACE *const *textures,
-	uint32_t texture_count, const AthenaTileSprite *sprites,
-	uint32_t sprite_count, float x, float y)
+void athena_tilemap_translate(AthenaTileSprite *sprites, uint32_t first,
+	uint32_t count, float dx, float dy)
 {
-	float origin[4] __attribute__((aligned(16))) = { x, y, 0.0f, 0.0f };
+	AthenaTileSprite *sprite = sprites + first;
+	AthenaTileSprite *end = sprite + count;
+
+	for (; sprite < end; ++sprite) {
+		sprite->x += dx;
+		sprite->y += dy;
+	}
+}
+
+void athena_tilemap_set_color(AthenaTileSprite *sprites, uint32_t first,
+	uint32_t count, uint32_t r, uint32_t g, uint32_t b, uint32_t a)
+{
+	AthenaTileSprite *sprite = sprites + first;
+	AthenaTileSprite *end = sprite + count;
+
+	for (; sprite < end; ++sprite) {
+		sprite->r = r;
+		sprite->g = g;
+		sprite->b = b;
+		sprite->a = a;
+	}
+}
+
+float *athena_tilemap_atlas_table(const AthenaTileAtlas *atlas)
+{
+	uint32_t count;
+	uint32_t id;
+	float *table;
+
+	if (!atlas || atlas->rows == 0 || atlas->columns == 0)
+		return NULL;
+	count = atlas->columns * atlas->rows;
+	if (count > ATHENA_TILEMAP_MAX_TABLE_TILES)
+		return NULL;
+	table = malloc(count * 2 * sizeof(*table));
+	if (!table)
+		return NULL;
+	for (id = 0; id < count; ++id) {
+		table[2 * id] = (float)((id % atlas->columns) * atlas->tile_width);
+		table[2 * id + 1] = (float)((id / atlas->columns) * atlas->tile_height);
+	}
+	return table;
+}
+
+/* Hoisted per-call constants for tilemap_point_at_tile(). */
+typedef struct {
+	const AthenaTileAtlas *atlas;
+	float tile_width;
+	float tile_height;
+	float width;
+	float height;
+} TileLookup;
+
+static void tilemap_lookup_init(TileLookup *lookup,
+	const AthenaTileAtlas *atlas, float width, float height)
+{
+	lookup->atlas = atlas;
+	lookup->tile_width = (float)atlas->tile_width;
+	lookup->tile_height = (float)atlas->tile_height;
+	lookup->width = width;
+	lookup->height = height;
+}
+
+static inline void tilemap_point_at_tile(AthenaTileSprite *sprite,
+	uint16_t id, const TileLookup *lookup)
+{
+	const AthenaTileAtlas *atlas = lookup->atlas;
+	float u;
+	float v;
+
+	if (id == ATHENA_TILEMAP_EMPTY) {
+		sprite->w = 0.0f;
+		sprite->h = 0.0f;
+		return;
+	}
+	if (atlas->uv) {
+		/* Ids were validated against columns * rows, the table size. */
+		u = atlas->uv[2 * id];
+		v = atlas->uv[2 * id + 1];
+	} else {
+		u = (float)((id % atlas->columns) * atlas->tile_width);
+		v = (float)((id / atlas->columns) * atlas->tile_height);
+	}
+	sprite->u1 = u;
+	sprite->v1 = v;
+	sprite->u2 = u + lookup->tile_width;
+	sprite->v2 = v + lookup->tile_height;
+	sprite->w = lookup->width;
+	sprite->h = lookup->height;
+}
+
+void athena_tilemap_set_tiles(AthenaTileSprite *sprites, uint32_t first,
+	const uint16_t *tiles, uint32_t count, const AthenaTileAtlas *atlas,
+	float width, float height)
+{
+	AthenaTileSprite *sprite = sprites + first;
+	TileLookup lookup;
+	uint32_t i;
+
+	tilemap_lookup_init(&lookup, atlas, width, height);
+	for (i = 0; i < count; ++i, ++sprite)
+		tilemap_point_at_tile(sprite, tiles[i], &lookup);
+}
+
+void athena_tilemap_fill_grid(AthenaTileSprite *sprites,
+	const AthenaTileGrid *grid, const uint16_t *tiles,
+	const AthenaTileAtlas *atlas, float zindex)
+{
+	uint32_t row;
+	uint32_t column;
+	uint32_t index = 0;
+	TileLookup lookup;
+
+	tilemap_lookup_init(&lookup, atlas, grid->tile_width, grid->tile_height);
+	for (row = 0; row < grid->rows; ++row) {
+		for (column = 0; column < grid->columns; ++column, ++index) {
+			AthenaTileSprite *sprite = &sprites[index];
+
+			memset(sprite, 0, sizeof(*sprite));
+			sprite->x = (float)column * grid->tile_width;
+			sprite->y = (float)row * grid->tile_height;
+			sprite->r = sprite->g = sprite->b = sprite->a = 0x80;
+			sprite->zindex = zindex;
+			tilemap_point_at_tile(sprite, tiles ? tiles[index] : 0,
+				&lookup);
+		}
+	}
+}
+
+/* Clamps floor(value) to [low, high] without overflowing an int. */
+static int tilemap_clamp_cell(double value, int low, int high)
+{
+	value = floor(value);
+	if (value < (double)low)
+		return low;
+	if (value > (double)high)
+		return high;
+	return (int)value;
+}
+
+uint32_t athena_tilemap_visible_ranges(const AthenaTileGrid *grid,
+	float x, float y, AthenaTileRange *ranges)
+{
+	double left;
+	double top;
+	int first_column, last_column, first_row, last_row;
+	int row;
+	uint32_t count = 0;
+
+	if (!grid || grid->columns == 0 || grid->rows == 0 ||
+		grid->tile_width <= 0.0f || grid->tile_height <= 0.0f || !gsGlobal)
+		return 0;
+	/* Screen position of the grid's top-left corner. */
+	left = (double)x + tile_camera[2];
+	top = (double)y + tile_camera[3];
+	/* One extra cell on each side covers sprites nudged off their cell. */
+	first_column = tilemap_clamp_cell(-left / grid->tile_width - 1.0,
+		0, (int)grid->columns);
+	last_column = tilemap_clamp_cell((gsGlobal->Width - left) /
+		grid->tile_width + 1.0, -1, (int)grid->columns - 1);
+	first_row = tilemap_clamp_cell(-top / grid->tile_height - 1.0,
+		0, (int)grid->rows);
+	last_row = tilemap_clamp_cell((gsGlobal->Height - top) /
+		grid->tile_height + 1.0, -1, (int)grid->rows - 1);
+	if (first_column > last_column || first_row > last_row)
+		return 0;
+
+	for (row = first_row; row <= last_row; ++row) {
+		uint32_t first = (uint32_t)row * grid->columns +
+			(uint32_t)first_column;
+		uint32_t span = (uint32_t)(last_column - first_column + 1);
+
+		/* Full-width rows are contiguous: merge them into one range. */
+		if (count > 0 &&
+			ranges[count - 1].first + ranges[count - 1].count == first) {
+			ranges[count - 1].count += span;
+		} else {
+			ranges[count].first = first;
+			ranges[count].count = span;
+			count++;
+		}
+	}
+	return count;
+}
+
+/* State shared by every span queued during one render call. */
+typedef struct {
 	uint64_t giftags[2];
-	owl_packet *packet;
 	/* Texture bound for this render, and the one TEX0 currently names. */
-	GSSURFACE *bound = NULL;
-	GSSURFACE *sent = NULL;
-	int texture_id = GRAPHICS_BIND_RESIDENT;
+	GSSURFACE *bound;
+	GSSURFACE *sent;
+	int texture_id;
 	uint64_t old_alpha;
 	uint64_t alpha;
-	bool started = false;
-	uint32_t first = 0;
-	uint32_t i;
+	bool started;
 	int mpg_addr;
+	uint32_t drawn;
+} TileRenderState;
+
+/* Queues sprites [first, last] with `material`, unless it must be skipped. */
+static void tilemap_draw_span(TileRenderState *state,
+	const AthenaTileMaterial *material, GSSURFACE *const *textures,
+	uint32_t texture_count, const AthenaTileSprite *sprites,
+	uint32_t first, uint32_t last)
+{
+	uint32_t remaining = last - first + 1;
+	uint32_t drawn = 0;
+	uint64_t material_alpha;
+	bool texture_mapping =
+		material->texture_index != ATHENA_TILEMAP_NO_TEXTURE;
+	bool upload_pending = false;
+
+	if (texture_mapping) {
+		GSSURFACE *current = NULL;
+
+		if (textures && material->texture_index >= 0 &&
+			(uint32_t)material->texture_index < texture_count)
+			current = textures[material->texture_index];
+		/* A texture that is not loaded skips its sprites. */
+		if (!current)
+			return;
+		if (current != state->bound) {
+			state->texture_id = graphics_surface_bind(current, true);
+			state->bound = state->texture_id == GRAPHICS_BIND_ERROR ?
+				NULL : current;
+			upload_pending = state->texture_id >= 0;
+			/* A rebind may have moved the texture in VRAM. */
+			state->sent = NULL;
+		}
+		if (!state->bound)
+			return;
+	}
+
+	material_alpha = material->has_blend_mode ?
+		material->blend_mode : state->old_alpha;
+	if (material_alpha != state->alpha) {
+		if (state->started)
+			tilemap_flush();
+		set_screen_param(ALPHA_BLEND_EQUATION, material_alpha);
+		state->alpha = material_alpha;
+	}
+
+	while (remaining > 0) {
+		uint32_t count = remaining < tile_diagnostics.batch_size ?
+			remaining : tile_diagnostics.batch_size;
+		/* Upload marker 5, texture registers 5, batch 4 (+1) quadwords. */
+		owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 15);
+
+		if (tile_diagnostics.flush_each_batch)
+			state->sent = NULL;
+		if (upload_pending) {
+			tilemap_upload_tags(packet, state->texture_id);
+			upload_pending = false;
+		}
+		if (texture_mapping && state->sent != state->bound) {
+			tilemap_texture_tags(packet, state->bound);
+			state->sent = state->bound;
+		}
+
+		owl_add_unpack_data_cnt(packet, 0, 1, 1);
+		owl_add_ulong(packet, state->giftags[texture_mapping]);
+		owl_add_ulong(packet, TILEMAP_GIF_REGS);
+
+		owl_add_unpack_data_ref(packet, 1,
+			(void *)&sprites[first + drawn], count * 4, 1);
+
+		/*
+		 * No FLUSHA between batches: the VIF waits for the previous
+		 * program before MSCNT, and the double-buffered layout keeps this
+		 * unpack clear of the buffer VU1 or PATH1 may still use, so VU work
+		 * overlaps GS drawing. The first batch runs the program setup;
+		 * later ones resume at --cont.
+		 */
+		if (tile_diagnostics.flush_each_batch) {
+			owl_add_cnt_tag(packet, 1, owl_vif_code_double(
+				VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
+			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+			owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
+			owl_add_uint(packet, VIF_CODE(state->mpg_addr, 0,
+				state->started ? VIF_MSCNT : VIF_MSCALF, 0));
+		} else {
+			owl_add_cnt_tag(packet, 0, owl_vif_code_double(
+				VIF_CODE(state->mpg_addr, 0,
+					state->started ? VIF_MSCNT : VIF_MSCALF, 0),
+				VIF_CODE(count, 0, VIF_ITOP, 0)));
+		}
+		state->started = true;
+
+		remaining -= count;
+		drawn += count;
+	}
+	state->drawn += drawn;
+}
+
+uint32_t athena_tilemap_render(const AthenaTileMaterial *materials,
+	uint32_t material_count, GSSURFACE *const *textures,
+	uint32_t texture_count, const AthenaTileSprite *sprites,
+	uint32_t sprite_count, const AthenaTileRange *ranges,
+	uint32_t range_count, float x, float y)
+{
+	float origin[4] __attribute__((aligned(16))) = { x, y, 0.0f, 0.0f };
+	AthenaTileRange whole;
+	TileRenderState state;
+	owl_packet *packet;
+	/* Material `material` covers sprites [material_first, its end]. */
+	uint32_t material = 0;
+	uint32_t material_first = 0;
+	uint32_t r;
 
 	if (!materials || material_count == 0 || !sprites || sprite_count == 0)
-		return;
+		return 0;
+	if (!ranges) {
+		whole.first = 0;
+		whole.count = sprite_count;
+		ranges = &whole;
+		range_count = 1;
+	}
+	if (range_count == 0)
+		return 0;
 	graphics_service_init();
 	if (!tile_program) {
 		tile_program = vu_mpg_load_buffer(
 			embed_vu_code_ptr(VU1Draw2D_TileList),
 			embed_vu_code_size(VU1Draw2D_TileList), VECTOR_UNIT_1, false);
 		if (!tile_program)
-			return;
+			return 0;
 	}
 
 	/*
@@ -258,12 +561,14 @@ void athena_tilemap_render(const AthenaTileMaterial *materials,
 	else
 		SyncDCache((void *)sprites, (void *)(sprites + sprite_count));
 
+	memset(&state, 0, sizeof(state));
 	vu1_set_double_buffer_settings(TILEMAP_VU1_BASE, TILEMAP_VU1_OFFSET);
-	mpg_addr = vu_mpg_preload(tile_program, true);
-	old_alpha = get_screen_param(ALPHA_BLEND_EQUATION);
-	alpha = old_alpha;
-	giftags[0] = tilemap_giftag(false);
-	giftags[1] = tilemap_giftag(true);
+	state.mpg_addr = vu_mpg_preload(tile_program, true);
+	state.old_alpha = get_screen_param(ALPHA_BLEND_EQUATION);
+	state.alpha = state.old_alpha;
+	state.texture_id = GRAPHICS_BIND_RESIDENT;
+	state.giftags[0] = tilemap_giftag(false);
+	state.giftags[1] = tilemap_giftag(true);
 
 	/*
 	 * VU1 static addresses 0..1 now hold the tile camera and origin; other
@@ -275,107 +580,45 @@ void athena_tilemap_render(const AthenaTileMaterial *materials,
 	owl_add_uquad_ptr(packet, (__uint128_t *)tile_camera);
 	owl_add_uquad_ptr(packet, (__uint128_t *)origin);
 
-	for (i = 0; i < material_count && first < sprite_count; i++) {
-		const AthenaTileMaterial *material = &materials[i];
-		uint32_t range_first = first;
-		uint32_t remaining;
-		uint32_t drawn = 0;
-		uint64_t material_alpha;
-		bool texture_mapping =
-			material->texture_index != ATHENA_TILEMAP_NO_TEXTURE;
-		bool upload_pending = false;
+	/* Ranges ascend, so one pass over the materials serves all of them. */
+	for (r = 0; r < range_count && material < material_count; ++r) {
+		uint32_t start = ranges[r].first;
+		uint32_t end;
 
-		if (material->end < range_first)
-			continue;
-		first = material->end >= sprite_count - 1 ?
-			sprite_count : material->end + 1;
+		if (start >= sprite_count)
+			break;
+		end = ranges[r].count > sprite_count - start ?
+			sprite_count : start + ranges[r].count;
 
-		if (texture_mapping) {
-			GSSURFACE *current = NULL;
+		while (start < end && material < material_count) {
+			const AthenaTileMaterial *current = &materials[material];
+			uint32_t span_first;
+			uint32_t span_last;
 
-			if (textures && material->texture_index >= 0 &&
-				(uint32_t)material->texture_index < texture_count)
-				current = textures[material->texture_index];
-			/* A texture that is not loaded skips its sprites. */
-			if (!current)
+			if (current->end < material_first || current->end < start) {
+				/* Empty, or entirely before this range. */
+				if (current->end >= material_first)
+					material_first = current->end + 1;
+				++material;
 				continue;
-			if (current != bound) {
-				texture_id = graphics_surface_bind(current, true);
-				bound = texture_id == GRAPHICS_BIND_ERROR ? NULL : current;
-				upload_pending = texture_id >= 0;
-				/* A rebind may have moved the texture in VRAM. */
-				sent = NULL;
 			}
-			if (!bound)
-				continue;
-		}
-
-		material_alpha = material->has_blend_mode ?
-			material->blend_mode : old_alpha;
-		if (material_alpha != alpha) {
-			if (started)
-				tilemap_flush();
-			set_screen_param(ALPHA_BLEND_EQUATION, material_alpha);
-			alpha = material_alpha;
-		}
-
-		remaining = first - range_first;
-		while (remaining > 0) {
-			uint32_t count = remaining < tile_diagnostics.batch_size ?
-				remaining : tile_diagnostics.batch_size;
-
-			/* Upload marker 5, texture registers 5, batch 4 (+1) quadwords. */
-			packet = owl_query_packet(CHANNEL_VIF1, 15);
-
-			if (tile_diagnostics.flush_each_batch)
-				sent = NULL;
-			if (upload_pending) {
-				tilemap_upload_tags(packet, texture_id);
-				upload_pending = false;
+			span_first = start > material_first ? start : material_first;
+			span_last = current->end < end - 1 ? current->end : end - 1;
+			tilemap_draw_span(&state, current, textures, texture_count,
+				sprites, span_first, span_last);
+			start = span_last + 1;
+			if (span_last == current->end) {
+				material_first = current->end + 1;
+				++material;
 			}
-			if (texture_mapping && sent != bound) {
-				tilemap_texture_tags(packet, bound);
-				sent = bound;
-			}
-
-			owl_add_unpack_data_cnt(packet, 0, 1, 1);
-			owl_add_ulong(packet, giftags[texture_mapping]);
-			owl_add_ulong(packet, TILEMAP_GIF_REGS);
-
-			owl_add_unpack_data_ref(packet, 1,
-				(void *)&sprites[range_first + drawn], count * 4, 1);
-
-			/*
-			 * No FLUSHA between batches: the VIF waits for the previous
-			 * program before MSCNT, and the double-buffered layout keeps
-			 * this unpack clear of the buffer VU1 or PATH1 may still use,
-			 * so VU work overlaps GS drawing. The first batch runs the
-			 * program's setup; later ones resume at --cont.
-			 */
-			if (tile_diagnostics.flush_each_batch) {
-				owl_add_cnt_tag(packet, 1, owl_vif_code_double(
-					VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_NOP, 0)));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-				owl_add_uint(packet, VIF_CODE(count, 0, VIF_ITOP, 0));
-				owl_add_uint(packet, VIF_CODE(mpg_addr, 0,
-					started ? VIF_MSCNT : VIF_MSCALF, 0));
-			} else {
-				owl_add_cnt_tag(packet, 0, owl_vif_code_double(
-					VIF_CODE(mpg_addr, 0, started ? VIF_MSCNT : VIF_MSCALF, 0),
-					VIF_CODE(count, 0, VIF_ITOP, 0)));
-			}
-			started = true;
-
-			remaining -= count;
-			drawn += count;
 		}
 	}
 
-	owl_query_packet(CHANNEL_VIF1, 1);
-	owl_add_cnt_tag(packet, 0, owl_vif_code_double(VIF_CODE(0, 0, VIF_FLUSH, 0),
-		VIF_CODE(0, 0, VIF_FLUSH, 0)));
+	packet = owl_query_packet(CHANNEL_VIF1, 1);
+	owl_add_cnt_tag(packet, 0, owl_vif_code_double(
+		VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
 
-	if (alpha != old_alpha)
-		set_screen_param(ALPHA_BLEND_EQUATION, old_alpha);
+	if (state.alpha != state.old_alpha)
+		set_screen_param(ALPHA_BLEND_EQUATION, state.old_alpha);
+	return state.drawn;
 }

@@ -126,6 +126,7 @@ const modes = [
 ];
 
 const font = new Font();
+font.scale = 0.6;
 console.log(`[TileMap diag] ${COLS}x${ROWS} grid = ${COUNT} sprites, ` +
     `${Math.ceil(COUNT / 50)} batches of up to 50`);
 

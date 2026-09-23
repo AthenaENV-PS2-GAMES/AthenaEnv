@@ -27,6 +27,9 @@ typedef struct {
     /* Scratch array filled with the textures' current surfaces per render. */
     GSSURFACE **surfaces;
     uint32_t texture_count;
+    /* Tileset geometry for setTiles() and fromGrid(). */
+    bool has_atlas;
+    AthenaTileAtlas atlas;
 } TileMapDescriptor;
 
 typedef struct {
@@ -37,6 +40,12 @@ typedef struct {
     int buffer_kind;
     /* Rendered since the last sync, so queued DMA may reference `buffer`. */
     bool rendered;
+    /* Set by fromGrid(): the buffer is a row-major grid, so render() culls. */
+    bool has_grid;
+    AthenaTileGrid grid;
+    /* Scratch for visible ranges, one per grid row. */
+    AthenaTileRange *ranges;
+    uint32_t last_drawn;
 } TileMapInstance;
 
 typedef struct {
@@ -241,6 +250,7 @@ static void descriptor_free(JSRuntime *rt, TileMapDescriptor *descriptor)
     free(descriptor->textures);
     free(descriptor->surfaces);
     free(descriptor->materials);
+    free((void *)descriptor->atlas.uv);
     free(descriptor);
 }
 
@@ -454,6 +464,71 @@ static int descriptor_materials(JSContext *ctx, TileMapDescriptor *descriptor,
     return 1;
 }
 
+/* Largest atlas tile and column count; GS textures are at most 1024 wide. */
+#define TILEMAP_MAX_ATLAS 1024
+
+static int tilemap_uint_property(JSContext *ctx, JSValueConst object,
+    const char *property, double minimum, double maximum, bool optional,
+    uint32_t *out, const char *name)
+{
+    JSValue value = JS_GetPropertyStr(ctx, object, property);
+    double number = 0.0;
+
+    if (JS_IsException(value))
+        return 0;
+    if (optional && JS_IsUndefined(value))
+        return 1;
+    if (!JS_IsNumber(value) || JS_ToFloat64(ctx, &number, value) ||
+        !(number >= minimum && number <= maximum) ||
+        number != floor(number)) {
+        JS_FreeValue(ctx, value);
+        JS_ThrowRangeError(ctx, "%s.%s must be an integer between %.0f and %.0f",
+            name, property, minimum, maximum);
+        return 0;
+    }
+    JS_FreeValue(ctx, value);
+    *out = (uint32_t)number;
+    return 1;
+}
+
+static int descriptor_atlas(JSContext *ctx, TileMapDescriptor *descriptor,
+    JSValueConst options)
+{
+    JSValue atlas = JS_GetPropertyStr(ctx, options, "atlas");
+    const char *name = "TileMap.Descriptor options.atlas";
+    int valid;
+
+    if (JS_IsException(atlas))
+        return 0;
+    if (JS_IsUndefined(atlas))
+        return 1;
+    if (!JS_IsObject(atlas) || JS_IsArray(ctx, atlas)) {
+        JS_FreeValue(ctx, atlas);
+        JS_ThrowTypeError(ctx, "%s must be an object", name);
+        return 0;
+    }
+    valid = tilemap_uint_property(ctx, atlas, "tileWidth", 1,
+            TILEMAP_MAX_ATLAS, false, &descriptor->atlas.tile_width, name) &&
+        tilemap_uint_property(ctx, atlas, "tileHeight", 1,
+            TILEMAP_MAX_ATLAS, false, &descriptor->atlas.tile_height, name) &&
+        tilemap_uint_property(ctx, atlas, "columns", 1,
+            TILEMAP_MAX_ATLAS, false, &descriptor->atlas.columns, name) &&
+        tilemap_uint_property(ctx, atlas, "rows", 1,
+            TILEMAP_MAX_ATLAS, true, &descriptor->atlas.rows, name);
+    JS_FreeValue(ctx, atlas);
+    if (valid && descriptor->atlas.rows > 0 &&
+        descriptor->atlas.columns * descriptor->atlas.rows >
+            ATHENA_TILEMAP_EMPTY) {
+        JS_ThrowRangeError(ctx, "%s has more tiles than tile ids", name);
+        return 0;
+    }
+    if (valid)
+        /* NULL (no rows, huge atlas, low memory) falls back to dividing. */
+        descriptor->atlas.uv = athena_tilemap_atlas_table(&descriptor->atlas);
+    descriptor->has_atlas = valid;
+    return valid;
+}
+
 static JSValue descriptor_ctor(JSContext *ctx, JSValueConst new_target,
     int argc, JSValueConst *argv)
 {
@@ -469,7 +544,8 @@ static JSValue descriptor_ctor(JSContext *ctx, JSValueConst new_target,
     if (!descriptor)
         return JS_ThrowOutOfMemory(ctx);
     if (!descriptor_textures(ctx, descriptor, argv[0]) ||
-        !descriptor_materials(ctx, descriptor, argv[0])) {
+        !descriptor_materials(ctx, descriptor, argv[0]) ||
+        !descriptor_atlas(ctx, descriptor, argv[0])) {
         descriptor_free(JS_GetRuntime(ctx), descriptor);
         return JS_EXCEPTION;
     }
@@ -500,6 +576,25 @@ static JSValue descriptor_get(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (magic == 0)
         return JS_NewUint32(ctx, descriptor->material_count);
+    if (magic == 2) {
+        JSValue atlas;
+
+        if (!descriptor->has_atlas)
+            return JS_UNDEFINED;
+        atlas = JS_NewObject(ctx);
+        if (JS_IsException(atlas))
+            return atlas;
+        JS_DefinePropertyValueStr(ctx, atlas, "tileWidth",
+            JS_NewUint32(ctx, descriptor->atlas.tile_width), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, atlas, "tileHeight",
+            JS_NewUint32(ctx, descriptor->atlas.tile_height), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, atlas, "columns",
+            JS_NewUint32(ctx, descriptor->atlas.columns), JS_PROP_C_W_E);
+        if (descriptor->atlas.rows > 0)
+            JS_DefinePropertyValueStr(ctx, atlas, "rows",
+                JS_NewUint32(ctx, descriptor->atlas.rows), JS_PROP_C_W_E);
+        return atlas;
+    }
     textures = JS_NewArray(ctx);
     if (JS_IsException(textures))
         return textures;
@@ -529,6 +624,7 @@ static void instance_finalizer(JSRuntime *rt, JSValue value)
     instance_sync(instance);
     JS_FreeValueRT(rt, instance->descriptor);
     JS_FreeValueRT(rt, instance->buffer);
+    free(instance->ranges);
     free(instance);
     JS_SetOpaque(value, NULL);
 }
@@ -538,14 +634,51 @@ static TileMapInstance *instance_this(JSContext *ctx, JSValueConst value)
     return JS_GetOpaque2(ctx, value, instance_class_id);
 }
 
+/*
+ * Wraps `descriptor` and `buffer`, both owned and released on failure, in a
+ * new Instance. An undefined `new_target` uses the class prototype.
+ */
+static JSValue instance_new(JSContext *ctx, JSValueConst new_target,
+    JSValue descriptor, JSValue buffer, int kind, TileMapInstance **out)
+{
+    TileMapInstance *instance = calloc(1, sizeof(*instance));
+    JSValue proto, object;
+
+    if (!instance) {
+        JS_FreeValue(ctx, descriptor);
+        JS_FreeValue(ctx, buffer);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    instance->descriptor = descriptor;
+    instance->buffer = buffer;
+    instance->buffer_kind = kind;
+    if (JS_IsUndefined(new_target)) {
+        object = JS_NewObjectClass(ctx, instance_class_id);
+    } else {
+        proto = JS_GetPropertyStr(ctx, new_target, "prototype");
+        object = JS_IsException(proto) ? proto :
+            JS_NewObjectProtoClass(ctx, proto, instance_class_id);
+        JS_FreeValue(ctx, proto);
+    }
+    if (JS_IsException(object)) {
+        JS_FreeValue(ctx, instance->descriptor);
+        JS_FreeValue(ctx, instance->buffer);
+        free(instance);
+        return object;
+    }
+    JS_SetOpaque(object, instance);
+    if (out)
+        *out = instance;
+    return object;
+}
+
 static JSValue instance_ctor(JSContext *ctx, JSValueConst new_target,
     int argc, JSValueConst *argv)
 {
-    TileMapInstance *instance;
     AthenaTileSprite *sprites;
     uint32_t count;
     int kind = TILEMAP_STORAGE_UNKNOWN;
-    JSValue descriptor, buffer, proto, object;
+    JSValue descriptor, buffer;
 
     if (!tilemap_argc(ctx, argc, 1, 1, "TileMap.Instance"))
         return JS_EXCEPTION;
@@ -568,49 +701,109 @@ static JSValue instance_ctor(JSContext *ctx, JSValueConst new_target,
         JS_FreeValue(ctx, buffer);
         return JS_EXCEPTION;
     }
-    instance = calloc(1, sizeof(*instance));
-    if (!instance) {
-        JS_FreeValue(ctx, descriptor);
-        JS_FreeValue(ctx, buffer);
-        return JS_ThrowOutOfMemory(ctx);
-    }
-    instance->descriptor = descriptor;
-    instance->buffer = buffer;
-    instance->buffer_kind = kind;
-    proto = JS_GetPropertyStr(ctx, new_target, "prototype");
-    object = JS_IsException(proto) ? proto :
-        JS_NewObjectProtoClass(ctx, proto, instance_class_id);
-    JS_FreeValue(ctx, proto);
-    if (JS_IsException(object)) {
-        JS_FreeValue(ctx, instance->descriptor);
-        JS_FreeValue(ctx, instance->buffer);
-        free(instance);
-        return object;
-    }
-    JS_SetOpaque(object, instance);
-    return object;
+    return instance_new(ctx, new_target, descriptor, buffer, kind, NULL);
+}
+
+/* Reads an optional non-negative integer option; `*present` tells if set. */
+static int tilemap_optional_uint(JSContext *ctx, JSValueConst options,
+    const char *property, uint32_t *out, bool *present, const char *name)
+{
+    JSValue value = JS_GetPropertyStr(ctx, options, property);
+    char label[96];
+    int valid;
+
+    if (JS_IsException(value))
+        return 0;
+    *present = !JS_IsUndefined(value);
+    if (!*present)
+        return 1;
+    snprintf(label, sizeof(label), "%s.%s", name, property);
+    valid = tilemap_uint(ctx, value, (double)TILEMAP_MAX_SPRITES, out, label);
+    JS_FreeValue(ctx, value);
+    return valid;
 }
 
 static JSValue instance_render(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv)
 {
+    const char *name = "TileMap.Instance.render";
     TileMapInstance *instance = instance_this(ctx, this_val);
     TileMapDescriptor *descriptor;
     AthenaTileSprite *sprites;
+    AthenaTileRange manual;
+    const AthenaTileRange *ranges = NULL;
+    uint32_t range_count = 0;
     uint32_t count;
+    uint32_t first = 0;
+    uint32_t span = 0;
+    bool has_first = false;
+    bool has_span = false;
+    bool cull = true;
     uint32_t i;
     float x, y;
 
-    if (!instance || !tilemap_argc(ctx, argc, 2, 2, "TileMap.Instance.render") ||
+    if (!instance || !tilemap_argc(ctx, argc, 2, 3, name) ||
         !tilemap_float(ctx, argv[0], &x, "TileMap.Instance.render x") ||
         !tilemap_float(ctx, argv[1], &y, "TileMap.Instance.render y"))
         return JS_EXCEPTION;
+    /* Read options before the buffer: a getter could replace it. */
+    if (argc == 3 && !JS_IsUndefined(argv[2])) {
+        JSValue value;
+
+        if (!JS_IsObject(argv[2]) || JS_IsArray(ctx, argv[2]))
+            return JS_ThrowTypeError(ctx,
+                "TileMap.Instance.render options must be an object");
+        if (!tilemap_optional_uint(ctx, argv[2], "first", &first, &has_first,
+                "TileMap.Instance.render options") ||
+            !tilemap_optional_uint(ctx, argv[2], "count", &span, &has_span,
+                "TileMap.Instance.render options"))
+            return JS_EXCEPTION;
+        value = JS_GetPropertyStr(ctx, argv[2], "cull");
+        if (JS_IsException(value))
+            return value;
+        if (!JS_IsUndefined(value)) {
+            if (!JS_IsBool(value)) {
+                JS_FreeValue(ctx, value);
+                return JS_ThrowTypeError(ctx,
+                    "TileMap.Instance.render options.cull must be a boolean");
+            }
+            cull = JS_ToBool(ctx, value) != 0;
+        }
+        JS_FreeValue(ctx, value);
+    }
+    instance->last_drawn = 0;
     if (JS_IsUndefined(instance->buffer))
         return JS_UNDEFINED;
     if (!tilemap_sprite_storage(ctx, instance->buffer, true,
         &instance->buffer_kind, &sprites, &count,
         "TileMap.Instance sprite buffer"))
         return JS_EXCEPTION;
+
+    if (has_first || has_span) {
+        if (first > count)
+            return JS_ThrowRangeError(ctx,
+                "%s options.first is past the sprite buffer (%u sprites)",
+                name, (unsigned int)count);
+        if (!has_span)
+            span = count - first;
+        if (span > count - first)
+            return JS_ThrowRangeError(ctx,
+                "%s options.count exceeds the sprite buffer (%u sprites)",
+                name, (unsigned int)count);
+        if (span == 0)
+            return JS_UNDEFINED;
+        manual.first = first;
+        manual.count = span;
+        ranges = &manual;
+        range_count = 1;
+    } else if (instance->has_grid && cull) {
+        range_count = athena_tilemap_visible_ranges(&instance->grid, x, y,
+            instance->ranges);
+        if (range_count == 0)
+            return JS_UNDEFINED;
+        ranges = instance->ranges;
+    }
+
     descriptor = JS_GetOpaque(instance->descriptor, descriptor_class_id);
     /* Resolve textures now: an Image may have been freed or reloaded. */
     for (i = 0; i < descriptor->texture_count; ++i) {
@@ -618,11 +811,325 @@ static JSValue instance_render(JSContext *ctx, JSValueConst this_val,
         descriptor->surfaces[i] = athena_image_is_loaded(image) ?
             image->surface : NULL;
     }
-    athena_tilemap_render(descriptor->materials, descriptor->material_count,
-        descriptor->surfaces, descriptor->texture_count, sprites, count,
-        x, y);
+    instance->last_drawn = athena_tilemap_render(descriptor->materials,
+        descriptor->material_count, descriptor->surfaces,
+        descriptor->texture_count, sprites, count, ranges, range_count, x, y);
     instance->rendered = true;
     return JS_UNDEFINED;
+}
+
+/* Resolves the instance buffer and checks sprites [first, first + count). */
+static AthenaTileSprite *instance_range(JSContext *ctx,
+    TileMapInstance *instance, uint32_t first, uint32_t count,
+    const char *name)
+{
+    AthenaTileSprite *sprites;
+    uint32_t total;
+
+    if (JS_IsUndefined(instance->buffer)) {
+        JS_ThrowTypeError(ctx, "%s requires a sprite buffer", name);
+        return NULL;
+    }
+    if (!tilemap_sprite_storage(ctx, instance->buffer, true,
+            &instance->buffer_kind, &sprites, &total,
+            "TileMap.Instance sprite buffer"))
+        return NULL;
+    if (first > total || count > total - first) {
+        JS_ThrowRangeError(ctx, "%s range exceeds the sprite buffer (%u sprites)",
+            name, (unsigned int)total);
+        return NULL;
+    }
+    return sprites;
+}
+
+static JSValue instance_translate(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv)
+{
+    const char *name = "TileMap.Instance.translate";
+    TileMapInstance *instance = instance_this(ctx, this_val);
+    AthenaTileSprite *sprites;
+    uint32_t first, count;
+    float dx, dy;
+
+    if (!instance || !tilemap_argc(ctx, argc, 4, 4, name) ||
+        !tilemap_uint(ctx, argv[0], (double)TILEMAP_MAX_SPRITES, &first,
+            "TileMap.Instance.translate first") ||
+        !tilemap_uint(ctx, argv[1], (double)TILEMAP_MAX_SPRITES, &count,
+            "TileMap.Instance.translate count") ||
+        !tilemap_float(ctx, argv[2], &dx, "TileMap.Instance.translate dx") ||
+        !tilemap_float(ctx, argv[3], &dy, "TileMap.Instance.translate dy"))
+        return JS_EXCEPTION;
+    sprites = instance_range(ctx, instance, first, count, name);
+    if (!sprites)
+        return JS_EXCEPTION;
+    athena_tilemap_translate(sprites, first, count, dx, dy);
+    return JS_UNDEFINED;
+}
+
+static JSValue instance_set_color(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv)
+{
+    const char *name = "TileMap.Instance.setColor";
+    TileMapInstance *instance = instance_this(ctx, this_val);
+    AthenaTileSprite *sprites;
+    uint32_t first, count, r, g, b, a = 0x80;
+
+    if (!instance || !tilemap_argc(ctx, argc, 5, 6, name) ||
+        !tilemap_uint(ctx, argv[0], (double)TILEMAP_MAX_SPRITES, &first,
+            "TileMap.Instance.setColor first") ||
+        !tilemap_uint(ctx, argv[1], (double)TILEMAP_MAX_SPRITES, &count,
+            "TileMap.Instance.setColor count") ||
+        !tilemap_uint(ctx, argv[2], 255.0, &r, "TileMap.Instance.setColor r") ||
+        !tilemap_uint(ctx, argv[3], 255.0, &g, "TileMap.Instance.setColor g") ||
+        !tilemap_uint(ctx, argv[4], 255.0, &b, "TileMap.Instance.setColor b") ||
+        (argc == 6 &&
+            !tilemap_uint(ctx, argv[5], 255.0, &a, "TileMap.Instance.setColor a")))
+        return JS_EXCEPTION;
+    sprites = instance_range(ctx, instance, first, count, name);
+    if (!sprites)
+        return JS_EXCEPTION;
+    athena_tilemap_set_color(sprites, first, count, r, g, b, a);
+    return JS_UNDEFINED;
+}
+
+/*
+ * Reads tile ids from a Uint16Array/Int16Array, used in place, or from an
+ * array of numbers, copied into `*copy` for the caller to free. Every id is
+ * checked against the atlas before anything is written.
+ */
+static int tilemap_tile_ids(JSContext *ctx, JSValueConst value,
+    const AthenaTileAtlas *atlas, const uint16_t **ids, uint16_t **copy,
+    uint32_t *count, const char *name)
+{
+    uint32_t limit = atlas->rows ? atlas->columns * atlas->rows : 0;
+    uint32_t length;
+    uint32_t i;
+
+    *copy = NULL;
+    if (JS_IsArray(ctx, value)) {
+        if (!tilemap_array_length(ctx, value, &length))
+            return 0;
+        if (length > TILEMAP_MAX_SPRITES) {
+            JS_ThrowRangeError(ctx, "%s has too many tile ids", name);
+            return 0;
+        }
+        *copy = malloc((length ? length : 1) * sizeof(**copy));
+        if (!*copy) {
+            JS_ThrowOutOfMemory(ctx);
+            return 0;
+        }
+        for (i = 0; i < length; ++i) {
+            JSValue item = JS_GetPropertyUint32(ctx, value, i);
+            uint32_t id = 0;
+            int valid = !JS_IsException(item) &&
+                tilemap_uint(ctx, item, 65535.0, &id, name);
+
+            JS_FreeValue(ctx, item);
+            if (!valid) {
+                free(*copy);
+                *copy = NULL;
+                return 0;
+            }
+            (*copy)[i] = (uint16_t)id;
+        }
+        *ids = *copy;
+    } else {
+        size_t offset = 0, byte_length = 0, element = 0, buffer_length = 0;
+        uint8_t *data = NULL;
+        JSValue array_buffer = JS_IsObject(value) ?
+            JS_GetTypedArrayBuffer(ctx, value, &offset, &byte_length,
+                &element) : JS_EXCEPTION;
+
+        if (JS_IsException(array_buffer)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+        } else {
+            data = JS_GetArrayBuffer(ctx, &buffer_length, array_buffer);
+            JS_FreeValue(ctx, array_buffer);
+            if (!data)
+                JS_FreeValue(ctx, JS_GetException(ctx));
+        }
+        if (!data || element != sizeof(uint16_t) ||
+            offset + byte_length > buffer_length) {
+            JS_ThrowTypeError(ctx,
+                "%s must be a Uint16Array or an array of tile ids", name);
+            return 0;
+        }
+        *ids = (const uint16_t *)(data + offset);
+        length = (uint32_t)(byte_length / sizeof(uint16_t));
+    }
+    for (i = 0; limit && i < length; ++i) {
+        if ((*ids)[i] != ATHENA_TILEMAP_EMPTY && (*ids)[i] >= limit) {
+            free(*copy);
+            *copy = NULL;
+            JS_ThrowRangeError(ctx,
+                "%s[%u] = %u is not a tile of the atlas (%u tiles)", name,
+                (unsigned int)i, (unsigned int)(*ids)[i],
+                (unsigned int)limit);
+            return 0;
+        }
+    }
+    *count = length;
+    return 1;
+}
+
+static JSValue instance_set_tiles(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv)
+{
+    const char *name = "TileMap.Instance.setTiles";
+    TileMapInstance *instance = instance_this(ctx, this_val);
+    TileMapDescriptor *descriptor;
+    AthenaTileSprite *sprites;
+    const uint16_t *ids;
+    uint16_t *copy;
+    uint32_t first, count;
+    float width, height;
+
+    if (!instance || !tilemap_argc(ctx, argc, 2, 2, name) ||
+        !tilemap_uint(ctx, argv[0], (double)TILEMAP_MAX_SPRITES, &first,
+            "TileMap.Instance.setTiles first"))
+        return JS_EXCEPTION;
+    descriptor = JS_GetOpaque(instance->descriptor, descriptor_class_id);
+    if (!descriptor->has_atlas)
+        return JS_ThrowTypeError(ctx,
+            "%s requires a descriptor created with an atlas", name);
+    /* Read ids before resolving the buffer: array getters run user code. */
+    if (!tilemap_tile_ids(ctx, argv[1], &descriptor->atlas, &ids, &copy,
+            &count, "TileMap.Instance.setTiles tiles"))
+        return JS_EXCEPTION;
+    sprites = instance_range(ctx, instance, first, count, name);
+    if (sprites) {
+        width = instance->has_grid ? instance->grid.tile_width :
+            (float)descriptor->atlas.tile_width;
+        height = instance->has_grid ? instance->grid.tile_height :
+            (float)descriptor->atlas.tile_height;
+        athena_tilemap_set_tiles(sprites, first, ids, count,
+            &descriptor->atlas, width, height);
+    }
+    free(copy);
+    return sprites ? JS_UNDEFINED : JS_EXCEPTION;
+}
+
+static int tilemap_optional_float(JSContext *ctx, JSValueConst options,
+    const char *property, float *out, bool positive, const char *name)
+{
+    JSValue value = JS_GetPropertyStr(ctx, options, property);
+    char label[96];
+    int valid;
+
+    if (JS_IsException(value))
+        return 0;
+    if (JS_IsUndefined(value))
+        return 1;
+    snprintf(label, sizeof(label), "%s.%s", name, property);
+    valid = tilemap_float(ctx, value, out, label);
+    JS_FreeValue(ctx, value);
+    if (valid && positive && !(*out > 0.0f)) {
+        JS_ThrowRangeError(ctx, "%s must be positive", label);
+        return 0;
+    }
+    return valid;
+}
+
+static JSValue instance_from_grid(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv)
+{
+    const char *name = "TileMap.Instance.fromGrid options";
+    TileMapDescriptor *descriptor;
+    TileMapInstance *instance = NULL;
+    AthenaTileGrid grid;
+    AthenaTileSprite *sprites;
+    AthenaTileRange *ranges;
+    const uint16_t *ids = NULL;
+    uint16_t *copy = NULL;
+    uint32_t id_count = 0;
+    uint32_t total;
+    float zindex = 0.0f;
+    JSValue descriptor_value, tiles, buffer, object;
+
+    if (!tilemap_argc(ctx, argc, 1, 1, "TileMap.Instance.fromGrid"))
+        return JS_EXCEPTION;
+    if (!JS_IsObject(argv[0]) || JS_IsArray(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "TileMap.Instance.fromGrid options must be an object");
+    descriptor_value = JS_GetPropertyStr(ctx, argv[0], "descriptor");
+    if (JS_IsException(descriptor_value))
+        return descriptor_value;
+    descriptor = JS_GetOpaque(descriptor_value, descriptor_class_id);
+    if (!descriptor || !descriptor->has_atlas) {
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_ThrowTypeError(ctx,
+            "%s.descriptor must be a TileMap.Descriptor with an atlas", name);
+    }
+    memset(&grid, 0, sizeof(grid));
+    grid.tile_width = (float)descriptor->atlas.tile_width;
+    grid.tile_height = (float)descriptor->atlas.tile_height;
+    if (!tilemap_uint_property(ctx, argv[0], "columns", 1, 65535, false,
+            &grid.columns, name) ||
+        !tilemap_uint_property(ctx, argv[0], "rows", 1, 65535, false,
+            &grid.rows, name) ||
+        !tilemap_optional_float(ctx, argv[0], "tileWidth", &grid.tile_width,
+            true, name) ||
+        !tilemap_optional_float(ctx, argv[0], "tileHeight",
+            &grid.tile_height, true, name) ||
+        !tilemap_optional_float(ctx, argv[0], "zindex", &zindex, false,
+            name)) {
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_EXCEPTION;
+    }
+    if ((double)grid.columns * grid.rows > (double)TILEMAP_MAX_SPRITES) {
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_ThrowRangeError(ctx, "%s describe too many cells", name);
+    }
+    total = grid.columns * grid.rows;
+
+    tiles = JS_GetPropertyStr(ctx, argv[0], "tiles");
+    if (JS_IsException(tiles) || (!JS_IsUndefined(tiles) &&
+        !tilemap_tile_ids(ctx, tiles, &descriptor->atlas, &ids, &copy,
+            &id_count, "TileMap.Instance.fromGrid options.tiles"))) {
+        JS_FreeValue(ctx, tiles);
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_EXCEPTION;
+    }
+    if (ids && id_count != total) {
+        free(copy);
+        JS_FreeValue(ctx, tiles);
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_ThrowRangeError(ctx,
+            "%s.tiles has %u ids but the grid has %u cells", name,
+            (unsigned int)id_count, (unsigned int)total);
+    }
+
+    sprites = athena_tilemap_buffer_alloc(total);
+    ranges = malloc(grid.rows * sizeof(*ranges));
+    if (!sprites || !ranges) {
+        free(sprites);
+        free(ranges);
+        free(copy);
+        JS_FreeValue(ctx, tiles);
+        JS_FreeValue(ctx, descriptor_value);
+        return JS_ThrowOutOfMemory(ctx);
+    }
+    athena_tilemap_fill_grid(sprites, &grid, ids, &descriptor->atlas, zindex);
+    free(copy);
+    /* `ids` may point into `tiles`; it is not used past this point. */
+    JS_FreeValue(ctx, tiles);
+
+    buffer = tilemap_new_buffer(ctx, sprites, total);
+    if (JS_IsException(buffer)) {
+        free(ranges);
+        JS_FreeValue(ctx, descriptor_value);
+        return buffer;
+    }
+    object = instance_new(ctx, JS_UNDEFINED, descriptor_value, buffer,
+        TILEMAP_STORAGE_ARRAY_BUFFER, &instance);
+    if (JS_IsException(object)) {
+        free(ranges);
+        return object;
+    }
+    instance->has_grid = true;
+    instance->grid = grid;
+    instance->ranges = ranges;
+    return object;
 }
 
 static JSValue instance_replace_buffer(JSContext *ctx, JSValueConst this_val,
@@ -715,6 +1222,38 @@ static JSValue instance_descriptor(JSContext *ctx, JSValueConst this_val)
     if (!instance)
         return JS_EXCEPTION;
     return JS_DupValue(ctx, instance->descriptor);
+}
+
+static JSValue instance_last_draw_count(JSContext *ctx, JSValueConst this_val)
+{
+    TileMapInstance *instance = instance_this(ctx, this_val);
+
+    if (!instance)
+        return JS_EXCEPTION;
+    return JS_NewUint32(ctx, instance->last_drawn);
+}
+
+static JSValue instance_grid(JSContext *ctx, JSValueConst this_val)
+{
+    TileMapInstance *instance = instance_this(ctx, this_val);
+    JSValue grid;
+
+    if (!instance)
+        return JS_EXCEPTION;
+    if (!instance->has_grid)
+        return JS_UNDEFINED;
+    grid = JS_NewObject(ctx);
+    if (JS_IsException(grid))
+        return grid;
+    JS_DefinePropertyValueStr(ctx, grid, "columns",
+        JS_NewUint32(ctx, instance->grid.columns), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, grid, "rows",
+        JS_NewUint32(ctx, instance->grid.rows), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, grid, "tileWidth",
+        JS_NewFloat64(ctx, instance->grid.tile_width), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, grid, "tileHeight",
+        JS_NewFloat64(ctx, instance->grid.tile_height), JS_PROP_C_W_E);
+    return grid;
 }
 
 /* ---- SpriteBuffer and module functions ----------------------------- */
@@ -980,15 +1519,25 @@ static JSClassDef instance_class = {
 static const JSCFunctionListEntry descriptor_proto[] = {
     JS_CGETSET_MAGIC_DEF("materialCount", descriptor_get, NULL, 0),
     JS_CGETSET_MAGIC_DEF("textures", descriptor_get, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("atlas", descriptor_get, NULL, 2),
 };
 
 static const JSCFunctionListEntry instance_proto[] = {
-    JS_CFUNC_DEF("render", 2, instance_render),
+    JS_CFUNC_DEF("render", 3, instance_render),
     JS_CFUNC_DEF("replaceSpriteBuffer", 1, instance_replace_buffer),
     JS_CFUNC_DEF("getSpriteBuffer", 0, instance_get_buffer),
     JS_CFUNC_DEF("updateSprites", 3, instance_update),
+    JS_CFUNC_DEF("translate", 4, instance_translate),
+    JS_CFUNC_DEF("setColor", 6, instance_set_color),
+    JS_CFUNC_DEF("setTiles", 2, instance_set_tiles),
     JS_CGETSET_DEF("spriteCount", instance_sprite_count, NULL),
     JS_CGETSET_DEF("descriptor", instance_descriptor, NULL),
+    JS_CGETSET_DEF("lastDrawCount", instance_last_draw_count, NULL),
+    JS_CGETSET_DEF("grid", instance_grid, NULL),
+};
+
+static const JSCFunctionListEntry instance_static[] = {
+    JS_CFUNC_DEF("fromGrid", 1, instance_from_grid),
 };
 
 static const JSCFunctionListEntry sprite_buffer_funcs[] = {
@@ -1001,6 +1550,7 @@ static const JSCFunctionListEntry tilemap_funcs[] = {
     JS_CFUNC_DEF("getCamera", 0, tilemap_get_camera),
     JS_CFUNC_DEF("setDiagnostics", 1, tilemap_set_diagnostics),
     JS_CFUNC_DEF("getDiagnostics", 0, tilemap_get_diagnostics),
+    JS_PROP_INT32_DEF("EMPTY", ATHENA_TILEMAP_EMPTY, 0),
 };
 
 static JSValue tilemap_class(JSContext *ctx, JSClassID *class_id,
@@ -1022,7 +1572,7 @@ static JSValue tilemap_class(JSContext *ctx, JSClassID *class_id,
 
 static int tilemap_module_init(JSContext *ctx, JSModuleDef *module)
 {
-    JSValue sprite_buffer, layout;
+    JSValue sprite_buffer, layout, instance;
 
     layout = tilemap_layout_value(ctx);
     if (JS_IsException(layout))
@@ -1039,10 +1589,11 @@ static int tilemap_module_init(JSContext *ctx, JSModuleDef *module)
         tilemap_class(ctx, &descriptor_class_id, &descriptor_class,
             descriptor_ctor, "Descriptor", descriptor_proto,
             countof(descriptor_proto)));
-    JS_SetModuleExport(ctx, module, "Instance",
-        tilemap_class(ctx, &instance_class_id, &instance_class,
-            instance_ctor, "Instance", instance_proto,
-            countof(instance_proto)));
+    instance = tilemap_class(ctx, &instance_class_id, &instance_class,
+        instance_ctor, "Instance", instance_proto, countof(instance_proto));
+    JS_SetPropertyFunctionList(ctx, instance, instance_static,
+        countof(instance_static));
+    JS_SetModuleExport(ctx, module, "Instance", instance);
     JS_SetModuleExport(ctx, module, "SpriteBuffer", sprite_buffer);
     JS_SetModuleExport(ctx, module, "layout", layout);
     return JS_SetModuleExportList(ctx, module, tilemap_funcs,

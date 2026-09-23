@@ -49,7 +49,21 @@ declare namespace TileMap {
         endOffset: number;
     }
 
+    /**
+     * Tileset geometry. Tile `id` is the cell at column `id % columns`, row
+     * `Math.floor(id / columns)` of the atlas texture.
+     */
+    interface Atlas {
+        tileWidth: number;
+        tileHeight: number;
+        columns: number;
+        /** When set, tile ids must be below `columns * rows`. */
+        rows?: number;
+    }
+
     interface DescriptorOptions {
+        /** Required by `Instance.fromGrid()` and `Instance.setTiles()`. */
+        atlas?: Atlas;
         /**
          * Textures by path or `Image`. Paths are loaded synchronously. An
          * `Image` that is still loading (for example from an `ImageList`) or
@@ -66,6 +80,37 @@ declare namespace TileMap {
         readonly materialCount: number;
         /** The `Image` objects the descriptor keeps alive. */
         readonly textures: Image[];
+        readonly atlas: Atlas | undefined;
+    }
+
+    /** Tile id that hides a cell: `setTiles`/`fromGrid` give it zero size. */
+    const EMPTY: number;
+
+    /** Tile ids: a `Uint16Array` is used without copying. */
+    type TileIds = Uint16Array | Int16Array | number[];
+
+    interface GridOptions {
+        /** Descriptor with an `atlas`. */
+        descriptor: Descriptor;
+        columns: number;
+        rows: number;
+        /** Row-major tile ids, `columns * rows` long; default all 0. */
+        tiles?: TileIds;
+        /** Cell size on screen; defaults to the atlas tile size. */
+        tileWidth?: number;
+        tileHeight?: number;
+        zindex?: number;
+    }
+
+    interface RenderOptions {
+        /** Draw only sprites [first, first + count). Disables culling. */
+        first?: number;
+        count?: number;
+        /**
+         * Grid instances draw only the cells on screen (plus one cell of
+         * margin) by default; `false` draws every cell.
+         */
+        cull?: boolean;
     }
 
     /**
@@ -84,16 +129,40 @@ declare namespace TileMap {
     /** A descriptor plus a sprite buffer that can be rendered. */
     class Instance {
         constructor(options: InstanceOptions);
+        /**
+         * Builds a row-major grid in native code: cell (column, row) is
+         * sprite `row * columns + column` at (column * tileWidth,
+         * row * tileHeight). Grid instances cull to the screen in
+         * `render()`. Culling assumes cells stay near their position: a
+         * sprite moved more than one cell away may be skipped.
+         */
+        static fromGrid(options: GridOptions): Instance;
         readonly descriptor: Descriptor;
         /** Sprites in the current buffer, or 0 without a buffer. */
         readonly spriteCount: number;
+        /** Sprites queued by the last `render()`, after culling. */
+        readonly lastDrawCount: number;
+        /** Grid geometry for `fromGrid()` instances, else undefined. */
+        readonly grid: { columns: number; rows: number;
+            tileWidth: number; tileHeight: number } | undefined;
         /**
-         * Queues every sprite at (x, y) plus the camera offset. Sprites are
-         * read when the frame is sent, so writes made to the buffer after
+         * Queues sprites at (x, y) plus the camera offset. Sprites are read
+         * when the frame is sent, so writes made to the buffer after
          * `render()` and before `Screen.flip()` may or may not be shown this
          * frame.
          */
-        render(x: number, y: number): void;
+        render(x: number, y: number, options?: RenderOptions): void;
+        /** Moves sprites [first, first + count) in native code. */
+        translate(first: number, count: number, dx: number, dy: number): void;
+        /** Sets the color (0-255, 128 = neutral) of a sprite range. */
+        setColor(first: number, count: number, r: number, g: number,
+            b: number, a?: number): void;
+        /**
+         * Points sprites from `first` at atlas tiles, one per id, and sets
+         * their size to the cell (grid) or atlas tile size; `EMPTY` hides a
+         * sprite. All ids are validated before anything is written.
+         */
+        setTiles(first: number, tiles: TileIds): void;
         /**
          * Uses another buffer from now on. Waits for queued draws that read
          * the previous one, so replacing buffers mid-frame stalls briefly.

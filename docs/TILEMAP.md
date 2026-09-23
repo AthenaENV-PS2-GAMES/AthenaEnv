@@ -61,6 +61,41 @@ nothing on the C side. Writes made after `render()` and before
 `Screen.flip()` may or may not appear in that frame, so update the buffer
 before rendering.
 
+## Grids, bulk edits and culling
+
+Most maps are grids. Give the descriptor an `atlas` and let native code
+build and edit the sprites:
+
+```js
+const tiles = new TileMap.Descriptor({
+    textures: ["tiles.png"],
+    materials: [{ endOffset: 256 * 256 - 1 }],
+    atlas: { tileWidth: 16, tileHeight: 16, columns: 16, rows: 6 },
+});
+const world = TileMap.Instance.fromGrid({
+    descriptor: tiles, columns: 256, rows: 256, tiles: levelIds, // Uint16Array
+});
+
+world.setTiles(row * 256 + column, [waterFrame]);   // retile cells
+world.translate(first, count, dx, dy);              // move a range
+world.setColor(first, count, 255, 128, 128);        // tint a range
+TileMap.setCamera(-scrollX, -scrollY);
+world.render(0, 0);          // draws only the cells on screen
+world.lastDrawCount;         // sprites actually queued
+```
+
+- `fromGrid()` lays cell (column, row) at sprite `row * columns + column`.
+  `TileMap.EMPTY` leaves a cell hidden (zero size).
+- `render()` on a grid instance culls to the screen plus a one-cell margin,
+  per row and column, so a 256x256 world costs about 1,300 sprites per
+  frame instead of 65,536. Culling assumes cells stay near their position.
+  `{ cull: false }` draws everything, and `{ first, count }` draws an explicit
+  range. Materials apply to ranges exactly as to the whole buffer.
+- `translate`, `setColor` and `setTiles` run in C. `setTiles` validates
+  every id before writing anything, and takes a `Uint16Array` without copying.
+  They replace per-sprite `DataView` writes, which cost about 4.2 us each
+  in QuickJS.
+
 ## Replacing or streaming buffers
 
 - `replaceSpriteBuffer(buffer)` switches to another buffer. It waits for
@@ -147,7 +182,62 @@ with two translucent untextured markers.
 `bin/tests/tilemap_stress.js` forces edge cases and then measures throughput
 with 16x16 tiles from `tests/texture.png`.
 
+For real hardware, where there is no console, two scripts draw their
+results on screen:
+
+- `tilemap_test.js` lists PASS/FAIL per section (including `fromGrid`,
+  bulk edits, ranges and culling) with the current FPS.
+- `tilemap_bench_hud.js` ramps four scenarios (static, native `setTiles`,
+  native `translate`, JS moves) up to 65,536 sprites. It measures a
+  scrolling 256x256 world with and without culling, and keeps a results
+  table on screen. It ends in a live demo that toggles culling every
+  5 seconds.
+
+Both look for the atlas at `tests/texture.png`, `texture.png` or
+`bin/tests/texture.png`.
+
 ## Measurements
+
+### Real PS2 (`tilemap_bench_hud.js`)
+
+16x16 tiles, full-screen layers stacked on screen (all visible), NTSC:
+
+| Scenario | 60 fps up to | JS update | `render()` | Limited by |
+| --- | --- | --- | --- | --- |
+| static | 32,768 | 0 ms | 8.7 ms | GS fill: ~8.4 Mpixels per frame |
+| setTiles (native) | 16,384 | 4.3 ms (7.3 ms before the UV table) | 3.4 ms | update + render |
+| translate (native) | 16,384 | 2.5 ms | 3.3 ms | update + render |
+| JS move (`Float32Array`) | 2,048 | 10.7 ms | 0.2 ms | QuickJS, ~5.2 us per sprite |
+
+256x256 world (65,536 tiles), camera scrolling:
+
+| Culling | fps | Sprites queued | `render()` |
+| --- | --- | --- | --- |
+| on | 59.9 | 1,333 | 0.21 ms |
+| off | 59.9 | 65,536 | 8.93 ms |
+
+Findings:
+
+- Culling cuts the EE and VU1 work about 42x. Without it the GS still holds
+  60 fps, because off-screen sprites are rejected without filling pixels.
+  But `render()` takes 8.93 ms, over half a frame, left to game logic.
+- On hardware `render()` of 65,536 sprites takes 8.93 ms, against 1.98 ms
+  on PCSX2. The EE waits for VIF1/VU1 to drain the packet buffer, so the
+  figure reflects VU1 throughput: about 136 ns per sprite.
+- Native `translate` is about 35x faster per sprite than moving sprites from
+  JS (0.15 us against 5.2 us).
+- `setTiles` cost 3x `translate` for the same writes because of two integer
+  divides per tile; the EE has no fast divider. Atlases with known `rows`
+  (up to 16,384 tiles) now get a UV lookup table instead, which cut
+  `setTiles` of 16,384 sprites from 7.3 to 4.3 ms on hardware (about
+  0.26 us per sprite). The remaining gap to `translate` comes from writing
+  six fields instead of two and from validating every id before writing.
+- At 32,768 visible sprites `render()` alone takes about 8.7 ms (GS fill),
+  so animating that many sprites at 60 fps would need updates under about
+  7 ms. The 60 fps limit of the native scenarios is set by render plus
+  update, not by the updates alone.
+
+### PCSX2 (`tilemap_stress.js`)
 
 PCSX2, NTSC, `tilemap_stress.js`. "render" is EE time spent in `render()`
 calls per frame:
