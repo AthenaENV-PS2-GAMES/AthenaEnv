@@ -70,6 +70,23 @@ JSValue value = JS_NewObjectClass(ctx, object_class_id);
 JS_SetOpaque(value, object);
 ```
 
+Registre a classe no inicializador do modulo com `athena_register_class()`
+(`ath_env.h`), nunca protegida por uma flag `static bool`. O id da classe e
+global ao processo, mas o registro pertence ao runtime: com uma flag, um
+runtime recriado ficaria sem a classe e `JS_NewObjectClass` falharia. O
+prototipo pertence ao contexto e deve ser definido em toda inicializacao:
+
+```c
+static int module_init(JSContext *ctx, JSModuleDef *m) {
+    if (athena_register_class(ctx, &object_class_id, &object_class) < 0)
+        return -1;
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, proto, object_proto, countof(object_proto));
+    JS_SetClassProto(ctx, object_class_id, proto);
+    ...
+}
+```
+
 O adaptador deve rejeitar objetos de outra classe com `JS_GetOpaque2`. Isso
 evita ponteiros arbitrarios, use-after-free, double-free e confusao entre
 handles de modulos diferentes. A API TypeScript deve documentar esses valores

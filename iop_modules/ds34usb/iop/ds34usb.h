@@ -35,6 +35,7 @@ typedef struct _usb_ds34
     /* Input reports are read by an interrupt transfer that is always in flight. */
     volatile u8 reading;      // a transfer into in_buf is pending
     volatile u8 report_ready; // in_buf holds a report not parsed yet
+    u8 idle_reports;          // reports read since the EE last asked for data
     u8 in_buf[MAX_BUFFER_SIZE] __attribute__((aligned(4)));
 } ds34usb_device;
 

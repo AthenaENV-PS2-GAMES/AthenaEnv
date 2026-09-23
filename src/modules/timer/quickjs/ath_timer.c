@@ -4,7 +4,6 @@
 #include "../native/timer.h"
 
 static JSClassID athena_timer_class_id;
-static bool athena_timer_class_registered;
 
 static void athena_timer_finalizer(JSRuntime *rt, JSValue value) {
     AthenaTimer *timer = JS_GetOpaque(value, athena_timer_class_id);
@@ -123,13 +122,8 @@ static const JSCFunctionListEntry timer_module_funcs[] = {
 };
 
 static int athena_timer_module_init(JSContext *ctx, JSModuleDef *m) {
-    if (!athena_timer_class_registered) {
-        JS_NewClassID(&athena_timer_class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), athena_timer_class_id, &athena_timer_class) < 0) {
-            return -1;
-        }
-        athena_timer_class_registered = true;
-    }
+    if (athena_register_class(ctx, &athena_timer_class_id, &athena_timer_class) < 0)
+        return -1;
     return JS_SetModuleExportList(ctx, m, timer_module_funcs, countof(timer_module_funcs));
 }
 

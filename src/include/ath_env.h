@@ -28,4 +28,13 @@ void set_default_script(const char* path);
 
 JSModuleDef *athena_push_module(JSContext* ctx, JSModuleInitFunc *func, const JSCFunctionListEntry *func_list, int len, const char* module_name);
 
+/*
+ * Registers a native class on the runtime of `ctx`. The id is allocated once
+ * per process (JS_NewClassID keeps a non-zero id) and the class is added to
+ * every new runtime, so modules keep working if the runtime is recreated.
+ * Returns 0 on success, -1 on failure. Class prototypes are per context and
+ * must still be set by the caller on each initialization.
+ */
+int athena_register_class(JSContext *ctx, JSClassID *class_id, const JSClassDef *class_def);
+
 #endif

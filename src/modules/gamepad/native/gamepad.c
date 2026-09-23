@@ -1,7 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
+#include <timer.h>
 
 #include <tamtypes.h>
 #include <libpad.h>
@@ -96,14 +96,18 @@ typedef struct {
     bool was_connected;
     uint16_t buttons;
     uint16_t previous;
-
-    float deadzone;
-    bool requested_analog;
-    bool requested_lock;
+    /* Time (ms) each button became held, for repeatPressed(). */
+    uint64_t pressed_at[16];
 
     uint8_t rumble_strong;
     uint8_t rumble_weak;
-    clock_t rumble_deadline;
+    /* Time (ms) the motors stop; 0 when they run until changed. */
+    uint64_t rumble_deadline;
+
+    /* Preferences: stay with the player when controllers are swapped. */
+    float deadzone;
+    bool requested_analog;
+    bool requested_lock;
 } GamepadPlayer;
 
 static char gamepad_buffers[GAMEPAD_PORT_DEVICES][256] __attribute__((aligned(64)));
@@ -112,6 +116,17 @@ static GamepadPlayer gamepad_players[ATHENA_GAMEPAD_MAX_PLAYERS];
 static bool gamepad_defaults_set;
 static bool gamepad_initialized;
 static unsigned int gamepad_updates;
+/* Time (ms) of the last two updates, for repeatPressed(). */
+static uint64_t gamepad_update_ms;
+static uint64_t gamepad_previous_update_ms;
+
+/*
+ * Milliseconds from the EE's 64-bit bus-clock counter. clock() is a 32-bit
+ * microsecond count on the EE and wraps every ~71 minutes.
+ */
+static uint64_t gamepad_now_ms(void) {
+    return GetTimerSystemTime() / (kBUSCLK / 1000);
+}
 
 /* Optional drivers cost IOP memory: none is loaded until the program asks for it. */
 static AthenaGamepadDrivers gamepad_enabled = { false, false, false };
@@ -570,6 +585,17 @@ static void gamepad_start_driver(GamepadDriver driver, bool enabled) {
 
 /* ---- Players ------------------------------------------------------------- */
 
+/* Gives a PS2 controller the mode preference of the player it now belongs to. */
+static void gamepad_apply_player_mode(GamepadDevice *d, const GamepadPlayer *p) {
+    if (d->connection != ATHENA_GAMEPAD_CONNECTION_PORT ||
+        (d->requested_analog == p->requested_analog &&
+         d->requested_lock == p->requested_lock))
+        return;
+    d->requested_analog = p->requested_analog;
+    d->requested_lock = p->requested_lock;
+    gamepad_restart_configuration(d, GAMEPAD_PHASE_DETECT);
+}
+
 static void gamepad_bind(int device, int player) {
     GamepadDevice *d = &gamepad_devices[device];
     GamepadPlayer *p = &gamepad_players[player];
@@ -579,13 +605,36 @@ static void gamepad_bind(int device, int player) {
     p->rumble_strong = 0;
     p->rumble_weak = 0;
     p->rumble_deadline = 0;
+    gamepad_apply_player_mode(d, p);
+}
 
-    if (d->connection == ATHENA_GAMEPAD_CONNECTION_PORT &&
-        (d->requested_analog != p->requested_analog ||
-         d->requested_lock != p->requested_lock)) {
-        d->requested_analog = p->requested_analog;
-        d->requested_lock = p->requested_lock;
-        gamepad_restart_configuration(d, GAMEPAD_PHASE_DETECT);
+void athena_gamepad_core_swap_players(int a, int b) {
+    GamepadPlayer *pa = &gamepad_players[a];
+    GamepadPlayer *pb = &gamepad_players[b];
+    GamepadPlayer swapped;
+
+    gamepad_set_defaults();
+    if (a == b)
+        return;
+
+    /* Controller state (binding, buttons, edges, rumble) moves; preferences stay. */
+    swapped = *pa;
+    *pa = *pb;
+    *pb = swapped;
+    pb->deadzone = pa->deadzone;
+    pb->requested_analog = pa->requested_analog;
+    pb->requested_lock = pa->requested_lock;
+    pa->deadzone = swapped.deadzone;
+    pa->requested_analog = swapped.requested_analog;
+    pa->requested_lock = swapped.requested_lock;
+
+    if (pa->device >= 0) {
+        gamepad_devices[pa->device].player = a;
+        gamepad_apply_player_mode(&gamepad_devices[pa->device], pa);
+    }
+    if (pb->device >= 0) {
+        gamepad_devices[pb->device].player = b;
+        gamepad_apply_player_mode(&gamepad_devices[pb->device], pb);
     }
 }
 
@@ -612,16 +661,25 @@ static void gamepad_update_players(void) {
         }
     }
 
+    gamepad_previous_update_ms = gamepad_update_ms;
+    gamepad_update_ms = gamepad_now_ms();
+
     for (int i = 0; i < ATHENA_GAMEPAD_MAX_PLAYERS; i++) {
         GamepadPlayer *p = &gamepad_players[i];
         GamepadDevice *d = p->device >= 0 ? &gamepad_devices[p->device] : NULL;
+        uint16_t pressed;
 
         p->previous = p->buttons;
         p->buttons = d ? d->buttons : 0;
+        pressed = p->buttons & ~p->previous;
+        for (int bit = 0; pressed; bit++, pressed >>= 1) {
+            if (pressed & 1)
+                p->pressed_at[bit] = gamepad_update_ms;
+        }
         if (!d)
             continue;
 
-        if (p->rumble_deadline && clock() >= p->rumble_deadline) {
+        if (p->rumble_deadline && gamepad_update_ms >= p->rumble_deadline) {
             p->rumble_strong = 0;
             p->rumble_weak = 0;
             p->rumble_deadline = 0;
@@ -695,6 +753,12 @@ AthenaGamepadDrivers athena_gamepad_core_drivers_ready(void) {
 
 bool athena_gamepad_core_multitap(int port) {
     return gamepad_multitap[port];
+}
+
+bool athena_gamepad_core_bluetooth_adapter(void) {
+    uint8_t address[6];
+
+    return gamepad_enabled.bluetooth && gamepad_ds34_adapter_address(address);
 }
 
 /* ---- Player queries ------------------------------------------------------ */
@@ -771,6 +835,56 @@ bool athena_gamepad_core_just_released(int player, uint16_t mask) {
     const GamepadPlayer *p = &gamepad_players[player];
     gamepad_set_defaults();
     return (p->buttons & mask) == 0 && (p->previous & mask) != 0;
+}
+
+bool athena_gamepad_core_any_pressed(int player, uint16_t mask) {
+    return (athena_gamepad_core_buttons(player) & mask) != 0;
+}
+
+bool athena_gamepad_core_any_just_pressed(int player, uint16_t mask) {
+    const GamepadPlayer *p = &gamepad_players[player];
+    gamepad_set_defaults();
+    return (p->buttons & ~p->previous & mask) != 0;
+}
+
+bool athena_gamepad_core_repeat_pressed(int player, uint16_t mask,
+    uint32_t delay_ms, uint32_t interval_ms) {
+    const GamepadPlayer *p = &gamepad_players[player];
+    uint16_t held;
+
+    gamepad_set_defaults();
+    if (athena_gamepad_core_any_just_pressed(player, mask))
+        return true;
+
+    /*
+     * A button held since `t` repeats at t + delay + k * interval. The update
+     * fires when one of those instants falls in (previous update, this one].
+     */
+    held = p->buttons & p->previous & mask;
+    for (int bit = 0; held; bit++, held >>= 1) {
+        uint64_t first;
+
+        if (!(held & 1))
+            continue;
+        first = p->pressed_at[bit] + delay_ms;
+        if (gamepad_update_ms < first)
+            continue;
+        if (gamepad_previous_update_ms < first)
+            return true;
+        if ((gamepad_update_ms - first) / interval_ms !=
+            (gamepad_previous_update_ms - first) / interval_ms)
+            return true;
+    }
+    return false;
+}
+
+AthenaGamepadDpad athena_gamepad_core_dpad(int player) {
+    uint16_t buttons = athena_gamepad_core_buttons(player);
+    AthenaGamepadDpad dpad = {
+        ((buttons & PAD_RIGHT) != 0) - ((buttons & PAD_LEFT) != 0),
+        ((buttons & PAD_DOWN) != 0) - ((buttons & PAD_UP) != 0),
+    };
+    return dpad;
 }
 
 static float gamepad_normalize_axis(uint8_t raw) {
@@ -856,11 +970,9 @@ void athena_gamepad_core_rumble(int player, uint8_t strong, uint8_t weak,
     p->rumble_strong = strong;
     p->rumble_weak = weak;
     p->rumble_deadline = 0;
-    if (duration_ms && (strong || weak)) {
-        /* Never 0, which means "no deadline". */
-        p->rumble_deadline = clock() +
-            (clock_t)((uint64_t)duration_ms * CLOCKS_PER_SEC / 1000) + 1;
-    }
+    /* duration_ms > 0, so the deadline is never 0 ("no deadline"). */
+    if (duration_ms && (strong || weak))
+        p->rumble_deadline = gamepad_now_ms() + duration_ms;
 
     /* Apply now when possible so the motors react within the same frame. */
     d->want_strong = strong;

@@ -3,7 +3,6 @@
 #include "../native/mutex.h"
 
 static JSClassID athena_mutex_class_id;
-static bool athena_mutex_class_registered;
 
 static void athena_mutex_finalizer(JSRuntime *rt, JSValue value) {
     AthenaMutex *mutex = JS_GetOpaque(value, athena_mutex_class_id);
@@ -85,14 +84,8 @@ static const JSCFunctionListEntry mutex_module_funcs[] = {
 };
 
 static int athena_mutex_module_init(JSContext *ctx, JSModuleDef *m) {
-    if (!athena_mutex_class_registered) {
-        JS_NewClassID(&athena_mutex_class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), athena_mutex_class_id,
-                &athena_mutex_class) < 0) {
-            return -1;
-        }
-        athena_mutex_class_registered = true;
-    }
+    if (athena_register_class(ctx, &athena_mutex_class_id, &athena_mutex_class) < 0)
+        return -1;
     return JS_SetModuleExportList(ctx, m, mutex_module_funcs,
         countof(mutex_module_funcs));
 }

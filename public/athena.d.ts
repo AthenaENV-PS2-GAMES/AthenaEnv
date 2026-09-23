@@ -244,7 +244,7 @@ declare namespace Gamepad {
          * Kind of device, a `TYPE_*` value (`TYPE_NONE` when empty). A
          * DualShock 2 stays `TYPE_DUALSHOCK` in digital mode; see `analog`.
          */
-        readonly type: number;
+        readonly type: DeviceType;
         /** True while the controller is in analog mode, i.e. its sticks are live. */
         readonly analog: boolean;
         /** Bitmask of the buttons held at the last update. */
@@ -261,6 +261,14 @@ declare namespace Gamepad {
          * the player, so it applies to whichever controller is bound.
          */
         deadzone: number;
+        /** Same as `leftStick().x`, without allocating an object. */
+        readonly leftX: number;
+        /** Same as `leftStick().y`, without allocating an object. */
+        readonly leftY: number;
+        /** Same as `rightStick().x`, without allocating an object. */
+        readonly rightX: number;
+        /** Same as `rightStick().y`, without allocating an object. */
+        readonly rightY: number;
 
         /** True when every button in `buttons` (e.g. `L1 | R1`) is held. */
         pressed(buttons: number): boolean;
@@ -268,7 +276,27 @@ declare namespace Gamepad {
         justPressed(buttons: number): boolean;
         /** True on the update the last held button of `buttons` was released. */
         justReleased(buttons: number): boolean;
-        /** Left stick in [-1, 1] with the dead zone applied; y is negative upwards. */
+        /** True when at least one button in `buttons` is held, e.g. any d-pad direction. */
+        anyPressed(buttons: number): boolean;
+        /** True on the update at least one button in `buttons` became held. */
+        anyJustPressed(buttons: number): boolean;
+        /**
+         * Auto repeat for menus: true on the update a button in `buttons`
+         * becomes held, then after `delayMs` (default 400) and every
+         * `intervalMs` (default 100) while it stays held. Stateless, so it
+         * can be called any number of times per frame.
+         */
+        repeatPressed(buttons: number, delayMs?: number, intervalMs?: number): boolean;
+        /**
+         * D-pad as a direction: each axis is -1, 0 or 1; y is negative upwards
+         * like the sticks. Opposite directions held together cancel out.
+         */
+        dpad(): { x: -1 | 0 | 1; y: -1 | 0 | 1 };
+        /**
+         * Left stick in [-1, 1] with the dead zone applied; y is negative
+         * upwards. Allocates an object per call; prefer `leftX`/`leftY` in
+         * per-frame code for many players.
+         */
         leftStick(): { x: number; y: number };
         /** Right stick in [-1, 1] with the dead zone applied; y is negative upwards. */
         rightStick(): { x: number; y: number };
@@ -276,7 +304,7 @@ declare namespace Gamepad {
          * How hard one button is pressed, in [0, 1]. Buttons without a sensor
          * report 1 while held. On a DualShock 4 only L2 and R2 are analog.
          */
-        pressure(button: number): number;
+        pressure(button: Button): number;
         /**
          * Vibrates the controller. `strong` drives the big motor and `weak`
          * the small one, both in [0, 1]; the small motor of the DualShock 2
@@ -298,12 +326,30 @@ declare namespace Gamepad {
         /**
          * Stores the Bluetooth adapter's address in the DualShock 3/4 plugged
          * in over USB for this player, so it connects wirelessly once
-         * unplugged. Needs the `usb` and `bluetooth` drivers. Returns false
-         * when no Bluetooth adapter is present or the `bluetooth` driver is off.
-         * Throws `TypeError` when the controller is not on USB. Blocks for a
-         * few milliseconds.
+         * unplugged. Needs the `usb` and `bluetooth` drivers.
+         *
+         * This **replaces the pairing saved in the controller**: a DualShock 3
+         * paired with a PS3 stops connecting to it. It therefore requires an
+         * explicit `{ overwrite: true }`; ask the user before calling it.
+         *
+         * Returns false when no Bluetooth adapter is present (see
+         * `drivers().bluetooth.adapter`). Throws `TypeError` without the
+         * confirmation or when the controller is not on USB. Blocks for a few
+         * milliseconds.
          */
-        pairBluetooth(): boolean;
+        pairBluetooth(options: { overwrite: true }): boolean;
+        /**
+         * Plain snapshot of the player (connection, type, buttons, sticks,
+         * d-pad, capabilities), so `JSON.stringify(player)` and logging show
+         * its state.
+         */
+        toJSON(): {
+            index: number; connected: boolean; connection: Connection | null;
+            port: number; slot: number; type: DeviceType; analog: boolean; buttons: number;
+            leftStick: { x: number; y: number }; rightStick: { x: number; y: number };
+            dpad: { x: number; y: number }; hasPressure: boolean; hasRumble: boolean;
+            deadzone: number;
+        };
     }
 
     /**
@@ -334,41 +380,76 @@ declare namespace Gamepad {
      * driver releases its controllers but does not unload it.
      */
     function configure(options: { multitap?: boolean; usb?: boolean; bluetooth?: boolean }): void;
-    /** Enabled and ready state of each optional driver. */
-    function drivers(): { multitap: DriverState; usb: DriverState; bluetooth: DriverState };
+    /**
+     * Enabled and ready state of each optional driver. For Bluetooth,
+     * `adapter` tells whether a USB Bluetooth adapter was found (one RPC; do
+     * not call every frame).
+     */
+    function drivers(): {
+        multitap: DriverState;
+        usb: DriverState;
+        bluetooth: DriverState & { readonly adapter: boolean };
+    };
     /** True while a multitap is plugged into controller `port` (0 or 1). */
     function hasMultitap(port: number): boolean;
+    /**
+     * Exchanges the controllers of players `a` and `b`, with their buttons,
+     * edges and rumble; either may be empty. Dead zone and analog preference
+     * stay with each player and are applied to the controller it receives.
+     * Use it to let whoever presses START first become player 0:
+     * ```js
+     * const who = Gamepad.findJustPressed(Gamepad.START);
+     * if (who) Gamepad.swapPlayers(0, who.index);
+     * ```
+     */
+    function swapPlayers(a: number, b: number): void;
 
     /** Number of players, and length of `players`. */
-    const MAX_PLAYERS: number;
+    const MAX_PLAYERS: 8;
 
-    const SELECT: number;
-    const L3: number;
-    const R3: number;
-    const START: number;
-    const UP: number;
-    const RIGHT: number;
-    const DOWN: number;
-    const LEFT: number;
-    const L2: number;
-    const R2: number;
-    const L1: number;
-    const R1: number;
-    const TRIANGLE: number;
-    const CIRCLE: number;
-    const CROSS: number;
-    const SQUARE: number;
+    /*
+     * Button bits. Combine them with `|` for the methods that take a mask,
+     * e.g. `player.pressed(Gamepad.L1 | Gamepad.R1)`.
+     */
+    const SELECT: 0x0001;
+    const L3: 0x0002;
+    const R3: 0x0004;
+    const START: 0x0008;
+    const UP: 0x0010;
+    const RIGHT: 0x0020;
+    const DOWN: 0x0040;
+    const LEFT: 0x0080;
+    const L2: 0x0100;
+    const R2: 0x0200;
+    const L1: 0x0400;
+    const R1: 0x0800;
+    const TRIANGLE: 0x1000;
+    const CIRCLE: 0x2000;
+    const CROSS: 0x4000;
+    const SQUARE: 0x8000;
 
-    const TYPE_NONE: number;
-    const TYPE_NEJICON: number;
-    const TYPE_KONAMIGUN: number;
-    const TYPE_DIGITAL: number;
-    const TYPE_ANALOG: number;
-    const TYPE_NAMCOGUN: number;
-    const TYPE_DUALSHOCK: number;
-    const TYPE_JOGCON: number;
-    const TYPE_DUALSHOCK3: number;
-    const TYPE_DUALSHOCK4: number;
+    /** A single button, as taken by `pressure()`. */
+    type Button = typeof SELECT | typeof L3 | typeof R3 | typeof START |
+        typeof UP | typeof RIGHT | typeof DOWN | typeof LEFT |
+        typeof L2 | typeof R2 | typeof L1 | typeof R1 |
+        typeof TRIANGLE | typeof CIRCLE | typeof CROSS | typeof SQUARE;
+
+    const TYPE_NONE: 0;
+    const TYPE_NEJICON: 0x2;
+    const TYPE_KONAMIGUN: 0x3;
+    const TYPE_DIGITAL: 0x4;
+    const TYPE_ANALOG: 0x5;
+    const TYPE_NAMCOGUN: 0x6;
+    const TYPE_DUALSHOCK: 0x7;
+    const TYPE_JOGCON: 0xE;
+    const TYPE_DUALSHOCK3: 0x1003;
+    const TYPE_DUALSHOCK4: 0x1004;
+
+    /** Value of `player.type`. */
+    type DeviceType = typeof TYPE_NONE | typeof TYPE_NEJICON | typeof TYPE_KONAMIGUN |
+        typeof TYPE_DIGITAL | typeof TYPE_ANALOG | typeof TYPE_NAMCOGUN |
+        typeof TYPE_DUALSHOCK | typeof TYPE_JOGCON | typeof TYPE_DUALSHOCK3 |
+        typeof TYPE_DUALSHOCK4;
 }
 
 

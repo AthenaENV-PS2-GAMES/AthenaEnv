@@ -102,7 +102,7 @@ function describe(player) {
 
 test("module functions are exported", function() {
     for (const name of ["update", "player", "connectedPlayers", "findJustPressed",
-        "configure", "drivers", "hasMultitap"])
+        "configure", "drivers", "hasMultitap", "swapPlayers"])
         assert(typeof Gamepad[name] === "function", name + " is missing");
 });
 
@@ -159,6 +159,14 @@ expectThrow("players array cannot be replaced", TypeError, function() {
 
 expectThrow("players array cannot grow", TypeError, function() {
     Gamepad.players.push({});
+});
+
+test("player methods are defined", function() {
+    const player = Gamepad.player(0);
+    for (const name of ["pressed", "justPressed", "justReleased", "anyPressed", "anyJustPressed",
+        "repeatPressed", "dpad", "leftStick", "rightStick", "pressure", "rumble", "stopRumble",
+        "setAnalog", "pairBluetooth", "toJSON"])
+        assert(typeof player[name] === "function", name + " is missing");
 });
 
 test("player has a descriptive tag", function() {
@@ -268,6 +276,10 @@ expectThrow("configure rejects non-boolean options", TypeError, () => Gamepad.co
 expectThrow("drivers rejects arguments", TypeError, () => Gamepad.drivers(1));
 expectThrow("hasMultitap rejects port 2", RangeError, () => Gamepad.hasMultitap(2));
 expectThrow("hasMultitap requires a port", TypeError, () => Gamepad.hasMultitap());
+expectThrow("swapPlayers requires two players", TypeError, () => Gamepad.swapPlayers(0));
+expectThrow("swapPlayers rejects index MAX_PLAYERS", RangeError,
+    () => Gamepad.swapPlayers(0, Gamepad.MAX_PLAYERS));
+expectThrow("swapPlayers rejects a string index", TypeError, () => Gamepad.swapPlayers("0", 1));
 
 const p0 = Gamepad.player(0);
 
@@ -278,6 +290,15 @@ expectThrow("pressed rejects mask 0", RangeError, () => p0.pressed(0));
 expectThrow("pressed rejects masks above 16 bits", RangeError, () => p0.pressed(0x10000));
 expectThrow("justPressed rejects negative masks", RangeError, () => p0.justPressed(-1));
 expectThrow("justReleased requires a mask", TypeError, () => p0.justReleased());
+expectThrow("anyPressed rejects mask 0", RangeError, () => p0.anyPressed(0));
+expectThrow("anyJustPressed requires a mask", TypeError, () => p0.anyJustPressed());
+expectThrow("repeatPressed requires a mask", TypeError, () => p0.repeatPressed());
+expectThrow("repeatPressed rejects a negative delay", RangeError, () => p0.repeatPressed(1, -1));
+expectThrow("repeatPressed rejects interval 0", RangeError, () => p0.repeatPressed(1, 400, 0));
+expectThrow("repeatPressed rejects a fractional delay", RangeError, () => p0.repeatPressed(1, 10.5));
+expectThrow("repeatPressed rejects delays above 10 s", RangeError, () => p0.repeatPressed(1, 10001));
+expectThrow("repeatPressed rejects extra arguments", TypeError, () => p0.repeatPressed(1, 1, 1, 1));
+expectThrow("dpad rejects arguments", TypeError, () => p0.dpad(1));
 expectThrow("pressure rejects button combinations", RangeError,
     () => p0.pressure(Gamepad.L1 | Gamepad.R1));
 expectThrow("leftStick rejects arguments", TypeError, () => p0.leftStick(1));
@@ -291,7 +312,13 @@ expectThrow("rumble rejects extra arguments", TypeError, () => p0.rumble(1, 0, 1
 expectThrow("stopRumble rejects arguments", TypeError, () => p0.stopRumble(0));
 expectThrow("setAnalog requires a boolean", TypeError, () => p0.setAnalog(1));
 expectThrow("setAnalog requires a boolean lock", TypeError, () => p0.setAnalog(true, "yes"));
-expectThrow("pairBluetooth rejects arguments", TypeError, () => p0.pairBluetooth(1));
+expectThrow("pairBluetooth requires options", TypeError, () => p0.pairBluetooth());
+expectThrow("pairBluetooth rejects a non-object", TypeError, () => p0.pairBluetooth(true));
+expectThrow("pairBluetooth requires overwrite", TypeError, () => p0.pairBluetooth({}));
+expectThrow("pairBluetooth rejects overwrite: false", TypeError,
+    () => p0.pairBluetooth({ overwrite: false }));
+expectThrow("pairBluetooth rejects a non-boolean overwrite", TypeError,
+    () => p0.pairBluetooth({ overwrite: 1 }));
 expectThrow("deadzone rejects negative values", RangeError, () => { p0.deadzone = -0.1; });
 expectThrow("deadzone rejects values above 0.95", RangeError, () => { p0.deadzone = 1; });
 expectThrow("deadzone rejects strings", TypeError, () => { p0.deadzone = "0.2"; });
@@ -353,10 +380,51 @@ for (const player of Gamepad.players) {
         assert(!player.hasRumble && !player.hasPressure, "capabilities not cleared");
         assert(!player.justConnected && !player.justDisconnected, "connection edge while empty");
         assert(player.rumble(1, 1, 100) === undefined, "rumble returned a value");
+        const dpad = player.dpad();
+        assert(dpad.x === 0 && dpad.y === 0, "d-pad not centered");
+        const all = 0xFFFF;
+        assert(!player.anyPressed(all) && !player.anyJustPressed(all), "buttons reported");
+        assert(!player.repeatPressed(all), "repeat reported");
+        const json = JSON.parse(JSON.stringify(player));
+        assert(json.index === player.index && json.connected === false &&
+            json.connection === null && json.type === Gamepad.TYPE_NONE, JSON.stringify(json));
     });
     expectThrow("player " + player.index + " cannot pair without a USB controller", TypeError,
-        () => player.pairBluetooth());
+        () => player.pairBluetooth({ overwrite: true }));
 }
+
+test("scalar axes match the stick objects", function() {
+    for (const player of Gamepad.players) {
+        const left = player.leftStick();
+        const right = player.rightStick();
+        assert(player.leftX === left.x && player.leftY === left.y, "left " + player.index);
+        assert(player.rightX === right.x && player.rightY === right.y, "right " + player.index);
+    }
+});
+
+test("drivers().bluetooth reports the adapter", function() {
+    const bluetooth = Gamepad.drivers().bluetooth;
+    assert(typeof bluetooth.adapter === "boolean", "adapter is not a boolean");
+    assert(!bluetooth.adapter || bluetooth.ready, "adapter without the driver");
+    console.log("       Bluetooth adapter: " + (bluetooth.adapter ? "found" : "none"));
+});
+
+test("only the bluetooth driver reports an adapter", function() {
+    const drivers = Gamepad.drivers();
+    for (const name of ["multitap", "usb"])
+        assert(!("adapter" in drivers[name]), name + " has an adapter field");
+});
+
+test("toJSON() mirrors the player", function() {
+    for (const player of Gamepad.players) {
+        const json = player.toJSON();
+        for (const key of ["index", "connected", "connection", "port", "slot", "type",
+            "analog", "buttons", "hasPressure", "hasRumble", "deadzone"])
+            assert(json[key] === player[key], key + ": " + json[key] + " vs " + player[key]);
+        assert(JSON.stringify(json.leftStick) === JSON.stringify(player.leftStick()), "leftStick");
+        assert(JSON.stringify(json.dpad) === JSON.stringify(player.dpad()), "dpad");
+    }
+});
 
 test("players are bound in device order", function() {
     const connected = Gamepad.connectedPlayers();
@@ -385,7 +453,7 @@ if (!pad) {
 
     test(name + " cannot pair over Bluetooth", function() {
         let threw = false;
-        try { pad.pairBluetooth(); } catch (error) { threw = error instanceof TypeError; }
+        try { pad.pairBluetooth({ overwrite: true }); } catch (error) { threw = error instanceof TypeError; }
         assert(threw, "pairBluetooth did not throw TypeError");
     });
 
@@ -435,6 +503,57 @@ if (!pad) {
         assert(!waitFor(60, () => !pad.connected || pad.justDisconnected), "controller dropped");
     });
 }
+
+// --- swapPlayers() ---------------------------------------------------------
+
+function identity(player) {
+    return player.connection + ":" + player.port + ":" + player.slot;
+}
+
+const swapFrom = Gamepad.connectedPlayers()[0] || null;
+
+if (!swapFrom) {
+    skip("swapPlayers() with a controller", "no controller connected");
+} else {
+    const swapTo = Gamepad.players[Gamepad.MAX_PLAYERS - 1] === swapFrom ?
+        Gamepad.players[0] : Gamepad.players[Gamepad.MAX_PLAYERS - 1];
+    const name = "swapPlayers(" + swapFrom.index + ", " + swapTo.index + ")";
+
+    test(name + " moves the controller, not the preferences", function() {
+        const fromId = identity(swapFrom);
+        const toId = identity(swapTo);
+        const fromConnected = swapFrom.connected;
+        const toConnected = swapTo.connected;
+        swapFrom.deadzone = 0.3;
+        swapTo.deadzone = 0.1;
+
+        Gamepad.swapPlayers(swapFrom.index, swapTo.index);
+        try {
+            assert(identity(swapTo) === fromId && identity(swapFrom) === toId,
+                "controllers did not move: " + identity(swapFrom) + " / " + identity(swapTo));
+            assert(swapTo.connected === fromConnected && swapFrom.connected === toConnected,
+                "connected state did not move");
+            assert(Math.abs(swapFrom.deadzone - 0.3) < 1e-6 && Math.abs(swapTo.deadzone - 0.1) < 1e-6,
+                "dead zones moved with the controllers");
+            step();
+            assert(!swapFrom.justConnected && !swapFrom.justDisconnected &&
+                !swapTo.justConnected && !swapTo.justDisconnected,
+                "swap produced connection edges");
+            assert(identity(swapTo) === fromId, "binding lost after an update");
+        } finally {
+            Gamepad.swapPlayers(swapFrom.index, swapTo.index);
+            swapFrom.deadzone = 0.15;
+            swapTo.deadzone = 0.15;
+        }
+        assert(identity(swapFrom) === fromId, "swap back failed");
+    });
+}
+
+test("swapPlayers() with the same player is a no-op", function() {
+    const before = identity(Gamepad.player(0));
+    Gamepad.swapPlayers(0, 0);
+    assert(identity(Gamepad.player(0)) === before, "player 0 changed");
+});
 
 // --- Multitap -------------------------------------------------------------
 
@@ -511,7 +630,7 @@ for (const connection of ["usb", "bluetooth"]) {
     });
 
     if (connection === "bluetooth") {
-        expectThrow(name + " cannot pair itself", TypeError, () => player.pairBluetooth());
+        expectThrow(name + " cannot pair itself", TypeError, () => player.pairBluetooth({ overwrite: true }));
     }
 }
 

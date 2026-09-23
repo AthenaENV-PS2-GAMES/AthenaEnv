@@ -12,7 +12,6 @@
  * singleton, so players never own resources and need no finalizer.
  */
 static JSClassID gamepad_player_class_id;
-static bool gamepad_player_class_registered;
 static int gamepad_player_indexes[ATHENA_GAMEPAD_MAX_PLAYERS] = { 0, 1, 2, 3, 4, 5, 6, 7 };
 
 static JSClassDef gamepad_player_class = {
@@ -87,6 +86,20 @@ static int gamepad_to_bool(JSContext *ctx, JSValueConst value, bool *out,
     }
     *out = JS_ToBool(ctx, value);
     return 1;
+}
+
+/* Reads an optional boolean option; leaves `out` unchanged when absent. */
+static int gamepad_option(JSContext *ctx, JSValueConst options, const char *name,
+    bool *out) {
+    JSValue value = JS_GetPropertyStr(ctx, options, name);
+    int ok = 1;
+
+    if (JS_IsException(value))
+        return 0;
+    if (!JS_IsUndefined(value))
+        ok = gamepad_to_bool(ctx, value, out, name);
+    JS_FreeValue(ctx, value);
+    return ok;
 }
 
 static uint8_t gamepad_to_level(double value) {
@@ -191,6 +204,19 @@ static JSValue gamepad_player_get_has_rumble(JSContext *ctx, JSValueConst this_v
     return JS_NewBool(ctx, athena_gamepad_core_has_rumble(player));
 }
 
+/*
+ * Scalar stick axes: unlike leftStick()/rightStick() they allocate nothing,
+ * which matters when reading several players every frame.
+ */
+static JSValue gamepad_player_get_axis(JSContext *ctx, JSValueConst this_val,
+    int magic) {
+    AthenaGamepadStick stick;
+    GAMEPAD_THIS_PLAYER(player);
+
+    stick = athena_gamepad_core_stick(player, magic >= 2);
+    return JS_NewFloat64(ctx, magic & 1 ? stick.y : stick.x);
+}
+
 static JSValue gamepad_player_get_deadzone(JSContext *ctx, JSValueConst this_val) {
     GAMEPAD_THIS_PLAYER(player);
     return JS_NewFloat64(ctx, athena_gamepad_core_deadzone(player));
@@ -242,6 +268,52 @@ static JSValue gamepad_player_just_released(JSContext *ctx, JSValueConst this_va
     return JS_NewBool(ctx, athena_gamepad_core_just_released(player, mask));
 }
 
+static JSValue gamepad_player_any_pressed(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    uint16_t mask;
+    GAMEPAD_THIS_PLAYER(player);
+
+    if (!gamepad_require_argc(ctx, argc, 1, 1, "player.anyPressed") ||
+        !gamepad_to_mask(ctx, argv[0], &mask))
+        return JS_EXCEPTION;
+    return JS_NewBool(ctx, athena_gamepad_core_any_pressed(player, mask));
+}
+
+static JSValue gamepad_player_any_just_pressed(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    uint16_t mask;
+    GAMEPAD_THIS_PLAYER(player);
+
+    if (!gamepad_require_argc(ctx, argc, 1, 1, "player.anyJustPressed") ||
+        !gamepad_to_mask(ctx, argv[0], &mask))
+        return JS_EXCEPTION;
+    return JS_NewBool(ctx, athena_gamepad_core_any_just_pressed(player, mask));
+}
+
+#define GAMEPAD_DEFAULT_REPEAT_DELAY_MS 400
+#define GAMEPAD_DEFAULT_REPEAT_INTERVAL_MS 100
+#define GAMEPAD_MAX_REPEAT_MS 10000
+
+static JSValue gamepad_player_repeat_pressed(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    uint16_t mask;
+    double delay = GAMEPAD_DEFAULT_REPEAT_DELAY_MS;
+    double interval = GAMEPAD_DEFAULT_REPEAT_INTERVAL_MS;
+    GAMEPAD_THIS_PLAYER(player);
+
+    if (!gamepad_require_argc(ctx, argc, 1, 3, "player.repeatPressed") ||
+        !gamepad_to_mask(ctx, argv[0], &mask))
+        return JS_EXCEPTION;
+    if (argc >= 2 && !gamepad_to_integer(ctx, argv[1], 0, GAMEPAD_MAX_REPEAT_MS,
+            &delay, "delayMs"))
+        return JS_EXCEPTION;
+    if (argc >= 3 && !gamepad_to_integer(ctx, argv[2], 1, GAMEPAD_MAX_REPEAT_MS,
+            &interval, "intervalMs"))
+        return JS_EXCEPTION;
+    return JS_NewBool(ctx, athena_gamepad_core_repeat_pressed(player, mask,
+        (uint32_t)delay, (uint32_t)interval));
+}
+
 static JSValue gamepad_stick_value(JSContext *ctx, AthenaGamepadStick stick) {
     JSValue object = JS_NewObject(ctx);
 
@@ -268,6 +340,25 @@ static JSValue gamepad_player_right_stick(JSContext *ctx, JSValueConst this_val,
     if (!gamepad_require_argc(ctx, argc, 0, 0, "player.rightStick"))
         return JS_EXCEPTION;
     return gamepad_stick_value(ctx, athena_gamepad_core_stick(player, true));
+}
+
+static JSValue gamepad_dpad_value(JSContext *ctx, AthenaGamepadDpad dpad) {
+    JSValue object = JS_NewObject(ctx);
+
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "x", JS_NewInt32(ctx, dpad.x));
+    JS_SetPropertyStr(ctx, object, "y", JS_NewInt32(ctx, dpad.y));
+    return object;
+}
+
+static JSValue gamepad_player_dpad(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    GAMEPAD_THIS_PLAYER(player);
+
+    if (!gamepad_require_argc(ctx, argc, 0, 0, "player.dpad"))
+        return JS_EXCEPTION;
+    return gamepad_dpad_value(ctx, athena_gamepad_core_dpad(player));
 }
 
 static JSValue gamepad_player_pressure(JSContext *ctx, JSValueConst this_val,
@@ -328,10 +419,22 @@ static JSValue gamepad_player_set_analog(JSContext *ctx, JSValueConst this_val,
 
 static JSValue gamepad_player_pair_bluetooth(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
+    bool overwrite = false;
     GAMEPAD_THIS_PLAYER(player);
 
-    if (!gamepad_require_argc(ctx, argc, 0, 0, "player.pairBluetooth"))
+    /*
+     * Pairing replaces the host address stored inside the controller (e.g. its
+     * PS3), so it must be requested explicitly rather than by a bare call.
+     */
+    if (!gamepad_require_argc(ctx, argc, 1, 1, "player.pairBluetooth"))
         return JS_EXCEPTION;
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "player.pairBluetooth expects { overwrite: true }");
+    if (!gamepad_option(ctx, argv[0], "overwrite", &overwrite))
+        return JS_EXCEPTION;
+    if (!overwrite)
+        return JS_ThrowTypeError(ctx, "player.pairBluetooth replaces the pairing stored "
+            "in the controller; pass { overwrite: true } to confirm");
     switch (athena_gamepad_core_pair_bluetooth(player)) {
     case ATHENA_GAMEPAD_PAIR_OK:
         return JS_TRUE;
@@ -343,6 +446,45 @@ static JSValue gamepad_player_pair_bluetooth(JSContext *ctx, JSValueConst this_v
     default:
         return JS_ThrowInternalError(ctx, "Gamepad: failed to write the Bluetooth address");
     }
+}
+
+/*
+ * Plain snapshot of the player for logging: the getters live on the
+ * prototype, so JSON.stringify(player) would otherwise print "{}".
+ */
+static JSValue gamepad_player_to_json(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    JSValue object;
+    GAMEPAD_THIS_PLAYER(player);
+
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "index", JS_NewInt32(ctx, player));
+    JS_SetPropertyStr(ctx, object, "connected",
+        JS_NewBool(ctx, athena_gamepad_core_connected(player)));
+    JS_SetPropertyStr(ctx, object, "connection",
+        gamepad_player_get_connection(ctx, this_val));
+    JS_SetPropertyStr(ctx, object, "port", JS_NewInt32(ctx, athena_gamepad_core_port(player)));
+    JS_SetPropertyStr(ctx, object, "slot", JS_NewInt32(ctx, athena_gamepad_core_slot(player)));
+    JS_SetPropertyStr(ctx, object, "type", JS_NewInt32(ctx, athena_gamepad_core_type(player)));
+    JS_SetPropertyStr(ctx, object, "analog",
+        JS_NewBool(ctx, athena_gamepad_core_analog(player)));
+    JS_SetPropertyStr(ctx, object, "buttons",
+        JS_NewInt32(ctx, athena_gamepad_core_buttons(player)));
+    JS_SetPropertyStr(ctx, object, "leftStick",
+        gamepad_stick_value(ctx, athena_gamepad_core_stick(player, false)));
+    JS_SetPropertyStr(ctx, object, "rightStick",
+        gamepad_stick_value(ctx, athena_gamepad_core_stick(player, true)));
+    JS_SetPropertyStr(ctx, object, "dpad",
+        gamepad_dpad_value(ctx, athena_gamepad_core_dpad(player)));
+    JS_SetPropertyStr(ctx, object, "hasPressure",
+        JS_NewBool(ctx, athena_gamepad_core_has_pressure(player)));
+    JS_SetPropertyStr(ctx, object, "hasRumble",
+        JS_NewBool(ctx, athena_gamepad_core_has_rumble(player)));
+    JS_SetPropertyStr(ctx, object, "deadzone",
+        JS_NewFloat64(ctx, athena_gamepad_core_deadzone(player)));
+    return object;
 }
 
 static const JSCFunctionListEntry gamepad_player_proto[] = {
@@ -360,16 +502,25 @@ static const JSCFunctionListEntry gamepad_player_proto[] = {
     JS_CGETSET_DEF("hasPressure", gamepad_player_get_has_pressure, NULL),
     JS_CGETSET_DEF("hasRumble", gamepad_player_get_has_rumble, NULL),
     JS_CGETSET_DEF("deadzone", gamepad_player_get_deadzone, gamepad_player_set_deadzone),
+    JS_CGETSET_MAGIC_DEF("leftX", gamepad_player_get_axis, NULL, 0),
+    JS_CGETSET_MAGIC_DEF("leftY", gamepad_player_get_axis, NULL, 1),
+    JS_CGETSET_MAGIC_DEF("rightX", gamepad_player_get_axis, NULL, 2),
+    JS_CGETSET_MAGIC_DEF("rightY", gamepad_player_get_axis, NULL, 3),
     JS_CFUNC_DEF("pressed", 1, gamepad_player_pressed),
     JS_CFUNC_DEF("justPressed", 1, gamepad_player_just_pressed),
     JS_CFUNC_DEF("justReleased", 1, gamepad_player_just_released),
+    JS_CFUNC_DEF("anyPressed", 1, gamepad_player_any_pressed),
+    JS_CFUNC_DEF("anyJustPressed", 1, gamepad_player_any_just_pressed),
+    JS_CFUNC_DEF("repeatPressed", 1, gamepad_player_repeat_pressed),
+    JS_CFUNC_DEF("dpad", 0, gamepad_player_dpad),
     JS_CFUNC_DEF("leftStick", 0, gamepad_player_left_stick),
     JS_CFUNC_DEF("rightStick", 0, gamepad_player_right_stick),
     JS_CFUNC_DEF("pressure", 1, gamepad_player_pressure),
     JS_CFUNC_DEF("rumble", 1, gamepad_player_rumble),
     JS_CFUNC_DEF("stopRumble", 0, gamepad_player_stop_rumble),
     JS_CFUNC_DEF("setAnalog", 1, gamepad_player_set_analog),
-    JS_CFUNC_DEF("pairBluetooth", 0, gamepad_player_pair_bluetooth),
+    JS_CFUNC_DEF("pairBluetooth", 1, gamepad_player_pair_bluetooth),
+    JS_CFUNC_DEF("toJSON", 0, gamepad_player_to_json),
     JS_PROP_STRING_DEF("[Symbol.toStringTag]", "GamepadPlayer", JS_PROP_CONFIGURABLE),
 };
 
@@ -387,19 +538,6 @@ static JSValue gamepad_update(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-/* Reads an optional boolean option; leaves `out` unchanged when absent. */
-static int gamepad_option(JSContext *ctx, JSValueConst options, const char *name,
-    bool *out) {
-    JSValue value = JS_GetPropertyStr(ctx, options, name);
-    int ok = 1;
-
-    if (JS_IsException(value))
-        return 0;
-    if (!JS_IsUndefined(value))
-        ok = gamepad_to_bool(ctx, value, out, name);
-    JS_FreeValue(ctx, value);
-    return ok;
-}
 
 static JSValue gamepad_configure(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
@@ -431,7 +569,7 @@ static JSValue gamepad_drivers(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
     AthenaGamepadDrivers enabled = athena_gamepad_core_drivers_enabled();
     AthenaGamepadDrivers ready = athena_gamepad_core_drivers_ready();
-    JSValue object;
+    JSValue object, bluetooth;
 
     if (!gamepad_require_argc(ctx, argc, 0, 0, "Gamepad.drivers"))
         return JS_EXCEPTION;
@@ -442,9 +580,24 @@ static JSValue gamepad_drivers(JSContext *ctx, JSValueConst this_val,
         gamepad_driver_value(ctx, enabled.multitap, ready.multitap));
     JS_SetPropertyStr(ctx, object, "usb",
         gamepad_driver_value(ctx, enabled.usb, ready.usb));
-    JS_SetPropertyStr(ctx, object, "bluetooth",
-        gamepad_driver_value(ctx, enabled.bluetooth, ready.bluetooth));
+    bluetooth = gamepad_driver_value(ctx, enabled.bluetooth, ready.bluetooth);
+    if (!JS_IsException(bluetooth))
+        JS_SetPropertyStr(ctx, bluetooth, "adapter",
+            JS_NewBool(ctx, ready.bluetooth && athena_gamepad_core_bluetooth_adapter()));
+    JS_SetPropertyStr(ctx, object, "bluetooth", bluetooth);
     return object;
+}
+
+static JSValue gamepad_swap_players(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    double a, b;
+
+    if (!gamepad_require_argc(ctx, argc, 2, 2, "Gamepad.swapPlayers") ||
+        !gamepad_to_integer(ctx, argv[0], 0, ATHENA_GAMEPAD_MAX_PLAYERS - 1, &a, "a") ||
+        !gamepad_to_integer(ctx, argv[1], 0, ATHENA_GAMEPAD_MAX_PLAYERS - 1, &b, "b"))
+        return JS_EXCEPTION;
+    athena_gamepad_core_swap_players((int)a, (int)b);
+    return JS_UNDEFINED;
 }
 
 static JSValue gamepad_has_multitap(JSContext *ctx, JSValueConst this_val,
@@ -517,6 +670,7 @@ static const JSCFunctionListEntry gamepad_module_funcs[] = {
     JS_CFUNC_DEF("configure", 1, gamepad_configure),
     JS_CFUNC_DEF("drivers", 0, gamepad_drivers),
     JS_CFUNC_DEF("hasMultitap", 1, gamepad_has_multitap),
+    JS_CFUNC_DEF("swapPlayers", 2, gamepad_swap_players),
 
     JS_PROP_INT32_DEF("MAX_PLAYERS", ATHENA_GAMEPAD_MAX_PLAYERS, JS_PROP_ENUMERABLE),
 
@@ -580,13 +734,8 @@ static JSValue gamepad_new_players(JSContext *ctx) {
 static int gamepad_module_init(JSContext *ctx, JSModuleDef *m) {
     JSValue proto, players;
 
-    if (!gamepad_player_class_registered) {
-        JS_NewClassID(&gamepad_player_class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), gamepad_player_class_id,
-                &gamepad_player_class) < 0)
-            return -1;
-        gamepad_player_class_registered = true;
-    }
+    if (athena_register_class(ctx, &gamepad_player_class_id, &gamepad_player_class) < 0)
+        return -1;
 
     proto = JS_NewObject(ctx);
     if (JS_IsException(proto))

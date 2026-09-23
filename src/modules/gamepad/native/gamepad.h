@@ -52,6 +52,12 @@ typedef struct {
     float y;
 } AthenaGamepadStick;
 
+/* D-pad direction: -1, 0 or 1 per axis; y is negative upwards like the sticks. */
+typedef struct {
+    int x;
+    int y;
+} AthenaGamepadDpad;
+
 /*
  * Loads padman when needed, binds libpad and opens both ports. Safe to call
  * every frame. After an IOP reset the next call starts everything again.
@@ -72,6 +78,8 @@ AthenaGamepadDrivers athena_gamepad_core_drivers_enabled(void);
 AthenaGamepadDrivers athena_gamepad_core_drivers_ready(void);
 /* A multitap is plugged into `port` (0 or 1). */
 bool athena_gamepad_core_multitap(int port);
+/* The bluetooth driver is ready and has found a USB Bluetooth adapter. One RPC. */
+bool athena_gamepad_core_bluetooth_adapter(void);
 
 bool athena_gamepad_core_connected(int player);
 /* The controller was bound to / released from the player at the last update. */
@@ -100,6 +108,23 @@ bool athena_gamepad_core_pressed(int player, uint16_t mask);
 bool athena_gamepad_core_just_pressed(int player, uint16_t mask);
 /* At least one bit of `mask` was released this frame and none is held. */
 bool athena_gamepad_core_just_released(int player, uint16_t mask);
+/* At least one bit of `mask` is held this frame. */
+bool athena_gamepad_core_any_pressed(int player, uint16_t mask);
+/* At least one bit of `mask` became held this frame. */
+bool athena_gamepad_core_any_just_pressed(int player, uint16_t mask);
+/*
+ * Menu-style auto repeat: true when a button of `mask` became held, then
+ * again after `delay_ms` and every `interval_ms` (> 0) while it stays held.
+ */
+bool athena_gamepad_core_repeat_pressed(int player, uint16_t mask,
+    uint32_t delay_ms, uint32_t interval_ms);
+AthenaGamepadDpad athena_gamepad_core_dpad(int player);
+
+/*
+ * Exchanges the controllers bound to two players, with their input state and
+ * rumble. Preferences (dead zone, analog mode) stay with each player.
+ */
+void athena_gamepad_core_swap_players(int a, int b);
 
 /* Normalized stick in [-1, 1] with the player's radial dead zone applied. */
 AthenaGamepadStick athena_gamepad_core_stick(int player, bool right);

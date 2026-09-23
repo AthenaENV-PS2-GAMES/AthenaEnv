@@ -9,7 +9,6 @@
 #include "ath_matrix4.h"
 
 static JSClassID matrix4_class_id;
-static bool matrix4_class_registered;
 
 static AthenaMatrix4 *matrix4_from_value(JSContext *ctx, JSValueConst value) {
     AthenaMatrix4 *matrix = JS_GetOpaque2(ctx, value, matrix4_class_id);
@@ -259,12 +258,8 @@ static const JSCFunctionListEntry matrix4_funcs[] = {
 };
 
 static int matrix4_module_init(JSContext *ctx, JSModuleDef *module) {
-    if (!matrix4_class_registered) {
-        JS_NewClassID(&matrix4_class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), matrix4_class_id, &matrix4_class) < 0)
-            return -1;
-        matrix4_class_registered = true;
-    }
+    if (athena_register_class(ctx, &matrix4_class_id, &matrix4_class) < 0)
+        return -1;
     JSValue proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, proto, matrix4_funcs, countof(matrix4_funcs));
     JSValue constructor = JS_NewCFunction2(ctx, matrix4_ctor, "Matrix4", 16,

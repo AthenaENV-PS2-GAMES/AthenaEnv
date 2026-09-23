@@ -12,13 +12,12 @@
 typedef struct {
     int components;
     JSClassID class_id;
-    bool registered;
     const char *name;
 } AthenaVectorClass;
 
-static AthenaVectorClass vector2_class = { 2, 0, false, "Vector2" };
-static AthenaVectorClass vector3_class = { 3, 0, false, "Vector3" };
-static AthenaVectorClass vector4_class = { 4, 0, false, "Vector4" };
+static AthenaVectorClass vector2_class = { 2, 0, "Vector2" };
+static AthenaVectorClass vector3_class = { 3, 0, "Vector3" };
+static AthenaVectorClass vector4_class = { 4, 0, "Vector4" };
 
 static int vector_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -271,12 +270,8 @@ static int init_vector_class(JSContext *ctx, JSModuleDef *m,
     AthenaVectorClass *klass, JSClassDef *class_def,
     JSValue (*ctor)(JSContext *, JSValueConst, int, JSValueConst *),
     const JSCFunctionListEntry *funcs, int func_count) {
-    if (!klass->registered) {
-        JS_NewClassID(&klass->class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), klass->class_id, class_def) < 0)
-            return -1;
-        klass->registered = true;
-    }
+    if (athena_register_class(ctx, &klass->class_id, class_def) < 0)
+        return -1;
     JSValue proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, proto, funcs, func_count);
     JSValue constructor = JS_NewCFunction2(ctx, ctor, klass->name,

@@ -36,7 +36,15 @@ jogadores sao logicos, como no SDL e nos consoles atuais:
 - `player.connection` (`"port"`, `"usb"`, `"bluetooth"` ou `null`),
   `player.port` e `player.slot` dizem de onde vem o controle;
 - preferencias pertencem ao jogador e valem para qualquer controle atribuido
-  a ele: `deadzone` e `setAnalog()`.
+  a ele: `deadzone` e `setAnalog()`;
+- para escolher quem e o jogador 0, troque os controles com
+  `Gamepad.swapPlayers()`. Estado de botoes, bordas e vibracao acompanham o
+  controle, sem gerar `justConnected`/`justDisconnected`:
+
+```js
+const who = Gamepad.findJustPressed(Gamepad.START);
+if (who) Gamepad.swapPlayers(0, who.index);   // quem apertou START vira o jogador 0
+```
 
 ## Modelo
 
@@ -71,7 +79,7 @@ Gamepad.configure({ multitap: true, usb: true });
 Gamepad.update();
 console.log(JSON.stringify(Gamepad.drivers()));
 // {"multitap":{"enabled":true,"ready":true},"usb":{"enabled":true,"ready":true},
-//  "bluetooth":{"enabled":false,"ready":false}}
+//  "bluetooth":{"enabled":false,"ready":false,"adapter":false}}
 ```
 
 Um driver ligado e carregado no `update()` seguinte. Ligado antes do primeiro
@@ -100,6 +108,10 @@ Os fontes estao em `iop_modules/` e foram adaptados:
   que o interpreta e dispara a proxima. `GET_DATA` devolve o ultimo report e
   `SET_RUMBLE` apenas registra o pedido, aplicado pela mesma thread. A thread
   dorme ate chegar uma requisicao, um report ou um controle novo.
+- **Leitura pausa quando o EE para de pedir.** Depois de 128 reports sem
+  `GET_DATA` (jogo pausado, tela de loading, driver desligado no EE), o
+  driver para de disparar transferencias. O proximo `GET_DATA` devolve o
+  ultimo report e retoma a leitura; o frame seguinte ja tem dados novos.
 - **Status com tipo:** os dois drivers marcam `0x10` no status quando o
   controle e um DualShock 4, e `GET_DATA` devolve o byte de status apos os 18
   bytes de dados. A `libds34*` antiga continua compativel (le so 18 bytes).
@@ -113,14 +125,17 @@ um estado estatico que nunca e limpo).
 
 1. Ligue os dois drivers: `Gamepad.configure({ usb: true, bluetooth: true })`.
 2. Conecte o adaptador Bluetooth USB e o DualShock 3/4 por cabo.
-3. Com o controle atribuido a um jogador (`connection === "usb"`), chame
-   `player.pairBluetooth()`. Retorna `false` quando nao ha adaptador (ou o
-   driver `bluetooth` esta desligado).
-4. Desconecte o cabo e aperte o botao PS: o controle volta com
+3. Confira `Gamepad.drivers().bluetooth.adapter`.
+4. Com o controle atribuido a um jogador (`connection === "usb"`), chame
+   `player.pairBluetooth({ overwrite: true })`. Retorna `false` quando nao
+   ha adaptador.
+5. Desconecte o cabo e aperte o botao PS: o controle volta com
    `connection === "bluetooth"`.
 
 O pareamento fica gravado no controle; so precisa ser refeito ao trocar de
-adaptador.
+adaptador. **Ele substitui o pareamento anterior**: um DualShock 3 pareado
+com um PS3 deixa de conectar nele. Por isso a chamada exige
+`{ overwrite: true }` e o jogo deve pedir confirmacao ao usuario antes.
 
 ## Mapeamento do DualShock 3/4
 
@@ -144,18 +159,24 @@ do 3 so liga/desliga; o do DualShock 4 aceita intensidade.
 | `Gamepad.player(index)` / `Gamepad.players` | Objeto persistente de cada jogador (0-7) |
 | `Gamepad.connectedPlayers()` | Jogadores com controle, por indice |
 | `Gamepad.findJustPressed(buttons)` | Primeiro jogador que acabou de apertar `buttons`, ou `null` |
-| `Gamepad.configure(options)`, `Gamepad.drivers()` | Drivers opcionais |
+| `Gamepad.configure(options)`, `Gamepad.drivers()` | Drivers opcionais; `drivers().bluetooth.adapter` indica o adaptador |
 | `Gamepad.hasMultitap(port)` | Multitap presente na porta |
 | `player.index`, `connected`, `justConnected`, `justDisconnected` | Identidade e bordas de conexao |
 | `player.connection`, `port`, `slot` | Origem do controle |
 | `player.type`, `player.analog` | Dispositivo e modo atual |
 | `player.pressed/justPressed/justReleased(buttons)` | Mascaras; combinacoes exigem todos os botoes |
+| `player.anyPressed/anyJustPressed(buttons)` | Basta um botao da mascara (ex.: qualquer direcional) |
+| `player.repeatPressed(buttons, delayMs = 400, intervalMs = 100)` | Auto-repeat para menus, sem estado no JS |
+| `player.dpad()` | Direcional como `{x, y}` em -1/0/1 |
+| `player.toJSON()` | Snapshot para `console.log`/`JSON.stringify` |
+| `Gamepad.swapPlayers(a, b)` | Troca os controles de dois jogadores; preferencias ficam |
 | `player.buttons`, `previousButtons` | Mascaras cruas do frame atual e do anterior |
 | `player.leftStick()`, `rightStick()`, `deadzone` | Sticks normalizados, dead zone radial (padrao 0.15) |
+| `player.leftX`, `leftY`, `rightX`, `rightY` | Os mesmos eixos, sem alocar objeto (preferir em loops por frame) |
 | `player.pressure(button)`, `hasPressure` | Pressao em `[0, 1]` |
 | `player.rumble(strong, weak?, durationMs?)`, `stopRumble()`, `hasRumble` | Vibracao com parada automatica opcional |
 | `player.setAnalog(enabled, lock = true)` | Modo analogico ou digital (controles PS2) |
-| `player.pairBluetooth()` | Grava o endereco do adaptador no DualShock 3/4 USB |
+| `player.pairBluetooth({ overwrite: true })` | Grava o endereco do adaptador no DualShock 3/4 USB |
 
 ## Diferencas em relacao ao `Pads`
 

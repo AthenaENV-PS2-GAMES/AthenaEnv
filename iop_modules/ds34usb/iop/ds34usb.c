@@ -205,6 +205,7 @@ static void usb_release(int pad)
     /* A transfer cancelled by the endpoint closing may never call back. */
     ds34pad[pad].reading = 0;
     ds34pad[pad].report_ready = 0;
+    ds34pad[pad].idle_reports = 0;
 
     SignalSema(ds34pad[pad].sema);
 }
@@ -546,6 +547,14 @@ static void usb_report_cb(int resultCode, int bytes, void *arg)
         WakeupThread(rpc_thid);
 }
 
+/*
+ * Reports read without a GET_DATA before reading pauses. The EE asks once per
+ * frame while it uses the pad; when it stops (game paused, driver disabled on
+ * the EE side) the bus and this thread go quiet. The next GET_DATA returns the
+ * last report and restarts reading.
+ */
+#define IDLE_REPORTS_LIMIT 128
+
 /* Parses a finished report and keeps one input transfer in flight. RPC thread only. */
 static void pump_pad(int pad)
 {
@@ -554,9 +563,11 @@ static void pump_pad(int pad)
         WaitSema(ds34pad[pad].sema);
         readReport(ds34pad[pad].in_buf, pad);
         SignalSema(ds34pad[pad].sema);
+        if (ds34pad[pad].idle_reports < IDLE_REPORTS_LIMIT)
+            ds34pad[pad].idle_reports++;
     }
 
-    if (!ds34pad[pad].reading) {
+    if (!ds34pad[pad].reading && ds34pad[pad].idle_reports < IDLE_REPORTS_LIMIT) {
         ds34pad[pad].reading = 1;
         if (UsbInterruptTransfer(ds34pad[pad].interruptEndp, ds34pad[pad].in_buf,
                 MAX_BUFFER_SIZE, usb_report_cb, (void *)pad) != USB_RC_OK) {
@@ -782,6 +793,9 @@ void *rpc_sf(int cmd, void *data, int size)
             u8 port = *(u8 *)data;
             ds34usb_get_data((char *)data, 18, port);
             *(u8 *)(data + 18) = ds34usb_get_status(port);
+            /* The EE is using this pad: keep (or resume) reading it. */
+            if (port < MAX_PADS)
+                ds34pad[port].idle_reports = 0;
             break;
         }
         case DS34USB_RESET:
@@ -823,6 +837,7 @@ int _start(int argc, char *argv[])
         ds34pad[pad].pending_rum = 0;
         ds34pad[pad].reading = 0;
         ds34pad[pad].report_ready = 0;
+        ds34pad[pad].idle_reports = 0;
 
         ds34pad[pad].data[0] = 0xFF;
         ds34pad[pad].data[1] = 0xFF;

@@ -7,7 +7,6 @@
 #include "../native/thread.h"
 
 static JSClassID athena_thread_class_id;
-static bool athena_thread_class_registered = false;
 
 typedef struct {
     AthenaThread *thread;
@@ -376,18 +375,13 @@ static const JSCFunctionListEntry thread_module_funcs[] = {
 };
 
 static int athena_thread_module_init(JSContext *ctx, JSModuleDef *m) {
-    if (!athena_thread_class_registered) {
-        JS_NewClassID(&athena_thread_class_id);
-        if (JS_NewClass(JS_GetRuntime(ctx), athena_thread_class_id, &athena_thread_class) < 0) {
-            return -1;
-        }
+    if (athena_register_class(ctx, &athena_thread_class_id, &athena_thread_class) < 0)
+        return -1;
 
-        JSValue proto = JS_NewObject(ctx);
-        JS_SetPropertyFunctionList(ctx, proto, thread_proto_funcs, countof(thread_proto_funcs));
-        JS_SetClassProto(ctx, athena_thread_class_id, proto);
-
-        athena_thread_class_registered = true;
-    }
+    /* Class prototypes belong to the context, so this runs on every init. */
+    JSValue proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, proto, thread_proto_funcs, countof(thread_proto_funcs));
+    JS_SetClassProto(ctx, athena_thread_class_id, proto);
 
     return JS_SetModuleExportList(ctx, m, thread_module_funcs, countof(thread_module_funcs));
 }

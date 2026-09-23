@@ -172,6 +172,53 @@ if (!connected || !chosen) {
         return undefined;
     });
 
+    // --- 3b. D-pad direction and menu auto repeat -------------------------
+
+    const seen = new Set();
+    runStep("dpad()", [
+        "Aperte as 4 direcoes do D-pad e uma diagonal.",
+    ], function(player) {
+        const d = player.dpad();
+        if (d.x || d.y) seen.add(d.x + "," + d.y);
+        const straight = ["1,0", "-1,0", "0,-1", "0,1"].every(k => seen.has(k));
+        const diagonal = [...seen].some(k => !k.includes("0"));
+        if (straight && diagonal) return { ok: true };
+        return undefined;
+    }, function(player) {
+        const d = player.dpad();
+        font.print(20, 150, "dpad x " + d.x + "  y " + d.y + "   vistos: " + [...seen].join(" "));
+    });
+
+    let repeats = 0;
+    let holdStart = 0;
+    let firstRepeatAt = 0;
+    runStep("repeatPressed()", [
+        "Segure BAIXO por uns 2 segundos e solte.",
+        "Deve disparar ao apertar, apos 400 ms e a cada 100 ms.",
+    ], function(player) {
+        const now = System.getMilliseconds();
+        if (player.justPressed(Gamepad.DOWN)) {
+            holdStart = now;
+            repeats = 0;
+            firstRepeatAt = 0;
+        }
+        if (player.repeatPressed(Gamepad.DOWN)) {
+            repeats++;
+            if (repeats === 2) firstRepeatAt = now - holdStart;
+        }
+        if (!player.justReleased(Gamepad.DOWN)) return undefined;
+        const held = now - holdStart;
+        if (held < 1000) return { ok: false, detail: "held only " + Math.round(held) + " ms; hold longer" };
+        const expected = 1 + 1 + Math.floor((held - 400) / 100);
+        const detail = repeats + " events in " + Math.round(held) + " ms (expected ~" + expected +
+            "), first repeat after " + Math.round(firstRepeatAt) + " ms";
+        if (Math.abs(repeats - expected) > 2 || firstRepeatAt < 380 || firstRepeatAt > 450)
+            return { ok: false, detail };
+        return { ok: true, detail };
+    }, function() {
+        font.print(20, 150, "eventos: " + repeats);
+    });
+
     // --- 4. Sticks --------------------------------------------------------
 
     const stickTargets = [
@@ -332,6 +379,42 @@ if (!connected || !chosen) {
     }
 }
 
+// --- 8b. Choosing player 0 with swapPlayers() ----------------------------
+
+if (Gamepad.connectedPlayers().length < 2) {
+    record("SKIP", "swapPlayers()", "needs two controllers");
+} else {
+    let joined = null;
+    runStep("swapPlayers()", [
+        "Aperte START no controle que NAO e o jogador 0.",
+        "Ele deve virar o jogador 0.",
+    ], function() {
+        const who = Gamepad.findJustPressed(Gamepad.START);
+        if (!who) return undefined;
+        if (who.index === 0) return undefined;
+        const moved = who.connection + who.port + who.slot;
+        Gamepad.swapPlayers(0, who.index);
+        const first = Gamepad.player(0);
+        if (first.connection + first.port + first.slot !== moved)
+            return { ok: false, detail: "player 0 did not receive the controller" };
+        if (!first.pressed(Gamepad.START))
+            return { ok: false, detail: "buttons did not move with the controller" };
+        joined = first;
+        return { ok: true, detail: "now player 0: " + describe(first) };
+    });
+
+    if (joined) {
+        runStep("swapPlayers(): novo jogador 0", [
+            "No mesmo controle (agora jogador 0), aperte X.",
+        ], function() {
+            if (Gamepad.player(0).justPressed(Gamepad.CROSS)) return { ok: true };
+            if (Gamepad.findJustPressed(Gamepad.CROSS))
+                return { ok: false, detail: "X came from another player" };
+            return undefined;
+        });
+    }
+}
+
 // --- 9. Multitap ----------------------------------------------------------
 
 if (!Gamepad.drivers().multitap.ready) {
@@ -432,7 +515,7 @@ if (!Gamepad.drivers().bluetooth.ready) {
         if (usbPad.connection !== "usb")
             return { ok: false, detail: "the USB controller was unplugged" };
         if (frame % 60 !== 30) return undefined;
-        paired = usbPad.pairBluetooth();
+        paired = usbPad.pairBluetooth({ overwrite: true });
         return paired ? { ok: true } : undefined;
     });
 

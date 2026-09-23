@@ -24,6 +24,15 @@ JSModuleDef *athena_push_module(JSContext* ctx, JSModuleInitFunc *func, const JS
     return m;
 }
 
+int athena_register_class(JSContext *ctx, JSClassID *class_id, const JSClassDef *class_def) {
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    JS_NewClassID(class_id);
+    if (JS_IsRegisteredClass(rt, *class_id))
+        return 0;
+    return JS_NewClass(rt, *class_id, class_def) < 0 ? -1 : 0;
+}
+
 static int qjs_eval_buf(JSContext *ctx, const void *buf, int buf_len,
                     const char *filename, int eval_flags)
 {
