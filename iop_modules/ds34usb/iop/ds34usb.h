@@ -29,6 +29,13 @@ typedef struct _usb_ds34
     u8 oldled[4]; // rgb for ds4 and blink
     u8 data[18];
     u8 type;
+    u8 pending_rum; // rumble requested over RPC, applied by the RPC thread
+    u8 pending_lrum;
+    u8 pending_rrum;
+    /* Input reports are read by an interrupt transfer that is always in flight. */
+    volatile u8 reading;      // a transfer into in_buf is pending
+    volatile u8 report_ready; // in_buf holds a report not parsed yet
+    u8 in_buf[MAX_BUFFER_SIZE] __attribute__((aligned(4)));
 } ds34usb_device;
 
 enum eDS34USBStatus {
@@ -37,6 +44,8 @@ enum eDS34USBStatus {
     DS34USB_STATE_CONFIGURED = 0x02,
     DS34USB_STATE_CONNECTED = 0x04,
     DS34USB_STATE_RUNNING = 0x08,
+    /* Reported alongside the state bits when the pad is a DualShock 4. */
+    DS34USB_STATE_DS4 = 0x10,
 };
 
 enum eHID {

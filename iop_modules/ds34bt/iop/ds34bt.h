@@ -70,6 +70,8 @@ enum eDS34BTStatus {
     DS34BT_STATE_USB_CONFIGURED = 0x02,
     DS34BT_STATE_CONNECTED = 0x04,
     DS34BT_STATE_RUNNING = 0x08,
+    /* Reported alongside the state bits when the connected pad is a DualShock 4. */
+    DS34BT_STATE_DS4 = 0x10,
     DS34BT_STATE_DISCONNECTING = 0x10,
     DS34BT_STATE_DISCONNECT_REQUEST = 0x20,
 };

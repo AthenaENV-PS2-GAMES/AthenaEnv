@@ -1,7 +1,7 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-23T18:01:49.030Z",
+  "generatedAt": "2026-09-23T20:46:48.613Z",
   "modules": [
     {
       "id": "color",
@@ -57,6 +57,28 @@
         ]
       },
       "global_alias": "Font"
+    },
+    {
+      "id": "gamepad",
+      "name": "Gamepad",
+      "description": "Controller input for up to eight players: DualShock 2 and other PS2 pads on both ports and multitaps, DualShock 3/4 over USB and Bluetooth.",
+      "category": "Input",
+      "version": "1.1.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "sio2man",
+          "padman",
+          "mtapman",
+          "usbd",
+          "ds34usb",
+          "ds34bt"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": "Gamepad"
     },
     {
       "id": "graphics",

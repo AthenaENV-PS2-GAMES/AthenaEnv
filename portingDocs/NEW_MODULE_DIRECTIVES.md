@@ -91,6 +91,24 @@ no manifesto igual ao nome importado pelos scripts:
 Os campos exatos devem seguir o formato aceito por `tools/modules.js`. Nao
 edite os arquivos gerados para compensar um manifesto incorreto.
 
+Modulos que dependem de drivers IOP fora do nucleo os declaram em
+`embed_irx`. Cada entrada gera os simbolos `<name>_irx` e `size_<name>_irx`,
+e so entra no ELF quando o modulo esta ativo. `build` indica um diretorio de
+`iop_modules/` que e recompilado quando seus fontes mudam e limpo por
+`make clean`:
+
+```json
+"embed_irx": [
+  { "name": "mtapman", "irx": "$(PS2SDK)/iop/irx/mtapman.irx" },
+  { "name": "ds34usb", "irx": "iop_modules/ds34usb/iop/ds34usb.irx",
+    "build": "iop_modules/ds34usb/iop" }
+]
+```
+
+O modulo registra esses drivers no IOP manager em tempo de execucao
+(`iopman_register_module`), na primeira vez que precisar deles, e nunca
+durante o registro QuickJS. Veja `src/modules/gamepad/native/gamepad_iop.c`.
+
 ## 3. Implemente o contrato nativo e a interface QuickJS
 
 O header da implementacao nativa deve expor somente o contrato de negocio:

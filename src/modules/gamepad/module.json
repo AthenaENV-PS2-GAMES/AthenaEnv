@@ -1,0 +1,52 @@
+{
+  "id": "gamepad",
+  "name": "Gamepad",
+  "description": "Controller input for up to eight players: DualShock 2 and other PS2 pads on both ports and multitaps, DualShock 3/4 over USB and Bluetooth.",
+  "category": "Input",
+  "version": "1.1.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/gamepad.c",
+    "native/gamepad_iop.c",
+    "quickjs/ath_gamepad.c"
+  ],
+  "includes": [
+    "."
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "sio2man",
+      "padman",
+      "mtapman",
+      "usbd",
+      "ds34usb",
+      "ds34bt"
+    ],
+    "ee_libs": []
+  },
+  "embed_irx": [
+    {
+      "name": "mtapman",
+      "irx": "$(PS2SDK)/iop/irx/mtapman.irx"
+    },
+    {
+      "name": "ds34usb",
+      "irx": "iop_modules/ds34usb/iop/ds34usb.irx",
+      "build": "iop_modules/ds34usb/iop"
+    },
+    {
+      "name": "ds34bt",
+      "irx": "iop_modules/ds34bt/iop/ds34bt.irx",
+      "build": "iop_modules/ds34bt/iop"
+    }
+  ],
+  "quickjs": {
+    "module_name": "Gamepad",
+    "global_alias": "Gamepad",
+    "init_func": "athena_gamepad_init",
+    "header": "quickjs/ath_gamepad.h"
+  },
+  "types": "gamepad.d.ts"
+}

@@ -61,6 +61,9 @@ static u8 link_key[] = // for ds4 authorisation
 
 static u8 usb_buf[MAX_BUFFER_SIZE + 32] __attribute((aligned(4))) = {0};
 
+/* RPC server thread; it also polls the running pads. */
+static int rpc_thid = -1;
+
 int usb_probe(int devId);
 int usb_connect(int devId);
 int usb_disconnect(int devId);
@@ -198,19 +201,10 @@ static void usb_release(int pad)
     ds34pad[pad].outEndp = -1;
     ds34pad[pad].devId = -1;
     ds34pad[pad].status = DS34USB_STATE_DISCONNECTED;
-
-    SignalSema(ds34pad[pad].sema);
-}
-
-static int usb_resulCode;
-
-static void usb_data_cb(int resultCode, int bytes, void *arg)
-{
-    int pad = (int)arg;
-
-    // DPRINTF("DS34USB: usb_data_cb: res %d, bytes %d, arg %p \n", resultCode, bytes, arg);
-
-    usb_resulCode = resultCode;
+    ds34pad[pad].pending_rum = 0;
+    /* A transfer cancelled by the endpoint closing may never call back. */
+    ds34pad[pad].reading = 0;
+    ds34pad[pad].report_ready = 0;
 
     SignalSema(ds34pad[pad].sema);
 }
@@ -249,6 +243,10 @@ static void usb_config_set(int result, int count, void *arg)
     DelayThread(20000);
 
     ds34pad[pad].status |= DS34USB_STATE_RUNNING;
+
+    /* The RPC thread sleeps while no pad is running; start polling this one. */
+    if (rpc_thid >= 0)
+        WakeupThread(rpc_thid);
 
     SignalSema(ds34pad[pad].sema);
 }
@@ -511,12 +509,18 @@ static int Rumble(u8 lrum, u8 rrum, int pad)
     return LEDRUM(ds34pad[pad].oldled, lrum, rrum, pad);
 }
 
+/*
+ * Only records the request: the USB transfer happens in the poll loop so the
+ * EE caller never waits for it.
+ */
 void ds34usb_set_rumble(u8 lrum, u8 rrum, int port)
 {
     if (port >= MAX_PADS)
         return;
 
-    Rumble(lrum, rrum, port);
+    ds34pad[port].pending_lrum = lrum;
+    ds34pad[port].pending_rrum = rrum;
+    ds34pad[port].pending_rum = 1;
 }
 
 void ds34usb_set_led(u8 *led, int port)
@@ -527,31 +531,49 @@ void ds34usb_set_led(u8 *led, int port)
     LED(led, port);
 }
 
+/*
+ * Completion of the background input transfer. Runs in the USB driver's
+ * thread: it only hands the report to the RPC thread, which parses it.
+ */
+static void usb_report_cb(int resultCode, int bytes, void *arg)
+{
+    int pad = (int)arg;
+
+    (void)bytes;
+    ds34pad[pad].report_ready = (resultCode == USB_RC_OK);
+    ds34pad[pad].reading = 0;
+    if (rpc_thid >= 0)
+        WakeupThread(rpc_thid);
+}
+
+/* Parses a finished report and keeps one input transfer in flight. RPC thread only. */
+static void pump_pad(int pad)
+{
+    if (ds34pad[pad].report_ready) {
+        ds34pad[pad].report_ready = 0;
+        WaitSema(ds34pad[pad].sema);
+        readReport(ds34pad[pad].in_buf, pad);
+        SignalSema(ds34pad[pad].sema);
+    }
+
+    if (!ds34pad[pad].reading) {
+        ds34pad[pad].reading = 1;
+        if (UsbInterruptTransfer(ds34pad[pad].interruptEndp, ds34pad[pad].in_buf,
+                MAX_BUFFER_SIZE, usb_report_cb, (void *)pad) != USB_RC_OK) {
+            DPRINTF("DS34USB: input transfer error\n");
+            ds34pad[pad].reading = 0;
+        }
+    }
+}
+
+/* Returns the last report received in the background; never touches the USB bus. */
 void ds34usb_get_data(char *dst, int size, int port)
 {
-    int ret;
-
     if (port >= MAX_PADS)
         return;
 
     WaitSema(ds34pad[port].sema);
-
-    PollSema(ds34pad[port].sema);
-
-    ret = UsbInterruptTransfer(ds34pad[port].interruptEndp, usb_buf, MAX_BUFFER_SIZE, usb_data_cb, (void *)port);
-
-    if (ret == USB_RC_OK) {
-        TransferWait(ds34pad[port].sema);
-        if (!usb_resulCode)
-            readReport(usb_buf, port);
-
-        usb_resulCode = 1;
-    } else {
-        DPRINTF("DS34USB: ds34usb_get_data usb transfer error %d\n", ret);
-    }
-
     mips_memcpy(dst, ds34pad[port].data, size);
-
     SignalSema(ds34pad[port].sema);
 }
 
@@ -663,6 +685,8 @@ int ds34usb_get_status(int port)
 
     WaitSema(ds34pad[port].sema);
     ret = ds34pad[port].status;
+    if (ret && ds34pad[port].type == DS4)
+        ret |= DS34USB_STATE_DS4;
     SignalSema(ds34pad[port].sema);
 
     return ret;
@@ -698,12 +722,38 @@ static int rpc_buf[64] __attribute((aligned(16)));
 
 #define DS34USB_BIND_RPC_ID 0x18E3878E
 
+/*
+ * Replaces SifRpcLoop. Besides serving requests, the thread keeps an input
+ * transfer in flight for every running pad and applies deferred rumble, so
+ * GET_DATA and SET_RUMBLE answer the EE without waiting for the USB bus.
+ * It sleeps until a request arrives, a report completes or a pad connects.
+ * usb_buf is still only used from this thread and the connect callback.
+ */
 void rpc_thread(void *data)
 {
+    SifRpcServerData_t *sd;
+    int pad;
+
     SifInitRpc(0);
     SifSetRpcQueue(&rpc_que, GetThreadId());
     SifRegisterRpc(&rpc_svr, DS34USB_BIND_RPC_ID, rpc_sf, rpc_buf, NULL, NULL, &rpc_que);
-    SifRpcLoop(&rpc_que);
+
+    while (1) {
+        while ((sd = SifGetNextRequest(&rpc_que)) != NULL)
+            SifExecRequest(sd);
+
+        for (pad = 0; pad < MAX_PADS; pad++) {
+            if (!(ds34pad[pad].status & DS34USB_STATE_RUNNING))
+                continue;
+            if (ds34pad[pad].pending_rum) {
+                ds34pad[pad].pending_rum = 0;
+                Rumble(ds34pad[pad].pending_lrum, ds34pad[pad].pending_rrum, pad);
+            }
+            pump_pad(pad);
+        }
+
+        SleepThread();
+    }
 }
 
 void *rpc_sf(int cmd, void *data, int size)
@@ -727,9 +777,13 @@ void *rpc_sf(int cmd, void *data, int size)
         case DS34USB_SET_LED:
             ds34usb_set_led((u8 *)(data + 1), *(u8 *)data);
             break;
-        case DS34USB_GET_DATA:
-            ds34usb_get_data((char *)data, 18, *(u8 *)data);
+        case DS34USB_GET_DATA: {
+            /* 18 bytes of DualShock 2 formatted data, then the status byte. */
+            u8 port = *(u8 *)data;
+            ds34usb_get_data((char *)data, 18, port);
+            *(u8 *)(data + 18) = ds34usb_get_status(port);
             break;
+        }
         case DS34USB_RESET:
             ds34usb_reset();
             break;
@@ -766,6 +820,9 @@ int _start(int argc, char *argv[])
         ds34pad[pad].outEndp = -1;
         ds34pad[pad].enabled = (enable >> pad) & 1;
         ds34pad[pad].type = 0;
+        ds34pad[pad].pending_rum = 0;
+        ds34pad[pad].reading = 0;
+        ds34pad[pad].report_ready = 0;
 
         ds34pad[pad].data[0] = 0xFF;
         ds34pad[pad].data[1] = 0xFF;
@@ -795,7 +852,8 @@ int _start(int argc, char *argv[])
     rpc_th.stacksize = 0x800;
     rpc_th.option = 0;
 
-    int thid = CreateThread(&rpc_th);
+    rpc_thid = CreateThread(&rpc_th);
+    int thid = rpc_thid;
 
     if (thid > 0) {
         StartThread(thid, NULL);

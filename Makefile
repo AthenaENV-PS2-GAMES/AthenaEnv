@@ -55,6 +55,10 @@ IOP_MODULES = iomanx.o filexio.o sio2man.o mcman.o mcserv.o padman.o \
               usbd.o bdm.o bdmfs_fatfs.o usbmass_bd.o cdfs.o \
               freeram.o poweroff.o
 
+# IOP modules embedded for the selected modules (see embed_irx in module.json).
+IOP_MODULES += $(MODULE_IRX:%=%.o)
+MODULE_IRX_BUILD_DIRS = $(strip $(foreach irx,$(MODULE_IRX),$(MODULE_IRX_BUILD_$(irx))))
+
 EMBEDDED_ELFS = loader_elf.o
 EMBEDDED_FONTS = quicksand_regular.o
 
@@ -88,6 +92,7 @@ clean:
 	rm -rf $(EE_OBJ_DIR)
 	rm -rf $(EE_EMBED_DIR)
 	$(MAKE) -C ee_modules/loader clean
+	$(foreach dir,$(MODULE_IRX_BUILD_DIRS),$(MAKE) -C $(dir) clean;)
 
 rebuild: clean all
 

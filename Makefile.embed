@@ -41,6 +41,24 @@ iop_modules/freeram/freeram.irx: iop_modules/freeram
 $(EE_EMBED_DIR)freeram.c: iop_modules/freeram/freeram.irx | $(EE_EMBED_DIR)
 	$(BIN2S) $< $@ freeram_irx
 
+#------------- IOP Modules embedded by Athena modules -------------#
+# MODULE_IRX, MODULE_IRX_PATH_<name> and MODULE_IRX_BUILD_<name> come from
+# Makefile.modules. IRX built from this repository are rebuilt when any file
+# in their directory changes.
+
+define MODULE_IRX_EMBED_RULE
+$(EE_EMBED_DIR)$(1).c: $(MODULE_IRX_PATH_$(1)) | $(EE_EMBED_DIR)
+	$$(BIN2S) $$< $$@ $(1)_irx
+endef
+
+define MODULE_IRX_BUILD_RULE
+$(MODULE_IRX_PATH_$(1)): $(filter-out %.irx %.elf,$(wildcard $(MODULE_IRX_BUILD_$(1))/*.*))
+	$$(MAKE) -C $(MODULE_IRX_BUILD_$(1))
+endef
+
+$(foreach irx,$(MODULE_IRX),$(eval $(call MODULE_IRX_EMBED_RULE,$(irx))))
+$(foreach irx,$(MODULE_IRX),$(if $(MODULE_IRX_BUILD_$(irx)),$(eval $(call MODULE_IRX_BUILD_RULE,$(irx)))))
+
 #-------------------- Embedded EE Modules ------------------------#
 
 ee_modules/loader/loader.elf: ee_modules/loader
