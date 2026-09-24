@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-24T03:48:18.383Z",
+  "generatedAt": "2026-09-24T11:33:54.668Z",
   "modules": [
     {
       "id": "archive",
@@ -357,6 +357,36 @@
         "ee_libs": []
       },
       "global_alias": "Screen",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "sound",
+      "name": "Sound",
+      "description": "Audio through audsrv: ADPCM sound effects on the 24 SPU2 voices and a streamed WAV/OGG music track. audsrv is loaded on the IOP on first use.",
+      "category": "Audio",
+      "version": "2.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "thread",
+          "mutex"
+        ],
+        "iop": [
+          "libsd",
+          "audsrv"
+        ],
+        "ee_libs": [
+          "-laudsrv",
+          "-lvorbisfile",
+          "-lvorbis",
+          "-logg"
+        ]
+      },
+      "global_alias": "Sound",
       "api": {
         "native": true,
         "quickjs": true

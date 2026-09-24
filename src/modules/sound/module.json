@@ -1,0 +1,54 @@
+{
+  "id": "sound",
+  "name": "Sound",
+  "description": "Audio through audsrv: ADPCM sound effects on the 24 SPU2 voices and a streamed WAV/OGG music track. audsrv is loaded on the IOP on first use.",
+  "category": "Audio",
+  "version": "2.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/sound_iop.c",
+    "native/sound_sfx.c",
+    "native/sound_stream.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "thread",
+      "mutex"
+    ],
+    "iop": [
+      "libsd",
+      "audsrv"
+    ],
+    "ee_libs": [
+      "-laudsrv",
+      "-lvorbisfile",
+      "-lvorbis",
+      "-logg"
+    ]
+  },
+  "native": {
+    "register_iop": "athena_sound_register_iop",
+    "init": "athena_sound_module_init",
+    "shutdown": "athena_sound_module_shutdown"
+  },
+  "embed_irx": [
+    {
+      "name": "libsd",
+      "irx": "$(PS2SDK)/iop/irx/libsd.irx"
+    },
+    {
+      "name": "audsrv",
+      "irx": "$(PS2SDK)/iop/irx/audsrv.irx"
+    }
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_sound.c"
+    ],
+    "module_name": "Sound",
+    "global_alias": "Sound",
+    "init_func": "athena_sound_init"
+  },
+  "types": "sound.d.ts"
+}
