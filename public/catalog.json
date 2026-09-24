@@ -2,22 +2,24 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-24T02:14:04.607Z",
+  "generatedAt": "2026-09-24T03:48:18.383Z",
   "modules": [
     {
       "id": "archive",
       "name": "Archive",
-      "description": "Read zip and gzip archives and extract zip, tar and tar.gz files.",
+      "description": "Read zip, tar, tar.gz and gzip archives: list, read entries into memory, extract safely (also on a background worker), and gzip data in memory.",
       "category": "Storage",
-      "version": "1.0.0",
+      "version": "2.1.0",
       "required": false,
       "default": true,
       "dependencies": {
-        "modules": [],
+        "modules": [
+          "thread",
+          "mutex"
+        ],
         "iop": [],
         "ee_libs": [
-          "-lzip",
-          "-llzma",
+          "-lunzip",
           "-lz"
         ]
       },

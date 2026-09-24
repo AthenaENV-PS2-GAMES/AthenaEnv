@@ -1,20 +1,23 @@
 {
   "id": "archive",
   "name": "Archive",
-  "description": "Read zip and gzip archives and extract zip, tar and tar.gz files.",
+  "description": "Read zip, tar, tar.gz and gzip archives: list, read entries into memory, extract safely (also on a background worker), and gzip data in memory.",
   "category": "Storage",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "required": false,
   "default": true,
   "sources": [
-    "native/archive.c"
+    "native/archive.c",
+    "native/archive_job.c"
   ],
   "dependencies": {
-    "modules": [],
+    "modules": [
+      "thread",
+      "mutex"
+    ],
     "iop": [],
     "ee_libs": [
-      "-lzip",
-      "-llzma",
+      "-lunzip",
       "-lz"
     ]
   },

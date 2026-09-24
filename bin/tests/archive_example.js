@@ -7,31 +7,62 @@
 
 const DIR = "tests/archive/";
 
-/* Zip: inspect, then extract everything to a folder. */
-const zip = Archive.open(DIR + "sample.zip");
-console.log("sample.zip is a " + Archive.type(zip) + " archive");
-for (const entry of Archive.list(zip)) {
-    console.log("  " + entry.name + " (" + entry.size + " bytes)");
+function text(buffer) {
+    let out = "";
+    for (const byte of new Uint8Array(buffer)) out += String.fromCharCode(byte);
+    return out;
 }
-Archive.extractAll(zip, DIR + "out_example/zip");
-Archive.close(zip);
 
-/* Gzip: decompress a single file straight into memory. */
-const gz = Archive.open(DIR + "sample.txt.gz");
-const bytes = new Uint8Array(Archive.extractAll(gz));
-Archive.close(gz);
-let text = "";
-for (const byte of bytes) text += String.fromCharCode(byte);
-console.log("sample.txt.gz contains: " + text.trim());
+/* Every format is a list of entries: zip, tar, tar.gz and plain .gz alike. */
+for (const file of ["sample.zip", "sample.tar.gz", "sample.txt.gz"]) {
+    const archive = Archive.open(DIR + file);
+    console.log(file + " (" + Archive.type(archive) + ")");
+    for (const entry of Archive.list(archive)) {
+        console.log("  " + (entry.dir ? "[dir] " : "") + entry.name + " " + entry.size + " bytes");
+    }
+    Archive.close(archive);
+}
 
-/* Tar / tar.gz: extract to a folder. */
-Archive.untar(DIR + "sample.tar.gz", DIR + "out_example/tar");
+/* Read an asset straight from the archive, without touching the disk. */
+const pack = Archive.open(DIR + "sample.zip");
+console.log("readme.txt says: " + text(Archive.read(pack, "readme.txt")).trim());
+Archive.close(pack);
 
-/* Errors are exceptions, not silent undefined results. */
+/* Install with progress; nothing is written if any entry is unsafe. */
+const written = Archive.extract(DIR + "sample.tar.gz", DIR + "out_example", {
+    onProgress(entry, index, count) {
+        console.log("  [" + (index + 1) + "/" + count + "] " + entry.name);
+    },
+});
+console.log("extracted " + written + " entries");
+
+/* Compress data in memory, e.g. before writing a save. */
+const save = new Uint8Array(4096).fill(42);
+const packed = Archive.gzip(save, { level: 9 });
+console.log("save: " + save.length + " -> " + packed.byteLength + " bytes");
+console.log("restored: " + Archive.gunzip(packed).byteLength + " bytes");
+
+/*
+ * Background extraction: the worker thread does the I/O while this loop
+ * keeps running (a game would draw a progress bar and call Screen.flip()).
+ */
+const job = Archive.extractAsync(DIR + "sample.zip", DIR + "out_example/async", {
+    include: ["data/"],
+});
+let status = Archive.poll(job);
+while (status.state === "running") {
+    console.log("  async: " + status.bytesDone + "/" + status.bytesTotal + " bytes " + status.entry);
+    System.sleep(1);
+    status = Archive.poll(job);
+}
+console.log("async extraction " + status.state + ": " +
+    (status.state === "done" ? status.result + " entries" : status.error.message));
+
+/* Failures carry a stable error.code. */
 try {
-    Archive.open(DIR + "plain.txt");
+    Archive.extract(DIR + "evil.zip", DIR + "out_example/evil");
 } catch (error) {
-    console.log("expected failure: " + error.message);
+    console.log("rejected (" + error.code + "): " + error.message);
 }
 
 console.log("Archive example finished");
