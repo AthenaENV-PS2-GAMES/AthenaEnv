@@ -4,9 +4,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdatomic.h>
-#include <dbgprintf.h>
+#include <athena/debug.h>
 
-#include "thread.h"
+#include <athena/thread.h>
 
 extern void *_gp;
 

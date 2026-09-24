@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AthenaEnv — Module Catalog & API</title>
     <meta name="description" content="Official module registry and endpoints for AthenaEnv PS2 JavaScript game engine">
+    <!-- Base URL of tools/build-server (e.g. https://build.example.com). Empty: builds are local only. -->
+    <meta name="athena-build-api" content="">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -73,11 +75,42 @@
             </div>
         </section>
 
+        <!-- Build configurator -->
+        <section class="p-5 bg-cardbg border border-bordercolor rounded-xl space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h2 class="text-xl font-bold text-white">Build your AthenaEnv</h2>
+                    <p class="text-sm text-slate-400" id="selection-summary">Select the modules you need below.</p>
+                </div>
+                <div class="flex items-center gap-2 text-sm" role="radiogroup" aria-label="Runtime">
+                    <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-bordercolor cursor-pointer has-[:checked]:border-ps2accent has-[:checked]:text-white">
+                        <input type="radio" name="runtime" value="quickjs" checked class="accent-sky-500"> JavaScript (QuickJS)
+                    </label>
+                    <label class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-bordercolor cursor-pointer has-[:checked]:border-ps2accent has-[:checked]:text-white">
+                        <input type="radio" name="runtime" value="native" class="accent-sky-500"> Native C
+                    </label>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button id="select-defaults" class="px-3 py-1 text-xs rounded border border-bordercolor hover:border-slate-500">Defaults</button>
+                <button id="select-minimal" class="px-3 py-1 text-xs rounded border border-bordercolor hover:border-slate-500">Minimal</button>
+                <button id="select-all" class="px-3 py-1 text-xs rounded border border-bordercolor hover:border-slate-500">All</button>
+            </div>
+            <div class="relative">
+                <pre id="build-command" class="p-3 pr-20 text-xs text-slate-300 bg-darkbg rounded-lg border border-bordercolor overflow-x-auto"></pre>
+                <button id="copy-command" class="absolute top-2 right-2 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-xs rounded border border-bordercolor">Copy</button>
+            </div>
+            <div id="remote-build" class="hidden space-y-3">
+                <button id="build-btn" class="px-4 py-2 rounded-lg bg-ps2accent hover:bg-sky-600 text-white font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed">Build</button>
+                <div id="build-status" class="text-sm text-slate-300" aria-live="polite"></div>
+            </div>
+        </section>
+
         <!-- Modules Grid -->
         <section class="space-y-6">
             <div class="flex items-center justify-between border-b border-bordercolor pb-4">
                 <div>
-                    <h2 class="text-xl font-bold text-white">Discovered Modules</h2>
+                    <h2 class="text-xl font-bold text-white">Modules</h2>
                     <p class="text-sm text-slate-400" id="modules-count">Loading catalog...</p>
                 </div>
                 <div class="text-xs font-mono text-slate-500" id="generated-at"></div>
@@ -105,64 +138,204 @@
         <p>AthenaEnv © 2026 • PlayStation 2 QuickJS Modular Runtime</p>
     </footer>
 
-    <!-- Script to load and display catalog -->
+    <!-- Module picker and builds -->
     <script>
+        const BUILD_API = (document.querySelector('meta[name="athena-build-api"]')?.content || '').replace(/\/+$/, '');
+        const state = { modules: [], byId: new Map(), selected: new Set() };
+
+        const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[c]);
+
+        function runtime() {
+            return document.querySelector('input[name="runtime"]:checked').value;
+        }
+
+        /* Selection plus required modules and their dependencies; the same
+           resolution tools/modules.js performs. */
+        function resolved() {
+            const out = new Map(); // id -> "selected" | "required" | "dependency"
+            const visit = (id, reason) => {
+                if (out.has(id) || !state.byId.has(id)) return;
+                out.set(id, reason);
+                for (const dep of state.byId.get(id).dependencies?.modules || []) visit(dep, 'dependency');
+            };
+            for (const m of state.modules) if (m.required) visit(m.id, 'required');
+            for (const id of state.selected) {
+                out.delete(id);
+                visit(id, 'selected');
+            }
+            return out;
+        }
+
+        function dependents(id, resolvedSet) {
+            return [...state.selected].filter(sel => {
+                const seen = new Set();
+                const walk = cur => {
+                    if (seen.has(cur)) return false;
+                    seen.add(cur);
+                    const deps = state.byId.get(cur)?.dependencies?.modules || [];
+                    return deps.includes(id) || deps.some(walk);
+                };
+                return sel !== id && walk(sel);
+            });
+        }
+
+        function command() {
+            const ids = [...state.selected].sort();
+            const configure = `node tools/modules.js configure --modules=${ids.join(',') || 'system'}`;
+            return runtime() === 'native'
+                ? `${configure}\nmake RUNTIME=native APP_SRCS=my_app.c   # or: make sdk RUNTIME=native`
+                : `${configure}\nmake`;
+        }
+
+        function render() {
+            const res = resolved();
+            const grid = document.getElementById('modules-grid');
+            grid.innerHTML = '';
+
+            for (const mod of state.modules) {
+                const reason = res.get(mod.id);
+                const included = !!reason;
+                const locked = reason === 'required' || reason === 'dependency';
+                const card = document.createElement('label');
+                card.className = 'block p-5 bg-cardbg border rounded-xl space-y-3 transition cursor-pointer ' +
+                    (included ? 'border-ps2accent/70' : 'border-bordercolor hover:border-slate-500') +
+                    (locked ? ' cursor-default' : '');
+
+                const via = reason === 'dependency'
+                    ? `<p class="text-xs text-amber-400">Included by: ${escapeHtml(dependents(mod.id).join(', ') || 'a required module')}</p>` : '';
+                const badges = [
+                    `<span class="px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">${escapeHtml(mod.category)}</span>`,
+                    mod.required ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-blue-900/40 text-blue-400 border border-blue-800">Required</span>' : '',
+                    mod.api?.quickjs ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-yellow-900/30 text-yellow-300 border border-yellow-800">JS</span>' : '',
+                    mod.api?.native ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/30 text-emerald-300 border border-emerald-800">C</span>' : '',
+                ].join('');
+                const deps = mod.dependencies?.modules?.length
+                    ? `<p class="text-xs text-slate-400 font-mono">Depends on: <span class="text-cyan-400">${escapeHtml(mod.dependencies.modules.join(', '))}</span></p>` : '';
+                const iop = mod.dependencies?.iop?.length
+                    ? `<p class="text-xs text-slate-400 font-mono">IOP: <span class="text-indigo-400">${escapeHtml(mod.dependencies.iop.join(', '))}</span></p>` : '';
+
+                card.innerHTML = `
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex items-start gap-3">
+                            <input type="checkbox" class="mt-1 accent-sky-500" ${included ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                            <div>
+                                <h4 class="font-bold text-white text-base">${escapeHtml(mod.name)}</h4>
+                                <span class="text-xs text-slate-500 font-mono">ID: ${escapeHtml(mod.id)} • v${escapeHtml(mod.version || '1.0.0')}</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap justify-end gap-1.5">${badges}</div>
+                    </div>
+                    <p class="text-sm text-slate-300 leading-relaxed">${escapeHtml(mod.description)}</p>
+                    ${via}
+                    ${deps || iop ? `<div class="pt-2 border-t border-bordercolor/60 space-y-1">${deps}${iop}</div>` : ''}`;
+
+                card.querySelector('input').addEventListener('change', event => {
+                    if (event.target.checked) state.selected.add(mod.id);
+                    else state.selected.delete(mod.id);
+                    render();
+                });
+                grid.appendChild(card);
+            }
+
+            const jsOnly = runtime() === 'native'
+                ? [...res.keys()].filter(id => !state.byId.get(id).api?.native) : [];
+            document.getElementById('selection-summary').textContent =
+                `${res.size} of ${state.modules.length} modules in this build` +
+                (jsOnly.length ? ` (${jsOnly.join(', ')} only add a JavaScript API)` : '');
+            document.getElementById('build-command').textContent = command();
+        }
+
+        function select(ids) {
+            state.selected = new Set(ids);
+            render();
+        }
+
+        /* ---------------- Remote builds (tools/build-server) ---------------- */
+
+        const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+        function showStatus(html) {
+            document.getElementById('build-status').innerHTML = html;
+        }
+
+        async function remoteBuild() {
+            const button = document.getElementById('build-btn');
+            button.disabled = true;
+            try {
+                const response = await fetch(`${BUILD_API}/api/builds`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modules: [...state.selected], runtime: runtime() }),
+                });
+                let job = await response.json();
+                if (!response.ok && response.status !== 202) throw new Error(job.error || response.statusText);
+
+                while (job.status === 'queued' || job.status === 'building') {
+                    showStatus(job.status === 'queued'
+                        ? `Queued (position ${job.position})…`
+                        : 'Building… this usually takes one to three minutes.');
+                    await sleep(3000);
+                    const poll = await fetch(`${BUILD_API}/api/builds/${job.id}`);
+                    job = await poll.json();
+                    if (!poll.ok) throw new Error(job.error || poll.statusText);
+                }
+
+                const log = `<a class="text-slate-400 underline" href="${BUILD_API}${job.log}">build log</a>`;
+                if (job.status !== 'done') {
+                    showStatus(`<span class="text-red-400">Build failed: ${escapeHtml(job.error)}</span> — ${log}`);
+                    return;
+                }
+                const links = job.artifacts.map(a =>
+                    `<a class="px-3 py-1 rounded border border-ps2accent text-sky-300 hover:bg-ps2accent/20" href="${BUILD_API}${a.url}">${escapeHtml(a.name)}</a>`).join(' ');
+                showStatus(`<div class="flex flex-wrap items-center gap-2"><span class="text-emerald-400">Ready:</span>${links} ${log}</div>
+                    <p class="text-xs text-slate-500 mt-2">Modules: ${escapeHtml(job.modules.join(', '))} • commit ${escapeHtml(job.commit.slice(0, 8))}</p>`);
+            } catch (err) {
+                showStatus(`<span class="text-red-400">${escapeHtml(err.message)}</span>`);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        /* ---------------- Boot ---------------- */
+
         async function loadCatalog() {
             try {
                 const res = await fetch('./catalog.json?t=' + Date.now());
                 const data = await res.json();
 
-                document.getElementById('modules-count').textContent = `${data.modules.length} modules available for on-demand build`;
+                state.modules = data.modules;
+                state.byId = new Map(data.modules.map(m => [m.id, m]));
+
+                document.getElementById('modules-count').textContent = `${data.modules.length} modules available`;
                 if (data.generatedAt) {
                     document.getElementById('generated-at').textContent = `Updated: ${new Date(data.generatedAt).toLocaleString()}`;
                 }
 
-                const grid = document.getElementById('modules-grid');
-                grid.innerHTML = '';
-
-                data.modules.forEach(mod => {
-                    const card = document.createElement('div');
-                    card.className = 'p-5 bg-cardbg border border-bordercolor rounded-xl space-y-3 hover:border-ps2accent/50 transition';
-
-                    const badges = `
-                        <span class="px-2 py-0.5 rounded text-xs font-medium bg-slate-800 text-slate-300 border border-slate-700">${mod.category}</span>
-                        ${mod.required ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-blue-900/40 text-blue-400 border border-blue-800">Required</span>' : ''}
-                        ${mod.default && !mod.required ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-900/40 text-emerald-400 border border-emerald-800">Default</span>' : ''}
-                    `;
-
-                    const deps = mod.dependencies?.modules?.length 
-                        ? `<p class="text-xs text-slate-400 font-mono">Depends on: <span class="text-cyan-400">${mod.dependencies.modules.join(', ')}</span></p>`
-                        : '';
-
-                    const libs = mod.dependencies?.ee_libs?.length
-                        ? `<p class="text-xs text-slate-400 font-mono">EE Libs: <span class="text-indigo-400">${mod.dependencies.ee_libs.join(' ')}</span></p>`
-                        : '';
-
-                    card.innerHTML = `
-                        <div class="flex items-start justify-between">
-                            <div>
-                                <h4 class="font-bold text-white text-base">${mod.name}</h4>
-                                <span class="text-xs text-slate-500 font-mono">ID: ${mod.id} • v${mod.version || '1.0.0'}</span>
-                            </div>
-                            <div class="flex gap-1.5">${badges}</div>
-                        </div>
-                        <p class="text-sm text-slate-300 leading-relaxed">${mod.description}</p>
-                        ${deps || libs ? `<div class="pt-2 border-t border-bordercolor/60 space-y-1">${deps}${libs}</div>` : ''}
-                    `;
-
-                    grid.appendChild(card);
-                });
+                document.getElementById('select-defaults').onclick = () => select(state.modules.filter(m => m.default).map(m => m.id));
+                document.getElementById('select-minimal').onclick = () => select([]);
+                document.getElementById('select-all').onclick = () => select(state.modules.map(m => m.id));
+                document.querySelectorAll('input[name="runtime"]').forEach(input => input.addEventListener('change', render));
+                document.getElementById('copy-command').onclick = event => {
+                    navigator.clipboard.writeText(command());
+                    event.target.textContent = 'Copied!';
+                    setTimeout(() => event.target.textContent = 'Copy', 2000);
+                };
+                if (BUILD_API) {
+                    document.getElementById('remote-build').classList.remove('hidden');
+                    document.getElementById('build-btn').onclick = remoteBuild;
+                }
+                select(state.modules.filter(m => m.default).map(m => m.id));
 
                 const jsonStr = JSON.stringify(data, null, 2);
                 document.getElementById('json-preview').textContent = jsonStr;
-
                 document.getElementById('copy-btn').addEventListener('click', () => {
                     navigator.clipboard.writeText(jsonStr);
                     const btn = document.getElementById('copy-btn');
                     btn.textContent = 'Copied!';
                     setTimeout(() => btn.textContent = 'Copy JSON', 2000);
                 });
-
             } catch (err) {
                 console.error(err);
                 document.getElementById('modules-count').textContent = 'Error loading catalog.json';

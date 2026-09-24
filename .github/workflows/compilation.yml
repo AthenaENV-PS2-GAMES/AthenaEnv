@@ -84,6 +84,12 @@ jobs:
           chmod +x build-exports.sh
           make clean all
           make debug
+          # The native runtime must build without QuickJS, as an ELF and as a library.
+          make all RUNTIME=native APP_SRCS=samples/native/hello/main.c
+          make lib RUNTIME=native
+          make sdk RUNTIME=native
+          make all RUNTIME=native APP_SRCS=samples/native/move/main.c
+          rm -f bin/athena_native*.elf
         env:
           ATHENAENV_SRC: "${{ github.workspace }}/src"
 

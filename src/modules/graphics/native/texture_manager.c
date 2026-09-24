@@ -16,12 +16,12 @@
 #include <kernel.h>
 #include <string.h>
 
-#include <graphics.h>
-#include <owl_packet.h>
+#include <athena/graphics.h>
+#include <athena/graphics/owl_packet.h>
 
 #include <debug.h>
 
-#include <texture_manager.h>
+#include <athena/graphics/texture_manager.h>
 
 #define VIF1_MARK_CLEAN 65535
 

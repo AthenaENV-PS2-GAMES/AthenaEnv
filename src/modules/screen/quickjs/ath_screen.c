@@ -1,8 +1,9 @@
 #include <stdint.h>
 
 #include <ath_env.h>
-#include <graphics.h>
-#include <owl_packet.h>
+#include <athena/graphics.h>
+#include <athena/graphics/owl_packet.h>
+#include <athena/screen.h>
 
 #include "ath_screen.h"
 
@@ -92,10 +93,9 @@ static JSValue screen_free_vram(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
     if (!screen_argc(ctx, argc, 0, 0, "Screen.getFreeVRAM"))
         return JS_EXCEPTION;
-    if (!getGSGLOBAL())
+    if (!athena_screen_ready())
         return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
-    return JS_NewUint32(ctx, (uint32_t)getFreeVRAM(VRAM_SIZE) -
-        (uint32_t)getFreeVRAM(VRAM_USED_TOTAL));
+    return JS_NewUint32(ctx, athena_screen_free_vram());
 }
 
 static JSValue screen_fps(JSContext *ctx, JSValueConst this_val, int argc,
@@ -112,24 +112,23 @@ static JSValue screen_fps(JSContext *ctx, JSValueConst this_val, int argc,
 
 static JSValue screen_get_mode(JSContext *ctx, JSValueConst this_val, int argc,
     JSValueConst *argv) {
-    GSCONTEXT *global;
+    AthenaScreenMode mode;
     JSValue result;
     if (!screen_argc(ctx, argc, 0, 0, "Screen.getMode"))
         return JS_EXCEPTION;
-    global = getGSGLOBAL();
-    if (!global)
+    if (athena_screen_get_mode(&mode) != ATHENA_SCREEN_OK)
         return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
     result = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, result, "mode", JS_NewInt32(ctx, global->Mode));
-    JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, global->Width));
-    JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, global->Height));
-    JS_SetPropertyStr(ctx, result, "psm", JS_NewInt32(ctx, global->PSM));
-    JS_SetPropertyStr(ctx, result, "interlace", JS_NewInt32(ctx, global->Interlace));
-    JS_SetPropertyStr(ctx, result, "field", JS_NewInt32(ctx, global->Field));
-    JS_SetPropertyStr(ctx, result, "psmz", JS_NewInt32(ctx, global->PSMZ));
-    JS_SetPropertyStr(ctx, result, "zbuffering", JS_NewBool(ctx, global->ZBuffering));
+    JS_SetPropertyStr(ctx, result, "mode", JS_NewInt32(ctx, mode.mode));
+    JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, mode.width));
+    JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, mode.height));
+    JS_SetPropertyStr(ctx, result, "psm", JS_NewInt32(ctx, mode.psm));
+    JS_SetPropertyStr(ctx, result, "interlace", JS_NewInt32(ctx, mode.interlace));
+    JS_SetPropertyStr(ctx, result, "field", JS_NewInt32(ctx, mode.field));
+    JS_SetPropertyStr(ctx, result, "psmz", JS_NewInt32(ctx, mode.psmz));
+    JS_SetPropertyStr(ctx, result, "zbuffering", JS_NewBool(ctx, mode.zbuffering));
     JS_SetPropertyStr(ctx, result, "double_buffering",
-        JS_NewBool(ctx, global->DoubleBuffering));
+        JS_NewBool(ctx, mode.double_buffering));
     return result;
 }
 
@@ -201,48 +200,45 @@ static JSValue screen_set_mode(JSContext *ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, value);
     }
-    if (pass_count != 0)
-        return JS_ThrowRangeError(ctx,
-            "Screen.setMode pass_count is not supported");
-    if (width <= 0 || width > 2048 || (width % 64) != 0 ||
-        height <= 0 || height > 2048)
-        return JS_ThrowRangeError(ctx,
-            "Screen.setMode dimensions must be positive, width-aligned, and <= 2048");
-    if (interlace != GS_INTERLACED && interlace != GS_NONINTERLACED)
-        return JS_ThrowRangeError(ctx, "Screen.setMode interlace is invalid");
-    if (field != GS_FIELD && field != GS_FRAME)
-        return JS_ThrowRangeError(ctx, "Screen.setMode field is invalid");
-    if (psm != GS_PSM_CT16 && psm != GS_PSM_CT16S &&
-        psm != GS_PSM_CT24 && psm != GS_PSM_CT32)
-        return JS_ThrowRangeError(ctx, "Screen.setMode psm is invalid");
-    if (psmz != GS_ZBUF_16 && psmz != GS_ZBUF_16S &&
-        psmz != GS_ZBUF_24 && psmz != GS_ZBUF_32)
-        return JS_ThrowRangeError(ctx, "Screen.setMode psmz is invalid");
-    if (mode != GS_MODE_NTSC && mode != GS_MODE_PAL &&
-        mode != GS_MODE_DTV_480P && mode != GS_MODE_DTV_576P &&
-        mode != GS_MODE_DTV_720P && mode != GS_MODE_DTV_1080I)
-        return JS_ThrowRangeError(ctx, "Screen.setMode mode is invalid");
-    if (setVideoMode((s16)mode, width, height, psm, (s16)interlace, (s16)field,
-        zbuffering, psmz, double_buffering, (uint8_t)pass_count) < 0)
-        return JS_ThrowInternalError(ctx, "Screen.setMode failed to allocate video buffers");
+    {
+        AthenaScreenMode requested = {
+            .mode = mode, .width = width, .height = height, .psm = psm,
+            .interlace = interlace, .field = field, .psmz = psmz,
+            .zbuffering = zbuffering, .double_buffering = double_buffering,
+            .pass_count = pass_count,
+        };
+        const char *error = NULL;
+        switch (athena_screen_set_mode(&requested, &error)) {
+        case ATHENA_SCREEN_OK:
+            break;
+        case ATHENA_SCREEN_ERR_INVALID:
+            return JS_ThrowRangeError(ctx, "Screen.setMode %s", error);
+        default:
+            return JS_ThrowInternalError(ctx, "Screen.setMode %s", error);
+        }
+    }
     return JS_UNDEFINED;
 }
 
 static JSValue screen_alpha_equation(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv) {
     int32_t a, b, c, d, fix;
+    uint64_t value;
     if (!screen_argc(ctx, argc, 5, 5, "Screen.alphaEquation"))
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &a, argv[0]) || JS_ToInt32(ctx, &b, argv[1]) ||
         JS_ToInt32(ctx, &c, argv[2]) || JS_ToInt32(ctx, &d, argv[3]) ||
         JS_ToInt32(ctx, &fix, argv[4]))
         return JS_EXCEPTION;
-    if (a < 0 || a > 2 || b < 0 || b > 2 || c < 0 || c > 2 ||
-        d < 0 || d > 2 || fix < 0 || fix > 255)
+    if (athena_screen_alpha_equation(a, b, c, d, fix, &value) != ATHENA_SCREEN_OK)
         return JS_ThrowRangeError(ctx, "Screen.alphaEquation values are invalid");
-    return JS_NewInt64(ctx, ALPHA_EQUATION(a, b, c, d, fix));
+    return JS_NewInt64(ctx, (int64_t)value);
 }
 
+/*
+ * Converts a JS value to the raw parameter value. Ranges are checked by
+ * athena_screen_set_param(); registers are built by the native encoders.
+ */
 static int screen_param_value(JSContext *ctx, int param, JSValueConst value,
     uint64_t *result) {
     switch (param) {
@@ -252,89 +248,32 @@ static int screen_param_value(JSContext *ctx, int param, JSValueConst value,
     case PIXEL_ALPHA_BLEND_ENABLE:
         *result = JS_ToBool(ctx, value);
         return 1;
-    case ALPHA_TEST_METHOD:
-    {
-        int64_t integer;
-        if (JS_ToInt64(ctx, &integer, value) || integer < ALPHA_NEVER ||
-            integer > ALPHA_NEQUAL)
-            return 0;
-        *result = (uint64_t)integer;
-        return 1;
-    }
-    case ALPHA_TEST_FAIL:
-        {
-            int64_t integer;
-            if (JS_ToInt64(ctx, &integer, value) || integer < ALPHA_FAIL_NO_UPDATE ||
-                integer > ALPHA_FAIL_RGB_ONLY)
-                return 0;
-            *result = (uint64_t)integer;
-            return 1;
-        }
-    case DST_ALPHA_TEST_METHOD:
-        {
-            int64_t integer;
-            if (JS_ToInt64(ctx, &integer, value) || integer < DEST_ALPHA_ZERO ||
-                integer > DEST_ALPHA_ONE)
-                return 0;
-            *result = (uint64_t)integer;
-            return 1;
-        }
-    case DEPTH_TEST_METHOD:
-        {
-            int64_t integer;
-            if (JS_ToInt64(ctx, &integer, value) || integer < DEPTH_NEVER ||
-                integer > DEPTH_GREATER)
-                return 0;
-            *result = (uint64_t)integer;
-            return 1;
-        }
-    case COLOR_CLAMP_MODE:
-        {
-            int64_t integer;
-            if (JS_ToInt64(ctx, &integer, value) || integer < 0 || integer > 1)
-                return 0;
-            *result = (uint64_t)integer;
-            return 1;
-        }
-    case ALPHA_TEST_REF: {
-        int64_t integer;
-        if (JS_ToInt64(ctx, &integer, value) || integer < 0 || integer > 255)
-            return 0;
-        *result = (uint64_t)integer;
-        return 1;
-    }
     case ALPHA_BLEND_EQUATION: {
         int32_t a, b, c, d, fix;
-        if (!JS_IsObject(value) ||
-            !screen_property_int(ctx, value, "a", &a) ||
-            !screen_property_int(ctx, value, "b", &b) ||
-            !screen_property_int(ctx, value, "c", &c) ||
-            !screen_property_int(ctx, value, "d", &d) ||
-            !screen_property_int(ctx, value, "fix", &fix))
-            return 0;
-        if (a < 0 || a > 2 || b < 0 || b > 2 || c < 0 || c > 2 ||
-            d < 0 || d > 2 || fix < 0 || fix > 255)
-            return 0;
-        *result = ALPHA_EQUATION(a, b, c, d, fix);
-        return 1;
+        return JS_IsObject(value) &&
+            screen_property_int(ctx, value, "a", &a) &&
+            screen_property_int(ctx, value, "b", &b) &&
+            screen_property_int(ctx, value, "c", &c) &&
+            screen_property_int(ctx, value, "d", &d) &&
+            screen_property_int(ctx, value, "fix", &fix) &&
+            athena_screen_alpha_equation(a, b, c, d, fix, result) == ATHENA_SCREEN_OK;
     }
     case SCISSOR_BOUNDS: {
         int32_t x0, y0, x1, y1;
-        if (!JS_IsObject(value) ||
-            !screen_property_int(ctx, value, "x0", &x0) ||
-            !screen_property_int(ctx, value, "y0", &y0) ||
-            !screen_property_int(ctx, value, "x1", &x1) ||
-            !screen_property_int(ctx, value, "y1", &y1))
+        return JS_IsObject(value) &&
+            screen_property_int(ctx, value, "x0", &x0) &&
+            screen_property_int(ctx, value, "y0", &y0) &&
+            screen_property_int(ctx, value, "x1", &x1) &&
+            screen_property_int(ctx, value, "y1", &y1) &&
+            athena_screen_scissor(x0, y0, x1, y1, result) == ATHENA_SCREEN_OK;
+    }
+    default: {
+        int64_t integer;
+        if (JS_ToInt64(ctx, &integer, value) || integer < 0)
             return 0;
-        if (x0 < 0 || y0 < 0 || x1 < x0 || y1 < y0 ||
-            !getGSGLOBAL() || x1 >= getGSGLOBAL()->Width ||
-            y1 >= getGSGLOBAL()->Height)
-            return 0;
-        *result = GS_SETREG_SCISSOR_1(x0, x1, y0, y1);
+        *result = (uint64_t)integer;
         return 1;
     }
-    default:
-        return 0;
     }
 }
 
@@ -345,10 +284,9 @@ static JSValue screen_set_param(JSContext *ctx, JSValueConst this_val,
     if (!screen_argc(ctx, argc, 2, 2, "Screen.setParam"))
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &param, argv[0]) ||
-        param < ALPHA_TEST_ENABLE || param > COLOR_CLAMP_MODE ||
-        !screen_param_value(ctx, param, argv[1], &value))
+        !screen_param_value(ctx, param, argv[1], &value) ||
+        athena_screen_set_param(param, value) != ATHENA_SCREEN_OK)
         return JS_ThrowTypeError(ctx, "Screen.setParam received an invalid value");
-    set_screen_param((uint8_t)param, value);
     return JS_UNDEFINED;
 }
 
@@ -360,9 +298,8 @@ static JSValue screen_get_param(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (JS_ToInt32(ctx, &param, argv[0]))
         return JS_EXCEPTION;
-    if (param < ALPHA_TEST_ENABLE || param > COLOR_CLAMP_MODE)
+    if (athena_screen_get_param(param, &value) != ATHENA_SCREEN_OK)
         return JS_ThrowRangeError(ctx, "Screen.getParam received an invalid parameter");
-    value = get_screen_param((uint8_t)param);
     switch (param) {
     case ALPHA_BLEND_EQUATION: {
         alpha_reg alpha = { .data = value };

@@ -6,9 +6,9 @@
 #include <tamtypes.h>
 #include <libpad.h>
 
-#include <dbgprintf.h>
+#include <athena/debug.h>
 
-#include "gamepad.h"
+#include <athena/gamepad.h>
 #include "gamepad_iop.h"
 
 /* Updates a configuration command may stay busy before it is abandoned. */

@@ -1,7 +1,7 @@
 #include <kernel.h>
 #include <stdlib.h>
 
-#include "mutex.h"
+#include <athena/mutex.h>
 
 struct AthenaMutex {
     int semaphore_id;

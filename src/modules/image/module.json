@@ -7,14 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/image.c",
-    "quickjs/ath_image.c"
-  ],
-  "includes": [
-    ".",
-    "native",
-    "quickjs",
-    "../graphics"
+    "native/image.c"
   ],
   "dependencies": {
     "modules": [
@@ -24,11 +17,13 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_image.c"
+    ],
     "module_name": "Image",
     "global_alias": "Image",
     "global_export": "Image.Image",
-    "init_func": "athena_image_init",
-    "header": "quickjs/ath_image.h"
+    "init_func": "athena_image_init"
   },
   "types": "image.d.ts"
 }

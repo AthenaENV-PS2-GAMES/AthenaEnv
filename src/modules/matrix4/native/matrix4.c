@@ -1,7 +1,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "matrix4.h"
+#include <athena/matrix4.h>
 
 void ath_matrix4_identity(AthenaMatrix4 *matrix) {
     memset(matrix, 0, sizeof(*matrix));

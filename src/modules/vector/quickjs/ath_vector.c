@@ -4,9 +4,9 @@
 #include <malloc.h>
 
 #include <ath_env.h>
-#include <athena_module.h>
+#include <athena/module.h>
 
-#include "../native/vector_math.h"
+#include <athena/vector.h>
 #include "ath_vector.h"
 
 typedef struct {

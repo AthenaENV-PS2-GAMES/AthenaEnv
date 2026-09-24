@@ -11,7 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include <iop_manager.h>
+#include <athena/iop_manager.h>
 
 typedef enum {
     GAMEPAD_DRIVER_PADMAN,

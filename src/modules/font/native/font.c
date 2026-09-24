@@ -1,7 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "font.h"
+#include <athena/font.h>
+
+#include "fntsys.h"
 
 Coords athena_font_calc_dimensions(GSFONT *gs_font, float scale, const char *str);
 

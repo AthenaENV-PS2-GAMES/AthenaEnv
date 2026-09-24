@@ -121,7 +121,7 @@
 #include <errno.h>
 #endif
 
-#include "../include/athena_math.h"
+#include <athena/math.h>
 
 enum {
     /* classid tag        */    /* union usage   | properties */

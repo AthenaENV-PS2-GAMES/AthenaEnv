@@ -1,7 +1,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "vector_math.h"
+#include <athena/vector.h>
 
 void ath_vector_add(AthenaVector4 *out, const AthenaVector4 *a, const AthenaVector4 *b) {
     __asm__ __volatile__(

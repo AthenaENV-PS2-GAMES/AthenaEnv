@@ -1,4 +1,4 @@
-#include <owl_packet.h>
+#include <athena/graphics/owl_packet.h>
 #include <debug.h>
 #include <stdlib.h>
 

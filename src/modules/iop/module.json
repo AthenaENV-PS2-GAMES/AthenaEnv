@@ -7,21 +7,32 @@
   "required": false,
   "default": true,
   "sources": [
-    "quickjs/ath_iop.c"
-  ],
-  "includes": [
-    "."
+    "native/iop.c"
   ],
   "dependencies": {
     "modules": [],
-    "iop": [],
+    "iop": [
+      "freeram"
+    ],
     "ee_libs": []
   },
+  "native": {
+    "register_iop": "athena_iop_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "freeram",
+      "irx": "iop_modules/freeram/freeram.irx",
+      "build": "iop_modules/freeram"
+    }
+  ],
   "quickjs": {
+    "sources": [
+      "quickjs/ath_iop.c"
+    ],
     "module_name": "IOP",
     "global_alias": "IOP",
-    "init_func": "athena_iop_init",
-    "header": "quickjs/ath_iop.h"
+    "init_func": "athena_iop_init"
   },
   "types": "iop.d.ts"
 }

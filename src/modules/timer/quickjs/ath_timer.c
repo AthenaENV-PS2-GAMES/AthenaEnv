@@ -1,7 +1,7 @@
 #include <time.h>
 
 #include <ath_env.h>
-#include "../native/timer.h"
+#include <athena/timer.h>
 
 static JSClassID athena_timer_class_id;
 

@@ -1,0 +1,41 @@
+{
+  "id": "memcard",
+  "name": "Memory Card",
+  "description": "Memory card drivers (sio2man, mcman, mcserv): boot from and access mc0:/mc1:.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/memcard.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "sio2man",
+      "mcman",
+      "mcserv"
+    ],
+    "ee_libs": [
+      "-lmc"
+    ]
+  },
+  "native": {
+    "register_iop": "athena_memcard_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "sio2man",
+      "irx": "$(PS2SDK)/iop/irx/sio2man.irx"
+    },
+    {
+      "name": "mcman",
+      "irx": "$(PS2SDK)/iop/irx/mcman.irx"
+    },
+    {
+      "name": "mcserv",
+      "irx": "$(PS2SDK)/iop/irx/mcserv.irx"
+    }
+  ],
+  "types": null
+}

@@ -4,7 +4,7 @@
 #include <libpad.h>
 
 #include <ath_env.h>
-#include "../native/gamepad.h"
+#include <athena/gamepad.h>
 
 /*
  * Every player object is created once, at module initialization, and points

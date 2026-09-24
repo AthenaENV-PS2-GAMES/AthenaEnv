@@ -44,7 +44,8 @@
 #include <sys/wait.h>
 
 #include <ath_gil.h>
-#include "../modules/thread/native/thread.h"
+#include <athena/config.h>
+#include <athena/module.h>
 
 #include <ath_env.h>
 
@@ -52,7 +53,9 @@
 #include "list.h"
 #include "quickjs-libc.h"
 
+#ifdef ATHENA_MODULE_ERL
 #include <erl.h>
+#endif
 
 /* TODO:
    - add socket calls
@@ -450,6 +453,7 @@ typedef JSModuleDef *(JSInitModuleFunc)(JSContext *ctx,
 
 typedef JSModuleDef *(*extern_loader_function)(JSContext* ctx);
 
+#ifdef ATHENA_MODULE_ERL
 static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name)
 {
   	struct erl_record_t *erl = _init_load_erl_from_file(module_name, 0);
@@ -472,9 +476,17 @@ static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name
             return m;
         }
     }
-    
+
     return NULL;
 }
+#else
+static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name)
+{
+    JS_ThrowReferenceError(ctx, "could not load module '%s': native modules (erl) are not enabled in this build",
+                           module_name);
+    return NULL;
+}
+#endif
 
 int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
                               JS_BOOL use_realpath, JS_BOOL is_main)
@@ -693,7 +705,7 @@ static JSValue js_std_refcount(JSContext *ctx, JSValueConst this_val, int argc, 
 static int interrupt_handler(JSRuntime *rt, void *opaque)
 {
     return ((os_pending_signals >> SIGINT) & 1) ||
-           athena_thread_core_stop_requested();
+           athena_modules_stop_requested();
 }
 
 void js_std_set_interrupt_handler(JSRuntime *rt)

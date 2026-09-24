@@ -7,11 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/mutex.c",
-    "quickjs/ath_mutex.c"
-  ],
-  "includes": [
-    "."
+    "native/mutex.c"
   ],
   "dependencies": {
     "modules": [],
@@ -19,10 +15,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_mutex.c"
+    ],
     "module_name": "Mutex",
     "global_alias": "Mutex",
-    "init_func": "athena_mutex_init",
-    "header": "quickjs/ath_mutex.h"
+    "init_func": "athena_mutex_init"
   },
   "types": "mutex.d.ts"
 }

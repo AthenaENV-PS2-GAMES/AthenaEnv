@@ -8,23 +8,29 @@
   "default": true,
   "sources": [
     "native/system.c",
-    "quickjs/ath_system.c"
-  ],
-  "includes": [
-    "."
+    "native/elf_loader.c"
   ],
   "dependencies": {
     "modules": [],
-    "iop": [
-      "freeram"
-    ],
-    "ee_libs": []
+    "iop": [],
+    "ee_libs": [
+      "-lmc"
+    ]
   },
+  "embed": [
+    {
+      "name": "loader_elf",
+      "file": "ee_modules/loader/loader.elf",
+      "build": "ee_modules/loader"
+    }
+  ],
   "quickjs": {
+    "sources": [
+      "quickjs/ath_system.c"
+    ],
     "module_name": "System",
     "global_alias": "System",
-    "init_func": "athena_system_init",
-    "header": "quickjs/ath_system.h"
+    "init_func": "athena_system_init"
   },
   "types": "system.d.ts"
 }

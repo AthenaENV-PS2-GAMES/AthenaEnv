@@ -16,7 +16,6 @@
     "native/image_loaders.c"
   ],
   "includes": [
-    ".",
     "$(PS2DEV)/gsKit/include",
     "$(PS2SDK)/ports/include/freetype2"
   ],

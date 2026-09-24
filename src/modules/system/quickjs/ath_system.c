@@ -16,14 +16,14 @@
 #include <usbhdfsd-common.h>
 #include <hdd-ioctl.h>
 #include <loadfile.h>
-#include <system.h>
+#include <athena/system/elf_loader.h>
 
 #include <ath_env.h>
 #include <ath_gil.h>
 #include "ath_system.h"
-#include <memory.h>
-#include <dbgprintf.h>
-#include "../native/system.h"
+#include <athena/memory.h>
+#include <athena/debug.h>
+#include <athena/system.h>
 
 static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -174,6 +174,10 @@ static JSValue athena_system_get_mc_info(JSContext *ctx, JSValue this_val, int a
     athena_js_gil_unlock();
     int result = athena_system_get_memory_card_info(port, &memory_card);
     athena_js_gil_lock();
+    if (result == ATHENA_SYSTEM_ERR_NO_MEMCARD) {
+        return JS_ThrowInternalError(ctx,
+            "System.getMCInfo: memory card support (memcard module) is not in this build");
+    }
     if (result < 0) {
         return JS_ThrowInternalError(ctx,
             "Unable to read memory-card information: %d", result);

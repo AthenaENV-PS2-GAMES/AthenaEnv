@@ -7,11 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/timer.c",
-    "quickjs/ath_timer.c"
-  ],
-  "includes": [
-    "."
+    "native/timer.c"
   ],
   "dependencies": {
     "modules": [],
@@ -19,10 +15,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_timer.c"
+    ],
     "module_name": "Timer",
     "global_alias": "Timer",
-    "init_func": "athena_timer_init",
-    "header": "quickjs/ath_timer.h"
+    "init_func": "athena_timer_init"
   },
   "types": "timer.d.ts"
 }

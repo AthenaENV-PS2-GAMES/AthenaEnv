@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 #include <ath_env.h>
-#include <graphics.h>
+#include <athena/graphics.h>
 
 #include "ath_draw.h"
 

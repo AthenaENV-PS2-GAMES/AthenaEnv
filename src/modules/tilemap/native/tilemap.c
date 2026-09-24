@@ -5,12 +5,12 @@
 #include <malloc.h>
 #include <kernel.h>
 
-#include <graphics.h>
-#include <owl_packet.h>
-#include <mpg_manager.h>
-#include <vif.h>
+#include <athena/graphics.h>
+#include <athena/graphics/owl_packet.h>
+#include <athena/graphics/mpg_manager.h>
+#include <athena/graphics/vif.h>
 
-#include "tilemap.h"
+#include <athena/tilemap.h>
 
 /*
  * VU1 program built from old/src/vu1/draw_2D_tile_list.vcl. Only the

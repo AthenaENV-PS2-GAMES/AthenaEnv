@@ -12,10 +12,11 @@
 #include <fileXio_rpc.h>
 
 #include <kernel.h>
-#include <memory.h>
+#include <athena/memory.h>
+#include <athena/module.h>
 #include <timer.h>
 
-#include "system.h"
+#include <athena/system.h>
 
 int athena_system_list_dir_native(const char *path,
     AthenaDirectoryEntry **entries, size_t *count) {
@@ -110,6 +111,8 @@ int athena_system_move_file_native(const char *source, const char *destination) 
 }
 
 int athena_system_get_memory_card_info(int port, AthenaMemoryCardInfo *info) {
+    if (!athena_module_enabled("memcard"))
+        return ATHENA_SYSTEM_ERR_NO_MEMCARD;
     int request = mcGetInfo(port, 0, &info->type, &info->free_space, &info->format);
     if (request < 0) return request;
 

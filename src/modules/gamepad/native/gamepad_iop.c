@@ -5,8 +5,8 @@
 #include <sifrpc.h>
 #include <delaythread.h>
 
-#include <dbgprintf.h>
-#include <iop_manager.h>
+#include <athena/debug.h>
+#include <athena/iop_manager.h>
 
 #include "gamepad_iop.h"
 
@@ -30,6 +30,9 @@
 #define DS34BT_SET_RUMBLE  5
 #define DS34BT_GET_DATA    7
 
+iopman_define_module(sio2man);
+iopman_define_module(usbd);
+iopman_define_module(padman);
 iopman_define_module(mtapman);
 iopman_define_module(ds34usb);
 iopman_define_module(ds34bt);
@@ -42,7 +45,7 @@ typedef struct {
 } GamepadDriverInfo;
 
 static const GamepadDriverInfo gamepad_drivers[GAMEPAD_DRIVER_COUNT] = {
-    [GAMEPAD_DRIVER_PADMAN] = { "padman", NULL, NULL, NULL },
+    [GAMEPAD_DRIVER_PADMAN] = { "padman", "sio2man", padman_irx, &size_padman_irx },
     [GAMEPAD_DRIVER_MTAPMAN] = { "mtapman", "sio2man", mtapman_irx, &size_mtapman_irx },
     [GAMEPAD_DRIVER_DS34USB] = { "ds34usb", "usbd", ds34usb_irx, &size_ds34usb_irx },
     [GAMEPAD_DRIVER_DS34BT] = { "ds34bt", "usbd", ds34bt_irx, &size_ds34bt_irx },
@@ -80,6 +83,18 @@ static bool gamepad_bind(SifRpcClientData_t *client, int server) {
         DelayThread(GAMEPAD_BIND_DELAY_US);
     }
     return false;
+}
+
+/*
+ * Boot-time hook: registers the bus drivers the pad drivers depend on. They
+ * may already be registered by memcard (sio2man) or usbmass (usbd).
+ */
+void athena_gamepad_register_iop(void) {
+    static const char *const after_filexio[] = { "fileXio", NULL };
+    static const char *const no_dependencies[] = { NULL };
+
+    iopman_ensure_module_buffer("sio2man", sio2man, after_filexio, NULL, NULL);
+    iopman_ensure_module_buffer("usbd", usbd, no_dependencies, NULL, NULL);
 }
 
 static module_entry *gamepad_register(const GamepadDriverInfo *info) {

@@ -9,13 +9,13 @@
 
 #include <time.h>
 
-#include <graphics.h>
-#include <athena_math.h>
-#include <dbgprintf.h>
-#include <fntsys.h>
-#include <texture_manager.h>
+#include <athena/graphics.h>
+#include <athena/math.h>
+#include <athena/debug.h>
+#include "fntsys.h"
+#include <athena/graphics/texture_manager.h>
 
-#include <owl_packet.h>
+#include <athena/graphics/owl_packet.h>
 
 int athena_font_upload(GSCONTEXT *gsGlobal, GSFONT *gsFont)
 {

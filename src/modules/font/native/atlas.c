@@ -6,8 +6,8 @@
 
 #include <stdio.h>
 #include <malloc.h>
-#include <atlas.h>
-#include <graphics.h>
+#include "atlas.h"
+#include <athena/graphics.h>
 
 static inline struct atlas_allocation_t *allocNew(int x, int y, size_t width, size_t height)
 {

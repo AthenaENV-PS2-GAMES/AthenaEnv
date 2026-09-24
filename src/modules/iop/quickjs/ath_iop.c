@@ -3,10 +3,7 @@
 #include <string.h>
 
 #include <ath_env.h>
-#include <iop_manager.h>
-#include <smem.h>
-
-#include <athena_module.h>
+#include <athena/iop.h>
 
 #include "ath_iop.h"
 
@@ -130,31 +127,27 @@ static JSValue athena_iop_reset(JSContext *ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-static JSValue athena_iop_get_memory_stats(JSContext *ctx,
+static JSValue js_iop_get_memory_stats(JSContext *ctx,
     JSValueConst this_val, int argc, JSValueConst *argv) {
-    int32_t free_memory = 0;
-    int32_t used_memory;
-    module_entry *freeram;
+    AthenaIopMemoryStats stats;
 
     if (!iop_require_argc(ctx, argc, 0, 0, "IOP.getMemoryStats"))
         return JS_EXCEPTION;
 
-    freeram = iopman_search_module("freeram");
-    if (!freeram || iopman_load_module(freeram, 0, NULL) == MODULE_STATUS_ERROR) {
+    switch (athena_iop_get_memory_stats(&stats)) {
+    case ATHENA_IOP_OK:
+        break;
+    case ATHENA_IOP_ERR_FREERAM:
         return JS_ThrowInternalError(ctx, "Unable to load IOP freeram module");
-    }
-    if (smem_read(IOP_FREERAM_ADDR, &free_memory,
-            sizeof(free_memory)) < 0) {
+    case ATHENA_IOP_ERR_READ:
         return JS_ThrowInternalError(ctx, "Unable to read IOP memory statistics");
-    }
-    if (free_memory < 0 || free_memory > IOP_TOTAL_RAM) {
+    default:
         return JS_ThrowInternalError(ctx, "Invalid IOP memory statistics");
     }
-    used_memory = IOP_TOTAL_RAM - free_memory;
 
     JSValue result = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, result, "free", JS_NewInt32(ctx, free_memory));
-    JS_SetPropertyStr(ctx, result, "used", JS_NewInt32(ctx, used_memory));
+    JS_SetPropertyStr(ctx, result, "free", JS_NewInt32(ctx, stats.free));
+    JS_SetPropertyStr(ctx, result, "used", JS_NewInt32(ctx, stats.used));
     return result;
 }
 
@@ -163,7 +156,7 @@ static const JSCFunctionListEntry iop_module_funcs[] = {
     JS_CFUNC_DEF("getModule", 1, athena_iop_get_module),
     JS_CFUNC_DEF("loadModule", 1, athena_iop_load_module),
     JS_CFUNC_DEF("reset", 0, athena_iop_reset),
-    JS_CFUNC_DEF("getMemoryStats", 0, athena_iop_get_memory_stats)
+    JS_CFUNC_DEF("getMemoryStats", 0, js_iop_get_memory_stats)
 };
 
 static int athena_iop_module_init(JSContext *ctx, JSModuleDef *m) {

@@ -8,11 +8,7 @@
   "default": true,
   "sources": [
     "native/gamepad.c",
-    "native/gamepad_iop.c",
-    "quickjs/ath_gamepad.c"
-  ],
-  "includes": [
-    "."
+    "native/gamepad_iop.c"
   ],
   "dependencies": {
     "modules": [],
@@ -24,9 +20,26 @@
       "ds34usb",
       "ds34bt"
     ],
-    "ee_libs": []
+    "ee_libs": [
+      "-lpad"
+    ]
+  },
+  "native": {
+    "register_iop": "athena_gamepad_register_iop"
   },
   "embed_irx": [
+    {
+      "name": "sio2man",
+      "irx": "$(PS2SDK)/iop/irx/sio2man.irx"
+    },
+    {
+      "name": "usbd",
+      "irx": "$(PS2SDK)/iop/irx/usbd.irx"
+    },
+    {
+      "name": "padman",
+      "irx": "$(PS2SDK)/iop/irx/padman.irx"
+    },
     {
       "name": "mtapman",
       "irx": "$(PS2SDK)/iop/irx/mtapman.irx"
@@ -43,10 +56,12 @@
     }
   ],
   "quickjs": {
+    "sources": [
+      "quickjs/ath_gamepad.c"
+    ],
     "module_name": "Gamepad",
     "global_alias": "Gamepad",
-    "init_func": "athena_gamepad_init",
-    "header": "quickjs/ath_gamepad.h"
+    "init_func": "athena_gamepad_init"
   },
   "types": "gamepad.d.ts"
 }

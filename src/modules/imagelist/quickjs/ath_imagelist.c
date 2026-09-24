@@ -3,14 +3,12 @@
 #include <string.h>
 #include <time.h>
 #include <kernel.h>
-#include <delaythread.h>
 
 #include <ath_env.h>
 
-#include "../../mutex/native/mutex.h"
-#include "../../thread/native/thread.h"
-#include "../../image/native/image.h"
-#include "../../image/quickjs/ath_image.h"
+#include <athena/image.h>
+#include <athena/js/image.h>
+#include <athena/imagelist.h>
 #include "ath_imagelist.h"
 
 #define IMAGELIST_PRIORITY_HIGH 0
@@ -22,10 +20,6 @@
 #define IMAGELIST_UPLOAD_BIND 1
 #define IMAGELIST_UPLOAD_LOCK 2
 
-/* libpng and libjpeg need more stack than the thread default. */
-#define IMAGELIST_WORKER_STACK_SIZE (64 * 1024)
-/* Idle poll interval; lets the worker observe runtime shutdown requests. */
-#define IMAGELIST_WORKER_IDLE_US 1000
 /* Requests handed to the worker at once when maxMemory allows decode-ahead. */
 #define IMAGELIST_WORKER_MAX_SUBMITTED 4
 /* Upper bound for the cacheSize option. */
@@ -55,33 +49,6 @@ typedef struct {
     unsigned int callback_count;
     unsigned int callback_capacity;
 } ImageListJob;
-
-/*
- * Work item exchanged with the worker. The main thread allocates it, the
- * worker owns it while decoding and publishes it in `results`, after which it
- * belongs to the main thread again. It never holds QuickJS or graphics state.
- */
-typedef struct ImageListRequest {
-    struct ImageListRequest *next;
-    uint32_t id;
-    char *path;
-    AthenaImageBuffer buffer;
-} ImageListRequest;
-
-typedef struct {
-    AthenaThread *thread;
-    AthenaMutex *mutex;
-    /* Protected by `mutex`. */
-    ImageListRequest *requests;
-    ImageListRequest *results;
-    uint32_t result_bytes;
-    uint32_t peak_bytes;
-    uint64_t decode_ticks;
-    bool stop;
-    bool exited;
-    /* Immutable while the worker runs. */
-    uint32_t max_memory;
-} ImageListWorker;
 
 /*
  * Completed image retained by the cache. The cache owns one reference to the
@@ -115,7 +82,8 @@ typedef struct {
     uint32_t cache_size;
     /* Set by close(); the list accepts no new requests. */
     bool closed;
-    ImageListWorker worker;
+    /* Background decoder (native layer); NULL without workers. */
+    AthenaImageDecoder *decoder;
 } AthenaImageList;
 
 static JSClassID imagelist_class_id;
@@ -125,160 +93,26 @@ static double imagelist_ticks_to_ms(uint64_t ticks)
     return (double)ticks * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
-static void imagelist_request_free(ImageListRequest *request)
-{
-    if (!request)
-        return;
-    athena_image_buffer_release(&request->buffer);
-    free(request->path);
-    free(request);
-}
-
-static void imagelist_request_free_all(ImageListRequest *request)
-{
-    while (request) {
-        ImageListRequest *next = request->next;
-        imagelist_request_free(request);
-        request = next;
-    }
-}
-
-static void imagelist_request_append(ImageListRequest **head,
-    ImageListRequest *request)
-{
-    while (*head)
-        head = &(*head)->next;
-    *head = request;
-}
-
-static ImageListRequest *imagelist_request_unlink(ImageListRequest **head,
-    uint32_t id)
-{
-    for (; *head; head = &(*head)->next) {
-        ImageListRequest *request = *head;
-        if (request->id == id) {
-            *head = request->next;
-            request->next = NULL;
-            return request;
-        }
-    }
-    return NULL;
-}
-
-/*
- * Worker thread. It only performs file I/O and CPU decoding; results are
- * applied to Image objects, surfaces and VRAM on the main thread.
- */
-static void imagelist_worker(void *arg)
-{
-    AthenaImageList *list = arg;
-    ImageListWorker *worker = &list->worker;
-
-    for (;;) {
-        ImageListRequest *request = NULL;
-        clock_t started;
-        clock_t elapsed;
-
-        if (athena_mutex_core_lock(worker->mutex) < 0)
-            break;
-        if (worker->stop || athena_thread_core_stop_requested()) {
-            worker->exited = true;
-            athena_mutex_core_unlock(worker->mutex);
-            break;
-        }
-        if (worker->requests && (!worker->results ||
-            worker->result_bytes < worker->max_memory)) {
-            request = worker->requests;
-            worker->requests = request->next;
-            request->next = NULL;
-        }
-        athena_mutex_core_unlock(worker->mutex);
-
-        if (!request) {
-            DelayThread(IMAGELIST_WORKER_IDLE_US);
-            continue;
-        }
-        started = clock();
-        athena_image_decode(request->path, &request->buffer);
-        elapsed = clock() - started;
-
-        if (athena_mutex_core_lock(worker->mutex) < 0) {
-            imagelist_request_free(request);
-            break;
-        }
-        worker->decode_ticks += (uint64_t)elapsed;
-        imagelist_request_append(&worker->results, request);
-        if (request->buffer.bytes <= UINT32_MAX - worker->result_bytes)
-            worker->result_bytes += request->buffer.bytes;
-        else
-            worker->result_bytes = UINT32_MAX;
-        if (worker->result_bytes > worker->peak_bytes)
-            worker->peak_bytes = worker->result_bytes;
-        athena_mutex_core_unlock(worker->mutex);
-    }
-    athena_thread_core_worker_finished(worker->thread);
-    ExitThread();
-}
-
 static int imagelist_worker_start(AthenaImageList *list)
 {
-    ImageListWorker *worker = &list->worker;
-
     if (list->workers == 0)
         return 0;
-    worker->max_memory = list->max_memory;
-    worker->mutex = athena_mutex_core_create();
-    if (!worker->mutex)
-        return -1;
-    worker->thread = athena_thread_core_create("ImageList decoder",
-        imagelist_worker, list, IMAGELIST_WORKER_STACK_SIZE,
-        ATHENA_THREAD_DEFAULT_PRIORITY + 1);
-    if (!worker->thread) {
-        athena_mutex_core_destroy(worker->mutex);
-        worker->mutex = NULL;
-        return -1;
-    }
-    if (athena_thread_core_start(worker->thread) < 0) {
-        /* Never started, so destroy() also finalizes the thread. */
-        athena_thread_core_destroy(worker->thread);
-        athena_mutex_core_destroy(worker->mutex);
-        worker->thread = NULL;
-        worker->mutex = NULL;
-        return -1;
-    }
-    return 0;
+    list->decoder = athena_image_decoder_create(list->max_memory);
+    return list->decoder ? 0 : -1;
 }
 
 /* Joins the worker; it may already have exited on a runtime stop request. */
 static void imagelist_worker_stop(AthenaImageList *list)
 {
-    ImageListWorker *worker = &list->worker;
-    int attempts;
+    AthenaImageDecoderStats stats;
 
-    if (!worker->thread)
+    if (!list->decoder)
         return;
-    if (athena_mutex_core_lock(worker->mutex) >= 0) {
-        worker->stop = true;
-        athena_mutex_core_unlock(worker->mutex);
-    }
-    athena_thread_core_stop(worker->thread);
-    athena_thread_core_wait(worker->thread);
-    /*
-     * worker_finished() signals just before ExitThread(); give the worker
-     * time to become dormant before its stack is released.
-     */
-    for (attempts = 0; attempts < 100 &&
-        athena_thread_core_get_status(worker->thread) != THS_DORMANT;
-        ++attempts)
-        DelayThread(100);
-    athena_thread_core_finalize(worker->thread);
-    athena_mutex_core_destroy(worker->mutex);
-    imagelist_request_free_all(worker->requests);
-    imagelist_request_free_all(worker->results);
-    if (worker->peak_bytes > list->peak_bytes)
-        list->peak_bytes = worker->peak_bytes;
-    list->decode_ticks += worker->decode_ticks;
-    memset(worker, 0, sizeof(*worker));
+    athena_image_decoder_destroy(list->decoder, &stats);
+    list->decoder = NULL;
+    if (stats.peak_bytes > list->peak_bytes)
+        list->peak_bytes = stats.peak_bytes;
+    list->decode_ticks += stats.decode_ticks;
     list->workers = 0;
 }
 
@@ -300,94 +134,6 @@ static int imagelist_argc(JSContext *ctx, int argc, int minimum, int maximum,
 static AthenaImageList *imagelist_this(JSContext *ctx, JSValueConst value)
 {
     return JS_GetOpaque2(ctx, value, imagelist_class_id);
-}
-
-static bool imagelist_is_separator(char value)
-{
-    return value == '/' || value == '\\';
-}
-
-/*
- * Produces the deduplication key for a path: collapses separators, "." and
- * ".." segments, keeps device prefixes such as "mass:" or "cdrom0:" and never
- * climbs above a root or device.
- */
-static char *imagelist_normalize_path(const char *path)
-{
-    char *normalized;
-    size_t *starts;
-    size_t length;
-    size_t input = 0;
-    size_t output = 0;
-    size_t root = 0;
-    unsigned int depth = 0;
-    bool anchored = false;
-
-    if (!path)
-        return NULL;
-    length = strlen(path);
-    normalized = malloc(length + 2);
-    starts = malloc((length + 1) * sizeof(*starts));
-    if (!normalized || !starts) {
-        free(normalized);
-        free(starts);
-        return NULL;
-    }
-    while (input < length && !imagelist_is_separator(path[input]) &&
-        path[input] != ':')
-        input++;
-    if (input < length && path[input] == ':') {
-        input++;
-        memcpy(normalized, path, input);
-        output = input;
-        anchored = true;
-    } else {
-        input = 0;
-    }
-    if (input < length && imagelist_is_separator(path[input])) {
-        normalized[output++] = '/';
-        anchored = true;
-    }
-    root = output;
-    while (input < length) {
-        size_t begin;
-        size_t segment_length;
-
-        while (input < length && imagelist_is_separator(path[input]))
-            input++;
-        begin = input;
-        while (input < length && !imagelist_is_separator(path[input]))
-            input++;
-        segment_length = input - begin;
-        if (segment_length == 0 ||
-            (segment_length == 1 && path[begin] == '.'))
-            continue;
-        if (segment_length == 2 && path[begin] == '.' &&
-            path[begin + 1] == '.') {
-            if (depth > 0) {
-                output = starts[--depth];
-                continue;
-            }
-            if (anchored)
-                continue;
-            /* A leading ".." of a relative path can never be removed. */
-            if (output > root)
-                normalized[output++] = '/';
-            memcpy(normalized + output, path + begin, 2);
-            output += 2;
-            continue;
-        }
-        starts[depth++] = output;
-        if (output > root)
-            normalized[output++] = '/';
-        memcpy(normalized + output, path + begin, segment_length);
-        output += segment_length;
-    }
-    if (output == 0)
-        normalized[output++] = '.';
-    normalized[output] = '\0';
-    free(starts);
-    return normalized;
 }
 
 static int imagelist_callback_reserve(ImageListJob *job, unsigned int needed)
@@ -518,22 +264,9 @@ static void imagelist_cache_store(JSContext *ctx, AthenaImageList *list,
 /* Drops a submitted request the worker has not started or already finished. */
 static void imagelist_worker_discard(AthenaImageList *list, uint32_t id)
 {
-    ImageListWorker *worker = &list->worker;
-    ImageListRequest *request;
-
-    if (!worker->thread || athena_mutex_core_lock(worker->mutex) < 0)
-        return;
-    request = imagelist_request_unlink(&worker->requests, id);
-    if (!request) {
-        request = imagelist_request_unlink(&worker->results, id);
-        if (request)
-            worker->result_bytes -= request->buffer.bytes <=
-                worker->result_bytes ? request->buffer.bytes :
-                worker->result_bytes;
-    }
-    athena_mutex_core_unlock(worker->mutex);
     /* A request being decoded is discarded when its result is consumed. */
-    imagelist_request_free(request);
+    if (list->decoder)
+        athena_image_decoder_discard(list->decoder, id);
 }
 
 static void imagelist_remove_job(AthenaImageList *list, unsigned int index,
@@ -728,14 +461,11 @@ static void imagelist_insert_job(AthenaImageList *list, ImageListJob *job)
  */
 static int imagelist_worker_pump(AthenaImageList *list)
 {
-    ImageListWorker *worker = &list->worker;
-    ImageListRequest *batch = NULL;
-    ImageListRequest **tail = &batch;
     unsigned int limit = list->max_memory ? IMAGELIST_WORKER_MAX_SUBMITTED : 1;
     unsigned int submitted = 0;
     unsigned int i;
 
-    if (!worker->thread)
+    if (!list->decoder)
         return 0;
     for (i = 0; i < list->count; ++i) {
         if (list->jobs[i].submitted)
@@ -743,73 +473,19 @@ static int imagelist_worker_pump(AthenaImageList *list)
     }
     for (i = 0; i < list->count && submitted < limit; ++i) {
         ImageListJob *job = &list->jobs[i];
-        ImageListRequest *request;
         AthenaImage *image;
 
         if (job->submitted || job->cached)
             continue;
-        request = calloc(1, sizeof(*request));
-        if (request)
-            request->path = strdup(job->path);
-        if (!request || !request->path) {
-            free(request);
-            break;
-        }
-        request->id = job->id;
-        *tail = request;
-        tail = &request->next;
+        if (athena_image_decoder_submit(list->decoder, job->id, job->path) < 0)
+            return -1;
         job->submitted = true;
         image = athena_image_peek(job->image_ref);
         if (image)
             image->status = ATHENA_IMAGE_STATUS_LOADING;
         submitted++;
     }
-    if (!batch)
-        return 0;
-    if (athena_mutex_core_lock(worker->mutex) < 0) {
-        ImageListRequest *request;
-        for (request = batch; request; request = request->next) {
-            int index = imagelist_find_id(list, request->id);
-            if (index >= 0) {
-                AthenaImage *image =
-                    athena_image_peek(list->jobs[index].image_ref);
-                list->jobs[index].submitted = false;
-                if (image)
-                    image->status = ATHENA_IMAGE_STATUS_QUEUED;
-            }
-        }
-        imagelist_request_free_all(batch);
-        return -1;
-    }
-    imagelist_request_append(&worker->requests, batch);
-    athena_mutex_core_unlock(worker->mutex);
     return 0;
-}
-
-/* Returns the oldest decoded result, or NULL and whether the worker exited. */
-static ImageListRequest *imagelist_worker_take(AthenaImageList *list,
-    bool *exited)
-{
-    ImageListWorker *worker = &list->worker;
-    ImageListRequest *request = NULL;
-
-    *exited = false;
-    if (athena_mutex_core_lock(worker->mutex) < 0) {
-        *exited = true;
-        return NULL;
-    }
-    if (worker->results) {
-        request = worker->results;
-        worker->results = request->next;
-        request->next = NULL;
-        worker->result_bytes -= request->buffer.bytes <=
-            worker->result_bytes ? request->buffer.bytes :
-            worker->result_bytes;
-    } else {
-        *exited = worker->exited;
-    }
-    athena_mutex_core_unlock(worker->mutex);
-    return request;
 }
 
 /*
@@ -866,7 +542,7 @@ static JSValue imagelist_load(JSContext *ctx, JSValueConst this_val, int argc,
         JS_FreeValue(ctx, on_error);
         return JS_EXCEPTION;
     }
-    key = imagelist_normalize_path(path);
+    key = athena_path_normalize(path);
     if (!key)
         goto out_of_memory;
 
@@ -1124,9 +800,10 @@ static JSValue imagelist_process(JSContext *ctx, JSValueConst this_val,
             continue;
         }
 
-        if (list->worker.thread) {
+        if (list->decoder) {
             bool exited;
-            ImageListRequest *request = imagelist_worker_take(list, &exited);
+            AthenaImageDecodeResult *request =
+                athena_image_decoder_take(list->decoder, &exited);
 
             if (!request) {
                 if (!exited)
@@ -1137,13 +814,13 @@ static JSValue imagelist_process(JSContext *ctx, JSValueConst this_val,
             index = imagelist_find_id(list, request->id);
             if (index < 0) {
                 /* Cancelled while it was being decoded. */
-                imagelist_request_free(request);
+                athena_image_decode_result_free(request);
                 continue;
             }
             imagelist_remove_job(list, (unsigned int)index, &job);
             buffer = request->buffer;
             memset(&request->buffer, 0, sizeof(request->buffer));
-            imagelist_request_free(request);
+            athena_image_decode_result_free(request);
         } else {
             imagelist_remove_job(list, 0, &job);
             memset(&buffer, 0, sizeof(buffer));
@@ -1252,12 +929,12 @@ static JSValue imagelist_stats(JSContext *ctx, JSValueConst this_val,
         if (list->jobs[i].submitted)
             loading++;
     }
-    if (list->worker.thread &&
-        athena_mutex_core_lock(list->worker.mutex) >= 0) {
-        buffered = list->worker.result_bytes;
-        peak = list->worker.peak_bytes;
-        decode_ticks += list->worker.decode_ticks;
-        athena_mutex_core_unlock(list->worker.mutex);
+    if (list->decoder) {
+        AthenaImageDecoderStats decoder;
+        athena_image_decoder_stats(list->decoder, &decoder);
+        buffered = decoder.buffered_bytes;
+        peak = decoder.peak_bytes;
+        decode_ticks += decoder.decode_ticks;
     }
     if (list->peak_bytes > peak)
         peak = list->peak_bytes;

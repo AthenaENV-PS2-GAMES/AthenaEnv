@@ -7,11 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/vector_math.c",
-    "quickjs/ath_vector.c"
-  ],
-  "includes": [
-    "."
+    "native/vector_math.c"
   ],
   "dependencies": {
     "modules": [],
@@ -19,10 +15,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_vector.c"
+    ],
     "module_name": "Vector",
     "global_alias": "Vector",
-    "init_func": "athena_vector_init",
-    "header": "quickjs/ath_vector.h"
+    "init_func": "athena_vector_init"
   },
   "types": "vector.d.ts"
 }

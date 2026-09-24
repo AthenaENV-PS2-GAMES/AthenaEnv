@@ -8,16 +8,7 @@
   "default": true,
   "sources": [
     "native/tilemap.c",
-    "vu1/draw_2D_tile_list.vsm",
-    "quickjs/ath_tilemap.c"
-  ],
-  "includes": [
-    ".",
-    "native",
-    "quickjs",
-    "../graphics",
-    "../image",
-    "../image/quickjs"
+    "vu1/draw_2D_tile_list.vsm"
   ],
   "dependencies": {
     "modules": [
@@ -28,10 +19,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_tilemap.c"
+    ],
     "module_name": "TileMap",
     "global_alias": "TileMap",
-    "init_func": "athena_tilemap_init",
-    "header": "quickjs/ath_tilemap.h"
+    "init_func": "athena_tilemap_init"
   },
   "types": "tilemap.d.ts"
 }

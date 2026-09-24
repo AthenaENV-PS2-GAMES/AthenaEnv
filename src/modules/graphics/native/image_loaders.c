@@ -4,12 +4,12 @@
 #include <malloc.h>
 #include <math.h>
 #include <fcntl.h>
-#include <dbgprintf.h>
+#include <athena/debug.h>
 
 #include <jpeglib.h>
 #include <png.h>
 
-#include <graphics.h>
+#include <athena/graphics.h>
 
 
 struct gsBitMapFileHeader

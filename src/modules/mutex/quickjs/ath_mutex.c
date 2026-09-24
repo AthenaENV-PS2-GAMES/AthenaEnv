@@ -1,6 +1,6 @@
 #include <ath_env.h>
 #include <ath_gil.h>
-#include "../native/mutex.h"
+#include <athena/mutex.h>
 
 static JSClassID athena_mutex_class_id;
 

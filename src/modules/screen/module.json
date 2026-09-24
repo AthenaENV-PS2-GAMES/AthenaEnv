@@ -7,11 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "quickjs/ath_screen.c"
-  ],
-  "includes": [
-    ".",
-    "../graphics"
+    "native/screen.c"
   ],
   "dependencies": {
     "modules": [
@@ -21,10 +17,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_screen.c"
+    ],
     "module_name": "Screen",
     "global_alias": "Screen",
-    "init_func": "athena_screen_init",
-    "header": "quickjs/ath_screen.h"
+    "init_func": "athena_screen_init"
   },
   "types": "screen.d.ts"
 }

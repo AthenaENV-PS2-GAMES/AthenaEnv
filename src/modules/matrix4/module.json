@@ -7,12 +7,7 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/matrix4.c",
-    "quickjs/ath_matrix4.c"
-  ],
-  "includes": [
-    ".",
-    "../vector"
+    "native/matrix4.c"
   ],
   "dependencies": {
     "modules": [
@@ -22,10 +17,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_matrix4.c"
+    ],
     "module_name": "Matrix4",
     "global_alias": "Matrix4",
-    "init_func": "athena_matrix4_init",
-    "header": "quickjs/ath_matrix4.h"
+    "init_func": "athena_matrix4_init"
   },
   "types": "matrix4.d.ts"
 }

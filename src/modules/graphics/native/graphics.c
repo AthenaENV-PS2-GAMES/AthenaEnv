@@ -8,12 +8,12 @@
 
 #include <time.h>
 
-#include <graphics.h>
-#include <athena_math.h>
-#include <dbgprintf.h>
-#include <owl_packet.h>
+#include <athena/graphics.h>
+#include <athena/math.h>
+#include <athena/debug.h>
+#include <athena/graphics/owl_packet.h>
 
-#include <texture_manager.h>
+#include <athena/graphics/texture_manager.h>
 
 static const u64 BLACK_RGBAQ   = GS_SETREG_RGBAQ(0x00,0x00,0x00,0x80,0x00);
 

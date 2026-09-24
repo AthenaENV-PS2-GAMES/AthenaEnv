@@ -1,0 +1,44 @@
+{
+  "id": "usbmass",
+  "name": "USB Mass Storage",
+  "description": "USB storage drivers (usbd, bdm, FAT, usbmass_bd): boot from and access mass:/.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/usbmass.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "usbd",
+      "bdm",
+      "bdmfs_fatfs",
+      "usbmass_bd"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_usbmass_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "usbd",
+      "irx": "$(PS2SDK)/iop/irx/usbd.irx"
+    },
+    {
+      "name": "bdm",
+      "irx": "$(PS2SDK)/iop/irx/bdm.irx"
+    },
+    {
+      "name": "bdmfs_fatfs",
+      "irx": "$(PS2SDK)/iop/irx/bdmfs_fatfs.irx"
+    },
+    {
+      "name": "usbmass_bd",
+      "irx": "$(PS2SDK)/iop/irx/usbmass_bd.irx"
+    }
+  ],
+  "types": null
+}

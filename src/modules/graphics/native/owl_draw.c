@@ -7,11 +7,11 @@
 
 #include <time.h>
 
-#include <graphics.h>
-#include <athena_math.h>
-#include <dbgprintf.h>
+#include <athena/graphics.h>
+#include <athena/math.h>
+#include <athena/debug.h>
 
-#include <owl_packet.h>
+#include <athena/graphics/owl_packet.h>
 
 static int texture_upload_pending(int texture_id)
 {

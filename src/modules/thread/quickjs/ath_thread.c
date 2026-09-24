@@ -4,7 +4,7 @@
 
 #include <ath_env.h>
 #include <ath_gil.h>
-#include "../native/thread.h"
+#include <athena/thread.h>
 
 static JSClassID athena_thread_class_id;
 

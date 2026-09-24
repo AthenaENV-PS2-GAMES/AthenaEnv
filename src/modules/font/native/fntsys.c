@@ -9,11 +9,11 @@
 #include <math.h>
 #include <unistd.h>
 #include <sys/fcntl.h>
-#include <fntsys.h>
-#include <utf8.h>
-#include <atlas.h>
-#include <graphics.h>
-#include <owl_packet.h>
+#include "fntsys.h"
+#include <athena/utf8.h>
+#include "atlas.h"
+#include <athena/graphics.h>
+#include <athena/graphics/owl_packet.h>
 
 extern unsigned char quicksand_regular[] __attribute__((aligned(16)));
 extern int size_quicksand_regular;
@@ -21,9 +21,9 @@ extern int size_quicksand_regular;
 #include <sys/types.h>
 #include <ft2build.h>
 
-#include <strUtils.h>
+#include <athena/str_utils.h>
 
-#include <macros.h>
+#include <athena/macros.h>
 
 #include FT_FREETYPE_H
 

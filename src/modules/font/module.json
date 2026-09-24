@@ -10,14 +10,9 @@
     "native/atlas.c",
     "native/fntsys.c",
     "native/font.c",
-    "native/image_font.c",
-    "quickjs/ath_font.c"
+    "native/image_font.c"
   ],
   "includes": [
-    ".",
-    "native",
-    "quickjs",
-    "../graphics",
     "$(PS2DEV)/gsKit/include",
     "$(PS2SDK)/ports/include/freetype2"
   ],
@@ -31,12 +26,20 @@
       "-lfreetype"
     ]
   },
+  "embed": [
+    {
+      "name": "quicksand_regular",
+      "file": "assets/fonts/Quicksand-Regular.ttf"
+    }
+  ],
   "quickjs": {
+    "sources": [
+      "quickjs/ath_font.c"
+    ],
     "module_name": "Font",
     "global_alias": "Font",
     "global_export": "Font.Font",
-    "init_func": "athena_font_init",
-    "header": "quickjs/ath_font.h"
+    "init_func": "athena_font_init"
   },
   "types": "font.d.ts"
 }

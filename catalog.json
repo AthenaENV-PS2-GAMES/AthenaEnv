@@ -1,8 +1,29 @@
 {
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-23T21:29:10.773Z",
+  "generatedAt": "2026-09-24T00:07:27.179Z",
   "modules": [
+    {
+      "id": "cdrom",
+      "name": "CD/DVD",
+      "description": "Disc filesystem driver (cdfs): boot from and read cdrom0:/cdfs:.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "cdfs"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
     {
       "id": "color",
       "name": "Color",
@@ -18,7 +39,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Color"
+      "global_alias": "Color",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "draw",
@@ -36,7 +61,32 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Draw"
+      "global_alias": "Draw",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "erl",
+      "name": "Native Modules (ERL)",
+      "description": "Loads relocatable native modules (.erl) at runtime, e.g. import from 'mymodule.erl'. Exports every symbol of the binary, which costs RAM and disables dead-code removal.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": [
+          "-lerl"
+        ]
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
     },
     {
       "id": "font",
@@ -56,7 +106,11 @@
           "-lfreetype"
         ]
       },
-      "global_alias": "Font"
+      "global_alias": "Font",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "gamepad",
@@ -76,9 +130,15 @@
           "ds34usb",
           "ds34bt"
         ],
-        "ee_libs": []
+        "ee_libs": [
+          "-lpad"
+        ]
       },
-      "global_alias": "Gamepad"
+      "global_alias": "Gamepad",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "graphics",
@@ -98,7 +158,11 @@
           "-lpng"
         ]
       },
-      "global_alias": null
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
     },
     {
       "id": "image",
@@ -115,7 +179,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Image"
+      "global_alias": "Image",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "imagelist",
@@ -134,7 +202,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "ImageList"
+      "global_alias": "ImageList",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "iop",
@@ -146,10 +218,16 @@
       "default": true,
       "dependencies": {
         "modules": [],
-        "iop": [],
+        "iop": [
+          "freeram"
+        ],
         "ee_libs": []
       },
-      "global_alias": "IOP"
+      "global_alias": "IOP",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "matrix4",
@@ -166,7 +244,36 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Matrix4"
+      "global_alias": "Matrix4",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "memcard",
+      "name": "Memory Card",
+      "description": "Memory card drivers (sio2man, mcman, mcserv): boot from and access mc0:/mc1:.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "sio2man",
+          "mcman",
+          "mcserv"
+        ],
+        "ee_libs": [
+          "-lmc"
+        ]
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
     },
     {
       "id": "mutex",
@@ -181,7 +288,32 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Mutex"
+      "global_alias": "Mutex",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "poweroff",
+      "name": "Power Off",
+      "description": "IOP poweroff driver, started from athena.ini or IOP.loadModule().",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "poweroff"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
     },
     {
       "id": "screen",
@@ -198,7 +330,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Screen"
+      "global_alias": "Screen",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "system",
@@ -210,12 +346,16 @@
       "default": true,
       "dependencies": {
         "modules": [],
-        "iop": [
-          "freeram"
-        ],
-        "ee_libs": []
+        "iop": [],
+        "ee_libs": [
+          "-lmc"
+        ]
       },
-      "global_alias": "System"
+      "global_alias": "System",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "thread",
@@ -230,7 +370,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Thread"
+      "global_alias": "Thread",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "tilemap",
@@ -248,7 +392,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "TileMap"
+      "global_alias": "TileMap",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     },
     {
       "id": "timer",
@@ -263,7 +411,35 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Timer"
+      "global_alias": "Timer",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "usbmass",
+      "name": "USB Mass Storage",
+      "description": "USB storage drivers (usbd, bdm, FAT, usbmass_bd): boot from and access mass:/.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "usbd",
+          "bdm",
+          "bdmfs_fatfs",
+          "usbmass_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
     },
     {
       "id": "vector",
@@ -278,7 +454,11 @@
         "iop": [],
         "ee_libs": []
       },
-      "global_alias": "Vector"
+      "global_alias": "Vector",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
     }
   ]
 }

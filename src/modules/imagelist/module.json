@@ -7,16 +7,8 @@
   "required": false,
   "default": true,
   "sources": [
-    "quickjs/ath_imagelist.c"
-  ],
-  "includes": [
-    ".",
-    "quickjs",
-    "../thread",
-    "../mutex",
-    "../image",
-    "../image/quickjs",
-    "../graphics"
+    "native/decoder.c",
+    "native/path.c"
   ],
   "dependencies": {
     "modules": [
@@ -28,11 +20,13 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_imagelist.c"
+    ],
     "module_name": "ImageList",
     "global_alias": "ImageList",
     "global_export": "ImageList.ImageList",
-    "init_func": "athena_imagelist_init",
-    "header": "quickjs/ath_imagelist.h"
+    "init_func": "athena_imagelist_init"
   },
   "types": "imagelist.d.ts"
 }

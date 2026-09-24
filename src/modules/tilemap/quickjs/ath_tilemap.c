@@ -6,9 +6,9 @@
 
 #include <ath_env.h>
 
-#include "../../image/native/image.h"
-#include "../../image/quickjs/ath_image.h"
-#include "../native/tilemap.h"
+#include <athena/image.h>
+#include <athena/js/image.h>
+#include <athena/tilemap.h>
 #include "ath_tilemap.h"
 
 /* Keeps sprite byte offsets representable in 32 bits. */

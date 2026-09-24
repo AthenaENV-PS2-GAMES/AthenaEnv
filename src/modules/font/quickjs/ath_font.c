@@ -4,9 +4,9 @@
 #include <string.h>
 
 #include <ath_env.h>
-#include <fntsys.h>
+#include "../native/fntsys.h"
 
-#include "../native/font.h"
+#include <athena/font.h>
 #include "ath_font.h"
 
 static JSClassID font_class_id;

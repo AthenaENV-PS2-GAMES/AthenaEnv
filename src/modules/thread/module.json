@@ -7,22 +7,24 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/thread.c",
-    "quickjs/ath_thread.c"
-  ],
-  "includes": [
-    "."
+    "native/thread.c"
   ],
   "dependencies": {
     "modules": [],
     "iop": [],
     "ee_libs": []
   },
+  "native": {
+    "quiesce": "athena_thread_core_wait_all",
+    "stop_requested": "athena_thread_core_stop_requested"
+  },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_thread.c"
+    ],
     "module_name": "Thread",
     "global_alias": "Thread",
-    "init_func": "athena_thread_init",
-    "header": "quickjs/ath_thread.h"
+    "init_func": "athena_thread_init"
   },
   "types": "thread.d.ts"
 }

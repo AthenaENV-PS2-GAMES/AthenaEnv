@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <graphics.h>
+#include <athena/graphics.h>
 
-#include "image.h"
+#include <athena/image.h>
 
 static GSSURFACE *image_alloc_surface(bool delayed)
 {

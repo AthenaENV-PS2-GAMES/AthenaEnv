@@ -1,2 +1,2 @@
-#include <vif.h>
+#include <athena/graphics/vif.h>
 

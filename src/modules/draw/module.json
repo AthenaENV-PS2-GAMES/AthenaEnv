@@ -6,13 +6,7 @@
   "version": "1.0.0",
   "required": false,
   "default": true,
-  "sources": [
-    "quickjs/ath_draw.c"
-  ],
-  "includes": [
-    ".",
-    "../graphics"
-  ],
+  "sources": [],
   "dependencies": {
     "modules": [
       "graphics",
@@ -22,10 +16,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_draw.c"
+    ],
     "module_name": "Draw",
     "global_alias": "Draw",
-    "init_func": "athena_draw_init",
-    "header": "quickjs/ath_draw.h"
+    "init_func": "athena_draw_init"
   },
   "types": "draw.d.ts"
 }

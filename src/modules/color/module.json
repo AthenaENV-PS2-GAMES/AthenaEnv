@@ -6,13 +6,7 @@
   "version": "1.0.0",
   "required": false,
   "default": true,
-  "sources": [
-    "quickjs/ath_color.c"
-  ],
-  "includes": [
-    ".",
-    "../graphics"
-  ],
+  "sources": [],
   "dependencies": {
     "modules": [
       "graphics"
@@ -21,10 +15,12 @@
     "ee_libs": []
   },
   "quickjs": {
+    "sources": [
+      "quickjs/ath_color.c"
+    ],
     "module_name": "Color",
     "global_alias": "Color",
-    "init_func": "athena_color_init",
-    "header": "quickjs/ath_color.h"
+    "init_func": "athena_color_init"
   },
   "types": "color.d.ts"
 }

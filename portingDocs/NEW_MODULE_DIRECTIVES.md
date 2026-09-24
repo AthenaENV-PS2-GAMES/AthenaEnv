@@ -12,7 +12,8 @@ Antes de criar arquivos, determine se o componente e:
 - **Modulo JavaScript nativo**: exporta funcoes ou propriedades para scripts
   QuickJS e fica em `src/modules/<nome>/`.
 - **Modulo IOP**: carrega um driver ou servico no IOP por meio do gerenciador
-  de modulos, normalmente em `src/module_system.c`.
+  de modulos. Drivers de boot ficam em `src/core/iop_registry.c`; drivers
+  usados por um unico modulo sao embutidos pelo proprio modulo (`embed_irx`).
 - **Camada combinada**: possui uma API JavaScript e tambem depende de um modulo
   IOP. Nesse caso, a inicializacao do IOP deve continuar separada do registro
   dos exports QuickJS.
@@ -28,20 +29,28 @@ Para um modulo JavaScript nativo, crie pelo menos:
 ```text
 src/modules/<nome>/
   module.json
+  include/athena/
+    <nome>.h          API C publica: #include <athena/<nome>.h>
   native/
     <nome>.c
-    <nome>.h
+    <interno>.h       headers privados, incluidos com aspas relativas
   quickjs/
     ath_<nome>.c
     ath_<nome>.h
   <nome>.d.ts
 ```
 
+So o `include/` dos modulos selecionados entra no include path. Um modulo que
+usa outro precisa declara-lo em `dependencies.modules`; caso contrario, o
+`#include <athena/<outro>.h>` falha ao compilar o modulo sozinho. Headers de
+binding QuickJS usados por outros modulos ficam em `include/athena/js/`.
+
 Use nomes em minusculas para a pasta e o identificador do modulo. A separacao
 entre a implementacao nativa e a interface QuickJS e obrigatoria para modulos
 com regra de negocio propria:
 
-- `native/<nome>.c/.h`: estado, algoritmos, ciclo de vida e contrato nativo;
+- `include/athena/<nome>.h` + `native/<nome>.c`: estado, algoritmos, ciclo de
+  vida e contrato nativo;
 - `quickjs/ath_<nome>.c/.h`: adaptacao de argumentos, valores e erros QuickJS;
 - `<nome>.d.ts`: contrato publico consumido pelos scripts.
 
@@ -98,12 +107,46 @@ no manifesto igual ao nome importado pelos scripts:
 
 ```json
 {
+  "id": "timer",
   "name": "Timer",
-  "sources": ["timer.c", "ath_timer.c"],
-  "header": "ath_timer.h",
+  "sources": ["native/timer.c"],
+  "dependencies": { "modules": [], "iop": [], "ee_libs": [] },
+  "native": {
+    "init": "athena_timer_module_init",
+    "shutdown": "athena_timer_module_shutdown"
+  },
+  "quickjs": {
+    "sources": ["quickjs/ath_timer.c"],
+    "module_name": "Timer",
+    "global_alias": "Timer",
+    "init_func": "athena_timer_init"
+  },
   "types": "timer.d.ts"
 }
 ```
+
+- `sources`: somente a implementacao nativa. E compilada nos dois runtimes
+  (`RUNTIME=quickjs` e `RUNTIME=native`) e nao pode incluir QuickJS.
+- `quickjs.sources`: adaptadores QuickJS. So entram com `RUNTIME=quickjs`.
+- `includes` (opcional): somente caminhos externos, como
+  `$(PS2DEV)/gsKit/include`. Headers do proprio modulo ficam em `include/`.
+- `native` (opcional): hooks de ciclo de vida chamados pelo core em ambos os
+  runtimes, na ordem de dependencia. Todos sao `(void)`:
+  - `register_iop` registra os drivers IRX do modulo antes do reset do IOP
+    no boot (ex.: `memcard`, `usbmass`, `cdrom`);
+  - `init` retorna `int` (< 0 aborta o boot);
+  - `shutdown` roda em ordem inversa ao encerrar;
+  - `quiesce` aguarda trabalho em segundo plano antes de o runtime ser
+    destruido (ex.: `thread`);
+  - `stop_requested` retorna != 0 para pedir que a aplicacao pare.
+  O core nunca chama funcoes de um modulo diretamente: qualquer interacao
+  passa por esses hooks, para que o modulo possa ser removido do build.
+- `embed` (opcional): arquivos embutidos com bin2c como `<name>[]` e
+  `size_<name>`, apenas quando o modulo esta no build (ex.: a fonte padrao do
+  `font`, o `loader_elf` do `system`). `build` indica um diretorio que gera o
+  arquivo.
+- `build.export_symbols`: somente o modulo `erl` usa. Gera a tabela de
+  simbolos do binario e desliga o `--gc-sections`.
 
 Os campos exatos devem seguir o formato aceito por `tools/modules.js`. Nao
 edite os arquivos gerados para compensar um manifesto incorreto.
@@ -122,9 +165,24 @@ e so entra no ELF quando o modulo esta ativo. `build` indica um diretorio de
 ]
 ```
 
-O modulo registra esses drivers no IOP manager em tempo de execucao
-(`iopman_register_module`), na primeira vez que precisar deles, e nunca
-durante o registro QuickJS. Veja `src/modules/gamepad/native/gamepad_iop.c`.
+O modulo registra esses drivers no IOP manager, nunca durante o registro
+QuickJS:
+
+- drivers que precisam existir no boot (dispositivos de armazenamento,
+  drivers iniciados por `athena.ini`) sao registrados no hook
+  `native.register_iop`;
+- drivers usados sob demanda podem ser registrados na primeira vez que forem
+  necessarios (veja `src/modules/gamepad/native/gamepad_iop.c`).
+
+Use `iopman_ensure_module_buffer()` quando o driver puder ser compartilhado
+por outro modulo (`sio2man` em `memcard` e `gamepad`, `usbd` em `usbmass`
+e `gamepad`): ele reaproveita o registro existente. Os dois modulos declaram
+o mesmo `embed_irx`; o gerador embute o arquivo uma unica vez.
+
+O nucleo embute somente `iomanX` e `fileXio`. Codigo que depende de um
+driver opcional deve verificar em tempo de execucao se o modulo esta no build
+(`athena_module_enabled("memcard")`) em vez de declarar uma dependencia que
+obrigaria todo build a inclui-lo.
 
 ## 3. Implemente o contrato nativo e a interface QuickJS
 
@@ -281,9 +339,10 @@ nele:
 - chamadas que possam bloquear indefinidamente;
 - inicializacao dependente de ordem externa.
 
-Quando a API depender de um modulo IOP, registre o driver no fluxo de
-`src/module_system.c` e faca a API JS verificar explicitamente se o servico
-esta disponivel antes de usa-lo.
+Quando a API depender de um modulo IOP, embuta o driver pelo manifesto
+(`embed_irx`), registre-o no IOP manager na primeira vez que for necessario e
+faca a API verificar explicitamente se o servico esta disponivel antes de
+usa-lo. So drivers exigidos pelo boot pertencem a `src/core/iop_registry.c`.
 
 ## 7. Atualize a tipagem e os artefatos por automacao
 
@@ -296,8 +355,10 @@ Apos criar ou alterar o modulo:
 5. regenere o catalogo e os typings agregados;
 6. confira o diff dos arquivos gerados.
 
-Quando a implementacao for separada, confirme que tanto
-`native/<nome>.c` quanto `quickjs/ath_<nome>.c` estao listados em `module.json`.
+Quando a implementacao for separada, confirme que `native/<nome>.c` esta em
+`sources` e `quickjs/ath_<nome>.c` em `quickjs.sources` no `module.json`.
+Compile tambem com `RUNTIME=native` para garantir que a parte nativa nao
+depende do QuickJS.
 Adicionar apenas o adaptador
 QuickJS gera falha de link ou incentiva a reintroducao da regra de negocio no
 arquivo errado.
@@ -305,7 +366,9 @@ arquivo errado.
 Arquivos como estes sao derivados e nao devem ser editados manualmente:
 
 ```text
-src/generated/modules_registry.c
+src/generated/athena_config.h
+src/generated/native_registry.c
+src/generated/js_registry.c
 Makefile.modules
 catalog.json
 public/catalog.json

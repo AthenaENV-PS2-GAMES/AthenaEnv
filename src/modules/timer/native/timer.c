@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "timer.h"
+#include <athena/timer.h>
 
 struct AthenaTimer {
     bool playing;

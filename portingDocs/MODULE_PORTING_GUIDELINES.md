@@ -119,7 +119,7 @@ src/modules/<modulo>/module.json
 ```
 
 Depois, regenere os artefatos usando a automacao existente. O registro
-gerado em `src/generated/modules_registry.c` e o bootstrap de imports nao
+gerado em `src/generated/js_registry.c` (e `native_registry.c`) e o bootstrap de imports nao
 devem ser editados diretamente.
 
 ### 4. Evite efeitos colaterais durante o registro

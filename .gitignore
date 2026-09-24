@@ -20,3 +20,7 @@ src/exports.c
 *.erl
 
 path.md
+lib/
+
+.build-cache/
+dist/

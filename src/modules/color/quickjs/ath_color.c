@@ -1,7 +1,8 @@
 #include <stdint.h>
 
 #include <ath_env.h>
-#include <graphics.h>
+#include <athena/graphics.h>
+#include <athena/color.h>
 
 #include "ath_color.h"
 
@@ -26,7 +27,7 @@ static int color_value(JSContext *ctx, JSValueConst value, uint32_t *result) {
 
 static JSValue color_new(JSContext *ctx, JSValueConst this_val, int argc,
     JSValueConst *argv) {
-    uint32_t r, g, b, a = 0x80;
+    uint32_t r, g, b, a = ATHENA_COLOR_DEFAULT_ALPHA;
     if (!color_argc(ctx, argc, 3, 4, "Color.new"))
         return JS_EXCEPTION;
     if (!color_value(ctx, argv[0], &r) || !color_value(ctx, argv[1], &g) ||
@@ -34,8 +35,7 @@ static JSValue color_new(JSContext *ctx, JSValueConst this_val, int argc,
         return JS_EXCEPTION;
     if (argc == 4 && !color_value(ctx, argv[3], &a))
         return JS_EXCEPTION;
-    return JS_NewUint32(ctx, (r & 0xff) | ((g & 0xff) << 8) |
-        ((b & 0xff) << 16) | ((a & 0xff) << 24));
+    return JS_NewUint32(ctx, athena_color_new(r, g, b, a));
 }
 
 static JSValue color_get_component(JSContext *ctx, JSValueConst value,
@@ -43,12 +43,7 @@ static JSValue color_get_component(JSContext *ctx, JSValueConst value,
     uint32_t color;
     if (!color_value(ctx, value, &color))
         return JS_EXCEPTION;
-    switch (component) {
-    case 0: return JS_NewUint32(ctx, R(color));
-    case 1: return JS_NewUint32(ctx, G(color));
-    case 2: return JS_NewUint32(ctx, B(color));
-    default: return JS_NewUint32(ctx, A(color));
-    }
+    return JS_NewUint32(ctx, athena_color_get(color, component));
 }
 
 static JSValue color_get_r(JSContext *ctx, JSValueConst this_val, int argc,
@@ -85,14 +80,7 @@ static JSValue color_set_component(JSContext *ctx, JSValueConst *argv,
     if (!color_value(ctx, argv[0], &color) ||
         !color_value(ctx, argv[1], &value))
         return JS_EXCEPTION;
-    value &= 0xff;
-    switch (component) {
-    case 0: color = (color & 0xffffff00U) | value; break;
-    case 1: color = (color & 0xffff00ffU) | (value << 8); break;
-    case 2: color = (color & 0xff00ffffU) | (value << 16); break;
-    default: color = (color & 0x00ffffffU) | (value << 24); break;
-    }
-    return JS_NewUint32(ctx, color);
+    return JS_NewUint32(ctx, athena_color_set(color, component, value));
 }
 
 static JSValue color_set_r(JSContext *ctx, JSValueConst this_val, int argc,

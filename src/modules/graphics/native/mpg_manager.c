@@ -3,8 +3,8 @@
 #include <string.h>
 #include <malloc.h>
 
-#include <owl_packet.h>
-#include <mpg_manager.h>
+#include <athena/graphics/owl_packet.h>
+#include <athena/graphics/mpg_manager.h>
 
 struct vu_mpg_cache {
     vu_mpg *entries[MPG_CACHE_SIZE];

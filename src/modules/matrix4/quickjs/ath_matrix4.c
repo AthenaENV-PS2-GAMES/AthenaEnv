@@ -3,9 +3,9 @@
 #include <malloc.h>
 
 #include <ath_env.h>
-#include <athena_module.h>
+#include <athena/module.h>
 
-#include "../native/matrix4.h"
+#include <athena/matrix4.h>
 #include "ath_matrix4.h"
 
 static JSClassID matrix4_class_id;

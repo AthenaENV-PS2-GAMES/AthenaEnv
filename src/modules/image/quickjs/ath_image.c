@@ -4,10 +4,10 @@
 #include <math.h>
 
 #include <ath_env.h>
-#include <graphics.h>
+#include <athena/graphics.h>
 
-#include "../native/image.h"
-#include "ath_image.h"
+#include <athena/image.h>
+#include <athena/js/image.h>
 
 static JSClassID image_class_id;
 
