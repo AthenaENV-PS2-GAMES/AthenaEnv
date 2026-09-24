@@ -28,6 +28,10 @@ Builds run one at a time. Incremental compilation (`obj/<runtime>/`) keeps a bui
 
 ## API
 
+TypeScript types for every request and response are in [`tools/athena-api.d.ts`](../tools/athena-api.d.ts), published with the site as `/athena-api.d.ts`. Front ends (the picker in `public/`, an external React site) should use them instead of redeclaring the shapes.
+
+**Versioning:** `catalog.json`, `GET /api/catalog` and every build job carry `schemaVersion` (currently `1`). It is bumped only on incompatible changes, such as a removed or renamed field or a changed meaning; new optional fields do not bump it. Clients should refuse, or degrade to local-build instructions, when they see a version they do not know.
+
 ```http
 POST /api/builds
 Content-Type: application/json
@@ -39,6 +43,7 @@ Content-Type: application/json
 
 ```json
 {
+  "schemaVersion": 1,
   "id": "<sha256>",
   "status": "queued | building | done | failed",
   "position": 1,
@@ -46,6 +51,8 @@ Content-Type: application/json
   "modules": ["color", "font", "gamepad", "graphics", "system"],
   "requested": ["font", "gamepad"],
   "commit": "…",
+  "created": "2026-09-24T12:00:00.000Z",
+  "finished": null,
   "error": null,
   "artifacts": [{ "name": "athena.elf", "url": "/api/builds/<id>/athena.elf" }],
   "log": "/api/builds/<id>/build.log"
@@ -54,7 +61,7 @@ Content-Type: application/json
 
 - `GET /api/builds/<id>`: status (poll it until `done` or `failed`).
 - `GET /api/builds/<id>/<artifact>`: download an artifact, or `build.log`.
-- `GET /api/catalog`: the modules and runtimes this server builds.
+- `GET /api/catalog`: the same document as `catalog.json`, generated from the server's checkout, plus `commit`, `runtimes` and `artifacts` (artifact names per runtime). Use it, rather than the `catalog.json` on GitHub Pages, to decide which modules can be requested: the server may be on a different commit.
 
 Unknown module ids, a malformed body and a full queue answer `400` and `503` with `{ "error": "…" }`. Module ids are checked against `src/modules/*/module.json` and passed to child processes as arguments, never through a shell.
 

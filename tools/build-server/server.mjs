@@ -9,7 +9,9 @@
  *   POST /api/builds            { "modules": ["gamepad", "font"], "runtime": "quickjs" | "native" }
  *   GET  /api/builds/:id        build status, resolved modules, artifacts
  *   GET  /api/builds/:id/:file  download an artifact (or build.log)
- *   GET  /api/catalog           modules this server can build
+ *   GET  /api/catalog           modules this server can build (catalog.json + commit)
+ *
+ * Response types: tools/athena-api.d.ts (published as /athena-api.d.ts).
  *
  * Builds run one at a time: `configure` rewrites Makefile.modules and
  * src/generated in the working tree. Identical requests (same commit, runtime
@@ -31,7 +33,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-import { discoverModules, resolveDependencies } from '../modules.js';
+import { discoverModules, resolveDependencies, buildCatalog, CATALOG_SCHEMA_VERSION } from '../modules.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ATHENA_ROOT = path.resolve(process.env.ATHENA_ROOT || path.join(HERE, '..', '..'));
@@ -97,6 +99,7 @@ function writeStatus(job) {
 function publicJob(job) {
     const position = job.status === 'queued' ? queue.indexOf(job.id) + 1 : 0;
     return {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
         id: job.id,
         status: job.status,
         position,
@@ -104,6 +107,8 @@ function publicJob(job) {
         modules: job.modules,
         requested: job.requested,
         commit: job.commit,
+        created: job.created,
+        finished: job.finished || null,
         error: job.error || null,
         artifacts: (job.artifacts || []).map(name => ({ name, url: `/api/builds/${job.id}/${name}` })),
         log: `/api/builds/${job.id}/build.log`,
@@ -258,19 +263,13 @@ function readBody(req) {
     });
 }
 
-function catalog() {
-    return {
-        commit: COMMIT,
-        runtimes: Object.keys(RUNTIMES),
-        modules: MODULES.map(m => ({
-            id: m.id,
-            name: m.name,
-            required: !!m.required,
-            default: !!m.default,
-            dependencies: m.dependencies?.modules || [],
-        })),
-    };
-}
+/* Same shape as catalog.json, for the commit this server builds. */
+const CATALOG = {
+    ...buildCatalog(MODULES),
+    commit: COMMIT,
+    runtimes: Object.keys(RUNTIMES),
+    artifacts: Object.fromEntries(Object.entries(RUNTIMES).map(([name, r]) => [name, Object.keys(r.artifacts)])),
+};
 
 const CONTENT_TYPES = {
     '.elf': 'application/octet-stream',
@@ -293,7 +292,7 @@ async function handle(req, res) {
     const parts = url.pathname.split('/').filter(Boolean);
 
     if (req.method === 'GET' && url.pathname === '/api/catalog') {
-        return send(res, 200, catalog());
+        return send(res, 200, CATALOG);
     }
 
     if (req.method === 'POST' && url.pathname === '/api/builds') {

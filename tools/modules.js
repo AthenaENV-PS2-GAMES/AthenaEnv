@@ -86,25 +86,32 @@ function resolveDependencies(selectedIds, allModules) {
     return ordered;
 }
 
-/**
- * Command: catalog
- * Generates catalog.json for the web portal
+/*
+ * Catalog contract shared by catalog.json (GitHub Pages) and the build
+ * server's GET /api/catalog. Bump CATALOG_SCHEMA_VERSION on incompatible
+ * changes and keep tools/athena-api.d.ts in sync.
  */
-function commandCatalog() {
-    const modules = discoverModules();
-    const catalog = {
+const CATALOG_SCHEMA_VERSION = 1;
+
+function buildCatalog(modules = discoverModules()) {
+    return {
+        schemaVersion: CATALOG_SCHEMA_VERSION,
         name: "AthenaEnv Module Catalog",
         version: "2.0.0",
         generatedAt: new Date().toISOString(),
         modules: modules.map(m => ({
             id: m.id,
             name: m.name,
-            description: m.description,
+            description: m.description || "",
             category: m.category || "General",
             version: m.version || "1.0.0",
             required: !!m.required,
             default: !!m.default,
-            dependencies: m.dependencies || { modules: [], iop: [], ee_libs: [] },
+            dependencies: {
+                modules: m.dependencies?.modules || [],
+                iop: m.dependencies?.iop || [],
+                ee_libs: m.dependencies?.ee_libs || []
+            },
             global_alias: m.quickjs?.global_alias || null,
             api: {
                 // C API: native sources or public headers (include/athena/).
@@ -113,10 +120,18 @@ function commandCatalog() {
             }
         }))
     };
+}
+
+/**
+ * Command: catalog
+ * Generates catalog.json and publishes it, the typings and the API types to public/.
+ */
+function commandCatalog() {
+    const catalog = buildCatalog();
 
     const outPath = path.join(ROOT_DIR, 'catalog.json');
     fs.writeFileSync(outPath, JSON.stringify(catalog, null, 2), 'utf8');
-    console.log(`[Athena] Catalog generated successfully at ${outPath} (${modules.length} modules registered).`);
+    console.log(`[Athena] Catalog generated successfully at ${outPath} (${catalog.modules.length} modules registered).`);
 
     const publicDir = path.join(ROOT_DIR, 'public');
     if (fs.existsSync(publicDir)) {
@@ -125,6 +140,7 @@ function commandCatalog() {
         if (fs.existsSync(dtsSrc)) {
             fs.copyFileSync(dtsSrc, path.join(publicDir, 'athena.d.ts'));
         }
+        fs.copyFileSync(path.join(__dirname, 'athena-api.d.ts'), path.join(publicDir, 'athena-api.d.ts'));
     }
     return catalog;
 }
@@ -467,7 +483,7 @@ function parseConfigureArgs(argv) {
     return modulesList;
 }
 
-export { discoverModules, resolveDependencies };
+export { discoverModules, resolveDependencies, buildCatalog, CATALOG_SCHEMA_VERSION };
 
 // CLI Dispatcher (only when run directly, not when imported by the build server)
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
