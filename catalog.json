@@ -2,8 +2,31 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-24T01:57:26.846Z",
+  "generatedAt": "2026-09-24T02:14:04.607Z",
   "modules": [
+    {
+      "id": "archive",
+      "name": "Archive",
+      "description": "Read zip and gzip archives and extract zip, tar and tar.gz files.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": [
+          "-lzip",
+          "-llzma",
+          "-lz"
+        ]
+      },
+      "global_alias": "Archive",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
     {
       "id": "cdrom",
       "name": "CD/DVD",

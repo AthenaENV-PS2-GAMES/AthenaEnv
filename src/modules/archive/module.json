@@ -1,0 +1,30 @@
+{
+  "id": "archive",
+  "name": "Archive",
+  "description": "Read zip and gzip archives and extract zip, tar and tar.gz files.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/archive.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": [
+      "-lzip",
+      "-llzma",
+      "-lz"
+    ]
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_archive.c"
+    ],
+    "module_name": "Archive",
+    "global_alias": "Archive",
+    "init_func": "athena_archive_init"
+  },
+  "types": "archive.d.ts"
+}
