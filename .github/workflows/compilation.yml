@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - main
-      - my-version
+      - modular
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
-      - my-version
+      - modular
   workflow_dispatch:
 
 permissions:
@@ -49,17 +49,17 @@ jobs:
           file_pattern: "catalog.json public/*"
 
       - name: Setup Pages
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/my-version')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/my-version')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
         uses: actions/upload-pages-artifact@v3
         with:
           path: 'public'
 
       - name: Deploy to GitHub Pages
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/my-version')
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
         id: deployment
         uses: actions/deploy-pages@v4
 
