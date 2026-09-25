@@ -1,0 +1,39 @@
+{
+  "id": "video",
+  "name": "Video",
+  "description": "MPEG-1/2 elementary video streams (.m2v) decoded by the IPU through libmpeg, drawn directly or used as an Image texture. One video can be open at a time.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/video.c",
+    "native/video_probe.c",
+    "native/libmpeg/libmpeg.c",
+    "native/libmpeg/libmpeg_core.c",
+    "native/libmpeg/libmpeg_op.s"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "image",
+      "thread",
+      "mutex"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "native": {
+    "shutdown": "athena_video_module_shutdown"
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_video.c"
+    ],
+    "module_name": "Video",
+    "global_alias": "Video",
+    "global_export": "Video.Video",
+    "init_func": "athena_video_init"
+  },
+  "types": "video.d.ts"
+}

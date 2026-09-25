@@ -239,6 +239,17 @@ static void check_no_gap(const char *what, double from, double to) {
     CHECK(high >= 9900 && low >= 9900, "%s: write peaks %d..%d (silence was written)", what, low, high);
 }
 
+/*
+ * The position heard follows the time actually elapsed since `since_ms`
+ * (from `base` ms), minus the ~107 ms audsrv ring. Measured, not assumed:
+ * sleep_ms() oversleeps under load, so fixed windows fail spuriously.
+ */
+static void check_heard(const char *what, uint32_t pos, uint32_t base, double since_ms) {
+    double expected = base + (now_ms() - since_ms);
+    CHECK(pos > expected - 250 && pos < expected + 20,
+        "%s: position %u, expected about %.0f - 107 ms", what, pos, expected);
+}
+
 /* --- Tests --------------------------------------------------------------- */
 static void test_open(void) {
     printf("open / format selection\n");
@@ -407,7 +418,7 @@ static void test_segments(void) {
 
 static void test_playback(void) {
     AthenaSoundStream *s, *b;
-    double t, took, latency;
+    double t, took, latency, seek_at, switch_at;
     uint32_t ends, loops, pos, paused;
     int result;
 
@@ -480,28 +491,28 @@ static void test_playback(void) {
     athena_sound_stream_play(s, 0);
     sleep_ms(400);
     t = now_ms();
+    seek_at = t;
     athena_sound_stream_set_position(s, 3000);
     sleep_ms(400);
     check_no_gap("seek", t - 100, now_ms());
-    pos = athena_sound_stream_get_position(s);
-    CHECK(pos > 3200 && pos < 3400, "position after the seek: %u", pos);
+    check_heard("after the seek", athena_sound_stream_get_position(s), 3000, seek_at);
     t = now_ms();
+    switch_at = t;
     athena_sound_stream_play(b, 0);
     CHECK(!athena_sound_stream_is_playing(s) && athena_sound_stream_is_playing(b), "b replaced s");
     sleep_ms(400);
     check_no_gap("switch", t - 100, now_ms());
-    pos = athena_sound_stream_get_position(b);
-    CHECK(pos > 200 && pos < 400, "b position after the switch: %u", pos);
-    /* The old stream resumes where it was heard: 3000 + 400 ms - the ~107 ms ring. */
-    CHECK(athena_sound_stream_get_position(s) >= 3200 && athena_sound_stream_get_position(s) < 3400,
-        "s kept its position: %u", athena_sound_stream_get_position(s));
+    check_heard("b after the switch", athena_sound_stream_get_position(b), 0, switch_at);
+    /* The old stream resumes where it was heard: 3000 + its playing time - the ~107 ms ring. */
+    pos = athena_sound_stream_get_position(s);
+    CHECK(pos > 3000 + (switch_at - seek_at) - 250 && pos < 3000 + (switch_at - seek_at) + 20,
+        "s kept its position: %u after %.0f ms", pos, switch_at - seek_at);
     t = now_ms();
     stall_next_read_ms = 300;
     sleep_ms(700);
     check_no_gap("read stall", t, now_ms());
     CHECK(stall_next_read_ms == 0, "the stall happened");
-    pos = athena_sound_stream_get_position(b);
-    CHECK(pos > 900 && pos < 1100, "position after the stall: %u", pos);
+    check_heard("b after the stall", athena_sound_stream_get_position(b), 0, switch_at);
     CHECK(player.queued_bytes <= player_read_ahead(b) + BLOCK_BYTES, "read-ahead bounded: %u", player.queued_bytes);
 
     printf("playback: fades (constant amplitude 10000)\n");

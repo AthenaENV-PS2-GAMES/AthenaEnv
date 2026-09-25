@@ -9,6 +9,11 @@
  * images, `pixels` contains four bytes per pixel. Palette data is used only
  * by indexed 4-bit and 8-bit formats.
  *
+ * Some Images borrow a texture owned by another object, such as
+ * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
+ * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
+ * `optimize()` returns false.
+ *
  * @example
  * ```js
  * const logo = new Image('my_image.png');

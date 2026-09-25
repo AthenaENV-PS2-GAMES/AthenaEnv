@@ -80,9 +80,24 @@ static void image_update_ready(AthenaImage *image)
 		 image->surface->Clut != NULL);
 }
 
+/*
+ * A borrowed Image (athena_image_wrap, e.g. Video.frame) draws a surface its
+ * owner keeps writing to and frees. Its storage must not be replaced here.
+ */
+static int image_check_owned(JSContext *ctx, const AthenaImage *image)
+{
+	if (!image->owns_surface) {
+		JS_ThrowTypeError(ctx, "cannot change the storage of a borrowed Image");
+		return 0;
+	}
+	return 1;
+}
+
 static int image_invalidate_storage(JSContext *ctx, AthenaImage *image)
 {
 	if (!image || !image->surface)
+		return 0;
+	if (!image_check_owned(ctx, image))
 		return 0;
 	if (graphics_surface_is_locked(image->surface)) {
 		JS_ThrowTypeError(ctx, "cannot change a locked Image");
@@ -113,6 +128,8 @@ static int image_set_buffer(JSContext *ctx, AthenaImage *image,
 	uint8_t *source = JS_GetArrayBuffer(ctx, &source_size, value);
 	uint32_t *copy;
 
+	if (!image_check_owned(ctx, image))
+		return 0;
 	if (!source)
 		return 0;
 	if (source_size != size) {

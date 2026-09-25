@@ -108,8 +108,8 @@ INI_READER = readini/src/readini.o
 # modules (MODULE_EMBED).
 CORE_IRX = iomanx.o filexio.o
 
-# Modules may ship C sources and prebuilt VU microprograms (.vsm).
-src_to_obj = $(patsubst src/%.vsm,%.o,$(patsubst src/%.c,%.o,$(1)))
+# Modules may ship C sources, assembly (.s) and prebuilt VU microprograms (.vsm).
+src_to_obj = $(patsubst src/%.s,%.o,$(patsubst src/%.vsm,%.o,$(patsubst src/%.c,%.o,$(1))))
 
 MODULE_OBJS = $(call src_to_obj,$(MODULE_SRCS))
 MODULE_EMBED_OBJS = $(MODULE_EMBED:%=%.o)

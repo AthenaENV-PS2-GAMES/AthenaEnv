@@ -436,7 +436,7 @@ bool athena_image_locked(const AthenaImage *image)
 
 bool athena_image_optimize(AthenaImage *image)
 {
-	if (!athena_image_is_loaded(image) ||
+	if (!athena_image_is_loaded(image) || !image->owns_surface ||
 		image->surface->PSM != GS_PSM_CT24)
 		return false;
 	if (graphics_surface_is_locked(image->surface))

@@ -1376,31 +1376,40 @@ audsrv is loaded on the IOP the first time a sound is used. Errors throw with a 
 
 ### Video module
 
+See `docs/VIDEO.md` for how to encode videos, limits and examples.
+
 **Construction:**
 
 * let video = new Video(path)
-  path - Path to the MPEG file, E.g.: "videos/intro.mpg".
+  path - Path to a raw MPEG-1/2 elementary video stream (4:2:0, no container, no audio), E.g.: "videos/intro.m2v". Encode one with `ffmpeg -i input.mp4 -vf scale=640:360 -c:v mpeg2video -b:v 2000k -g 15 -an intro.m2v`.
+  Supported streams: 4:2:0 chroma, at most 1024x1024, standard frame rate. Throws an InternalError with a stable `error.code`: `open_failed`, `busy` (the IPU decoder is shared, so only one Video can be open at a time: free() it before opening another), `invalid_format`, `unsupported_format` or `out_of_memory`.
 
 **Properties:**
 
-* width (read-only) - Video width in pixels.
-* height (read-only) - Video height in pixels.
+* width (read-only) - Picture width in pixels.
+* height (read-only) - Picture height in pixels. The decoded texture is rounded up to 16x16 macroblocks (`frame.texHeight` is 368 for a 360-line video); the padding is never drawn.
 * fps (read-only) - Video frames per second.
 * ready (read-only) - Returns true if the video is loaded and ready for playback.
 * ended (read-only) - Returns true if playback has finished.
 * playing (read-only) - Returns true if video is currently playing.
 * loop - Boolean to enable/disable Looping.
-* frame (read-only) - Returns the current frame as an Image object (useful for use as texture).
-* currentFrame (read-only) - Returns the current frame index.
+* frame (read-only) - The current frame as an Image (useful as a texture). The same Image is returned on every access, sized to the picture, and follows playback; after the Video is freed it is no longer loaded (ready() is false, draw() throws). It borrows the decoder's buffer: setting its pixels, palette, bpp, texWidth or texHeight throws a TypeError.
+* currentFrame (read-only) - Index of the picture shown (0 is the first, again after a loop or rewind).
+* loopCount (read-only) - Times a looping video restarted (reset by stop()).
+* onEnd - Function called by update() when playback ends.
+* onLoop - Function called by update() with loopCount when a looping video restarts.
+* audio - A `Sound.Stream` with the soundtrack, or null. Playback follows the audio heard (lip sync); play/pause/stop/loop drive both. Set it while the video is not playing.
 
 **Methods:**
 
-* play() - Start or resume playback.
+* play() - Start or resume playback. Restarts from the beginning once ended.
 * pause() - Pause playback.
 * stop() - Stop playback and reset to beginning.
-* update() - Process video decoding (call it every frame). Returns true if a new frame was decoded.
+* update() - Advance playback by the elapsed time (call it every frame). Follows the stream's frame rate whatever the render rate, skipping late frames (up to 3 per call). Returns true if the picture changed.
 * draw(x, y, *w*, *h*) - Draw the current video frame to screen.
-* free() - Release video resources.
+* draw(x, y, options) - Draw with any of `width`, `height`, a source rectangle (`startx`, `starty`, `endx`, `endy`, in picture pixels), `angle` (radians) and `color` (tint/alpha).
+* Video.probe(path) - Stream information (`width`, `height`, `fps`, `frames`, `duration`, `chroma`, `supported`, ...) read from the headers, without opening the decoder.
+* free() - Release video resources. Any later use of the Video throws.
 
 
 ### Shadows module

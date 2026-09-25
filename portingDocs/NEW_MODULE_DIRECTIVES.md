@@ -127,6 +127,11 @@ no manifesto igual ao nome importado pelos scripts:
 
 - `sources`: somente a implementacao nativa. E compilada nos dois runtimes
   (`RUNTIME=quickjs` e `RUNTIME=native`) e nao pode incluir QuickJS.
+  Aceita C (`.c`), assembly do EE (`.s`, montado com `$(EE_AS)`) e
+  microprogramas VU pre-compilados (`.vsm`). Bibliotecas de terceiros podem
+  ser vendorizadas dentro do modulo e listadas aqui (ex.: o `libmpeg` do
+  `video` em `native/libmpeg/`), com um README registrando as mudancas em
+  relacao ao original.
 - `quickjs.sources`: adaptadores QuickJS. So entram com `RUNTIME=quickjs`.
 - `includes` (opcional): somente caminhos externos, como
   `$(PS2DEV)/gsKit/include`. Headers do proprio modulo ficam em `include/`.

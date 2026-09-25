@@ -18,10 +18,13 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
     -o "$OUT/sound_stream_test" tests/host/sound_stream_test.c -lpthread -lm
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
+$CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
+    -o "$OUT/video_test" tests/host/video_test.c -lpthread
 
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"
+"$OUT/video_test"
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js
 # (references from tests/host/wav2adp/make_refs.mjs) and, for 16-bit mono,

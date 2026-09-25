@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-25T02:19:30.418Z",
+  "generatedAt": "2026-09-25T05:13:09.447Z",
   "modules": [
     {
       "id": "archive",
@@ -511,6 +511,30 @@
         "ee_libs": []
       },
       "global_alias": "Vector",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "video",
+      "name": "Video",
+      "description": "MPEG-1/2 elementary video streams (.m2v) decoded by the IPU through libmpeg, drawn directly or used as an Image texture. One video can be open at a time.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image",
+          "thread",
+          "mutex"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Video",
       "api": {
         "native": true,
         "quickjs": true
