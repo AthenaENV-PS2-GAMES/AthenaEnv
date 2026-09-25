@@ -1491,29 +1491,36 @@ declare namespace Screen {
  * still accepted and loads them at boot instead.
  *
  * Streams:
- * - one plays at a time; `play()` on another stream replaces it;
- * - PCM WAV (8/16-bit) and Ogg Vorbis, mono or stereo, at 11025, 12000,
- *   22050, 24000, 32000, 44100 or 48000 Hz (some rates only as 16-bit or
- *   stereo; the constructor throws for unsupported combinations);
+ * - one plays at a time; `play()` on another stream replaces it (there is no
+ *   crossfade: audsrv has a single stream voice);
+ * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
+ *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
+ *   float) is converted on the EE while it plays; see `converted`;
  * - `pause()` keeps the position heard, so `play()` resumes exactly there;
+ * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
  * - decoding runs on a worker thread, so the frame loop only has to keep
- *   calling `Screen.flip()` (or otherwise block) for audio to flow.
+ *   calling `Screen.flip()` (or otherwise block) for audio to flow;
+ * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
  *
  * Sound effects:
- * - `.adp` files with an APCM header, as written by `adpenc`
- *   (`adpenc -L` for a looping sample);
- * - uploaded to SPU2 RAM (~2 MiB shared by every sample) and freed with
- *   `free()` or by the garbage collector;
- * - `IOP.reset()` unloads them: playing one afterwards throws, load it again.
+ * - `.adp` files with an APCM header, made with `node tools/wav2adp.js`
+ *   (or `adpenc`; `-L` for a looping sample). Files that would make the
+ *   SPU2 play past their end are refused (`CORRUPT`);
+ * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
+ *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
+ * - after `IOP.reset()` a sample is uploaded again from its file the next
+ *   time it plays.
  *
- * Failures throw: `TypeError` for wrong argument types, `RangeError` for
- * values out of range, `InternalError` for I/O, format or IOP failures.
+ * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
+ * for wrong argument types, `RangeError` for values out of range,
+ * `InternalError` for I/O, format or IOP failures.
  *
  * @example
  * ```js
  * const music = Sound.Stream("music/theme.ogg");
  * music.loop = true;
- * music.play();
+ * music.onLoop = () => console.log("theme looped");
+ * music.play({ fade: 1000 });
  *
  * const jump = new Sound.Sfx("sfx/jump.adp");
  * jump.volume = 80;
@@ -1522,12 +1529,62 @@ declare namespace Screen {
  * while (true) {
  *     pad.update();
  *     if (pad.justPressed(Pads.CROSS)) jump.play();
- *     if (pad.justPressed(Pads.START)) music.playing() ? music.pause() : music.play();
+ *     if (pad.justPressed(Pads.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
+ *     Sound.process();
  *     Screen.flip();
  * }
  * ```
  */
 declare namespace Sound {
+    type ErrorCode =
+        | 'INVALID_ARGUMENT'
+        /** The file could not be opened. */
+        | 'NOT_FOUND'
+        | 'IO'
+        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
+        | 'BAD_FORMAT'
+        /** ADPCM data the SPU2 would play past its end (truncated file). */
+        | 'CORRUPT'
+        | 'NO_MEMORY'
+        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
+        | 'SPU_MEMORY'
+        /** audsrv could not be loaded or started on the IOP. */
+        | 'IOP'
+        /** The streaming thread could not be started. */
+        | 'THREAD'
+        /** Sfx.pitch, or assigning Sfx.loop. */
+        | 'UNSUPPORTED'
+        /** The object was used after free(). */
+        | 'FREED';
+
+    interface Error {
+        code: ErrorCode;
+        message: string;
+    }
+
+    /** SPU2 sample memory in bytes. */
+    interface MemoryStats {
+        /** Sample memory in SPU2 RAM (~2 MiB). */
+        total: number;
+        /** From the start of sample memory to the end of the last sample. */
+        used: number;
+        /** After the last sample: the largest sample that still fits. */
+        free: number;
+        /**
+         * Freed but not reusable yet: audsrv only reclaims memory at the end,
+         * so a sample freed before later ones leaves a hole until those are
+         * freed too. Load long-lived samples first.
+         */
+        wasted: number;
+        /** Samples loaded. */
+        samples: number;
+    }
+
+    interface FadeOptions {
+        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
+        fade?: number;
+    }
+
     /** Number of SPU2 voices available to sound effects (24). */
     const CHANNELS: number;
 
@@ -1535,36 +1592,75 @@ declare namespace Sound {
     function setVolume(volume: number): void;
     /** Music stream volume set with `setVolume()`. */
     function getVolume(): number;
+    /**
+     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
+     * still sounding follow at once.
+     */
+    function setSfxVolume(volume: number): void;
+    function getSfxVolume(): number;
     /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
     function findChannel(): number;
+    /** SPU2 sample memory use. */
+    function getMemoryStats(): MemoryStats;
+    /**
+     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
+     * since the last call, each at most once per call, and returns how many
+     * ran. An exception thrown by a callback propagates.
+     */
+    function process(): number;
 
     /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
     class Stream {
         /** Opens `path`; also callable without `new`. Does not start playback. */
         constructor(path: string);
-        /** Starts, or resumes from `position`. Stops the stream that was playing. */
-        play(): void;
-        /** Pauses at the position heard. */
-        pause(): void;
-        /** Pauses and rewinds to the start. */
-        stop(): void;
+        /**
+         * Starts, or resumes from `position`. Stops the stream that was
+         * playing. With `fade` it starts silent and rises to full volume;
+         * during a fade-out it cancels the fade.
+         */
+        play(options?: FadeOptions): void;
+        /**
+         * Pauses at the position heard. With `fade` it keeps playing (and
+         * `playing()` stays true) until the fade-out ends.
+         */
+        pause(options?: FadeOptions): void;
+        /** Pauses and rewinds to the start, after the fade-out if any. */
+        stop(options?: FadeOptions): void;
         /** True from `play()` until paused, stopped or finished. */
         playing(): boolean;
         /** Moves to the start; keeps playing if it was. */
         rewind(): void;
-        /** Closes the file. Using the object afterwards throws. */
+        /** Closes the file. Using the object afterwards throws `FREED`. */
         free(): void;
         /** Restart from the beginning at the end instead of stopping. */
         loop: boolean;
         /** Playback position in milliseconds; assigning seeks (clamped to 0..length). */
         position: number;
+        /**
+         * Called by `Sound.process()` after the stream reached its end
+         * (without `loop`); `this` is the stream.
+         */
+        onEnd: ((this: Stream) => void) | null;
+        /** Called by `Sound.process()` after a looping stream wrapped around. */
+        onLoop: ((this: Stream) => void) | null;
+        /**
+         * The stream reached its end (without `loop`); cleared by `play()`,
+         * a seek or `rewind()`. Set when the last sample is decoded, up to
+         * ~0.1 s before it is heard.
+         */
+        readonly ended: boolean;
         /** Duration in milliseconds. */
         readonly length: number;
-        /** Sample rate in Hz. */
+        /** Sample rate of the file in Hz. */
         readonly rate: number;
         /** 1 (mono) or 2 (stereo). */
         readonly channels: number;
         readonly format: 'wav' | 'ogg';
+        /**
+         * audsrv cannot play the file's format, so it is converted to 16-bit
+         * at a supported rate on the EE (a little CPU while playing).
+         */
+        readonly converted: boolean;
     }
 
     /** An ADPCM sample resident in SPU2 memory. */
@@ -1577,19 +1673,31 @@ declare namespace Sound {
          * is busy. The volume and pan are applied to the channel first.
          */
         play(channel?: number): number;
-        /** Whether this sample is still playing on `channel`. */
+        /**
+         * Whether this sample is still playing on `channel`. A looping
+         * sample plays until `stop()`, `free()` or `IOP.reset()`.
+         */
         playing(channel: number): boolean;
-        /** Releases the SPU2 memory. Using the object afterwards throws. */
+        /**
+         * Silences this sample on `channel`, or on every channel it plays on.
+         * audsrv cannot key a voice off, so it is muted: `playing()` turns
+         * false at once and the channel is free for the next `play()`.
+         */
+        stop(channel?: number): void;
+        /**
+         * Releases the SPU2 memory. Using the object afterwards throws.
+         * Voices still playing this sample are stopped as with `stop()`.
+         */
         free(): void;
         /** 0 to 100, applied on the next `play()`. Default 100. */
         volume: number;
         /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
         pan: number;
-        /** Whether the sample was encoded to loop (read-only). */
+        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
         readonly loop: boolean;
         /**
          * Always 0. audsrv plays samples at the rate they were encoded with;
-         * assigning throws.
+         * assigning throws `UNSUPPORTED`.
          */
         readonly pitch: number;
         /** Duration in milliseconds. */

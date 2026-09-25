@@ -12,6 +12,9 @@
 /* Changes every time audsrv is initialized; samples of older ones are gone. */
 uint32_t sound_iop_generation(void);
 
+/* Sets athena_sound_error_detail(); NULL clears it. */
+void sound_set_detail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
 /* Stops the streaming thread and mutes the stream (sound_stream.c). */
 void sound_stream_halt(void);
 /* Applies the stream volume after audsrv is (re)initialized. */

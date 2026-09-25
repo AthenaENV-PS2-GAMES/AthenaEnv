@@ -1337,29 +1337,41 @@ const thread = new Thread(() => console.log("Hello from a thread!"), "Thread: He
 
 ### Sound module
 
-* Sound.setVolume(volume) - Set master volume.
-* Sound.findChannel() - Returns the first free channel found to be used on sound effect playback.
-* const bgm = Sound.Stream(path) - Loads a audio stream file(WAV, OGG)  
-**Methods:**  
-  • play() - Play(or resume) audio stream.  
-  • free() - Free audio stream from memory.  
-  • pause() - Pause audio stream.  
-  • playing() - Check if the audio stream is being played.  
-  • rewind() - Restart audio to it's beginning (should call play() again if it's not the current track).  
-**Properties:**  
-  • position - Current track playtime in msec, you can get or change.  
-  • length - Current track duration in msec, read-only property.  
-  • loop - If the track is played in a loop, you can get or change.  
+audsrv is loaded on the IOP the first time a sound is used. Errors throw with a stable `error.code` (`NOT_FOUND`, `BAD_FORMAT`, `CORRUPT`, `SPU_MEMORY`...). Full typings: `src/modules/sound/sound.d.ts`.
 
-* const shoot_sfx = Sound.Sfx(path) - Loads a sound effect(ADPCM)  
+* Sound.setVolume(volume) / Sound.getVolume() - Music stream volume, 0 to 100.
+* Sound.setSfxVolume(volume) / Sound.getSfxVolume() - Scales every sound effect, 0 to 100.
+* Sound.findChannel() - First channel (0-23) no sound effect is playing on, or -1.
+* Sound.getMemoryStats() - SPU2 sample memory: `{ total, used, free, wasted, samples }`.
+* Sound.process() - Runs `onEnd`/`onLoop` stream callbacks; call it once per frame.
+* const bgm = Sound.Stream(path) - Opens a WAV (PCM 8/16/24/32-bit or float) or OGG file, mono or stereo. Formats audsrv cannot play directly (e.g. 16 kHz) are converted on the EE.  
 **Methods:**  
-  • play(*channel*) - Play sound effect. P.S.: If channel isn't specified, it will automatically use a free channel(and return the channel index, otherwhise it returns undefined).  
-  • free() - Free sound effect from memory.  
-  • playing(channel) - Check if the sound effect is being played on the specified channel.  
+  • play(*{ fade: ms }*) - Play (or resume) the stream, replacing the one playing; optionally fading in.  
+  • pause(*{ fade: ms }*) - Pause at the position heard; optionally after fading out.  
+  • stop(*{ fade: ms }*) - Pause and rewind; optionally after fading out.  
+  • playing() - Check if the stream is being played.  
+  • rewind() - Go back to the beginning.  
+  • free() - Close the stream.  
 **Properties:**  
-  • volume - Current sound effect volume, you can get or change from 0 to 100.  
-  • pan - Sound effect spatial setting, you can get or change from -100(left) to 100(right), 0 is the center.  
-  • pitch - Sound effect pitch, you can get or change from -100 to 100, 0 is the default value.
+  • position - Playtime in msec, you can get or change.  
+  • length - Duration in msec, read-only.  
+  • loop - Restart at the end instead of stopping, you can get or change.  
+  • ended - The stream reached its end, read-only.  
+  • onEnd / onLoop - Callbacks run by Sound.process().  
+  • rate, channels, format, converted - File information, read-only.  
+
+* const shoot_sfx = Sound.Sfx(path) - Loads a sound effect (.adp). Convert WAV files with `node tools/wav2adp.js [-L] input.wav [output.adp]` or a whole folder with `--dir`.  
+**Methods:**  
+  • play(*channel*) - Play the sound effect on `channel`, or on a free one if omitted. Returns the channel used, or -1 if busy.  
+  • free() - Free the SPU2 memory.  
+  • playing(channel) - Check if the sound effect is being played on the specified channel. A looping sample plays until stopped.  
+  • stop(*channel*) - Silence the sound effect on `channel`, or on every channel it plays on.  
+**Properties:**  
+  • volume - Sound effect volume, you can get or change from 0 to 100.  
+  • pan - Spatial setting, you can get or change from -100 (left) to 100 (right), 0 is the center.  
+  • loop - Whether the sample was encoded to loop (`wav2adp -L`), read-only.  
+  • length, rate - Duration in msec and sample rate, read-only.  
+  • pitch - Always 0: audsrv plays samples at their encoded rate.
 
 ### Video module
 

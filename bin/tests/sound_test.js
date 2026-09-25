@@ -4,15 +4,16 @@
  * Run with bin/ as the working directory (default_script=tests/sound_test.js
  * in athena.ini, without `audsrv = true` so the lazy IOP load is checked).
  * Fixtures live in tests/sound/ and are regenerated with
- * tests/sound/make_fixtures.js; tests/bg.wav and tests/pop.adp are shared.
+ * tests/sound/make_fixtures.js (bg.wav, pop.adp, over.adp and music.ogg are
+ * not generated).
  *
  * Timing checks use wide margins: under PCSX2 the audio clock follows the
  * emulated SPU2, which may run slightly off real time.
  */
 
 const DIR = "tests/sound/";
-const WAV = "tests/bg.wav";
-const ADP = "tests/pop.adp";
+const WAV = DIR + "bg.wav";
+const ADP = DIR + "pop.adp";
 
 let passed = 0;
 let failed = 0;
@@ -56,6 +57,17 @@ function expectThrow(name, callback, type, pattern) {
             throw new Error("expected " + type.name + ", got " + error);
         if (pattern && !pattern.test(String(error.message)))
             throw new Error("unexpected message: " + error.message);
+    });
+}
+
+/* Like expectThrow, and checks the stable error.code. */
+function expectCode(name, callback, type, code) {
+    test(name, function() {
+        const error = captureError(callback);
+        if (type && !(error instanceof type))
+            throw new Error("expected " + type.name + ", got " + error);
+        if (error.code !== code)
+            throw new Error("expected code " + code + ", got " + error.code + " (" + error + ")");
     });
 }
 
@@ -195,6 +207,80 @@ expectThrow("Sfx(bad magic)", () => new Sound.Sfx(DIR + "bad.adp"), InternalErro
 expectThrow("Sfx(text file)", () => new Sound.Sfx(DIR + "garbage.bin"), InternalError, /unsupported audio format/);
 expectThrow("Sfx(wav file)", () => new Sound.Sfx(DIR + "short.wav"), InternalError, /unsupported audio format/);
 
+/* Stable error codes. */
+expectCode("code NOT_FOUND", () => new Sound.Sfx(DIR + "missing.adp"), InternalError, "NOT_FOUND");
+expectCode("code BAD_FORMAT", () => new Sound.Sfx(DIR + "bad.adp"), InternalError, "BAD_FORMAT");
+expectCode("code INVALID_ARGUMENT (type)", () => new Sound.Sfx(123), TypeError, "INVALID_ARGUMENT");
+expectCode("code INVALID_ARGUMENT (range)", () => Sound.setVolume(101), RangeError, "INVALID_ARGUMENT");
+expectCode("code UNSUPPORTED", () => { pop.pitch = 1; }, TypeError, "UNSUPPORTED");
+
+/* ADPCM data is checked before it is uploaded. */
+expectCode("Sfx(truncated) is refused", () => new Sound.Sfx(DIR + "truncated.adp"), InternalError, "CORRUPT");
+expectCode("Sfx(no end flag) is refused", () => new Sound.Sfx(DIR + "noend.adp"), InternalError, "CORRUPT");
+expectThrow("corrupt message explains why", () => new Sound.Sfx(DIR + "noend.adp"), InternalError, /end flag/);
+
+test("Sfx(loop.adp) reads the loop flag", function() {
+    const sfx = new Sound.Sfx(DIR + "loop.adp");
+    assertEqual(sfx.loop, true, "loop");
+    assertNear(sfx.length, 200, 5, "length");
+    sfx.free();
+});
+
+/* SPU2 memory accounting. */
+test("getMemoryStats follows loads and frees", function() {
+    const before = Sound.getMemoryStats();
+    assertEqual(before.total, 2 * 1024 * 1024 - 0x5010, "total");
+    assertEqual(before.used + before.free, before.total, "used + free");
+    const a = new Sound.Sfx(DIR + "over.adp");
+    const b = new Sound.Sfx(ADP);
+    const loaded = Sound.getMemoryStats();
+    assertEqual(loaded.samples, before.samples + 2, "samples");
+    assertEqual(loaded.used, before.used + 23744 + 3408, "used");
+    // Freed before b: its memory stays reserved until b goes too.
+    a.free();
+    const hole = Sound.getMemoryStats();
+    assertEqual(hole.used, loaded.used, "used with a hole");
+    assertEqual(hole.wasted, before.wasted + 23744, "wasted");
+    b.free();
+    const after = Sound.getMemoryStats();
+    assertEqual(after.used, before.used, "used after both");
+    assertEqual(after.wasted, before.wasted, "wasted after both");
+});
+
+test("SPU2 memory exhaustion is reported before the upload", function() {
+    const loaded = [];
+    let error = null;
+    try {
+        for (let i = 0; i < 100 && !error; i++) {
+            try {
+                loaded.push(new Sound.Sfx(DIR + "over.adp"));
+            } catch (e) {
+                error = e;
+            }
+        }
+        assert(error, "100 x 23 KB fitted in SPU2 memory");
+        assertEqual(error.code, "SPU_MEMORY", "code");
+        assert(/free/.test(error.message), "message: " + error.message);
+        assert(Sound.getMemoryStats().free < 23744, "free " + Sound.getMemoryStats().free);
+    } finally {
+        loaded.forEach((sfx) => sfx.free());
+    }
+    // Everything fits again once freed.
+    new Sound.Sfx(DIR + "over.adp").free();
+});
+
+/* Master volume for every sound effect. */
+test("setSfxVolume/getSfxVolume", function() {
+    assertEqual(Sound.getSfxVolume(), 100, "default");
+    Sound.setSfxVolume(25);
+    assertEqual(Sound.getSfxVolume(), 25, "volume");
+    // The per-sample volume is not changed by the master volume.
+    assertEqual(pop.volume, 100, "pop.volume");
+    Sound.setSfxVolume(100);
+});
+expectCode("setSfxVolume(101)", () => Sound.setSfxVolume(101), RangeError, "INVALID_ARGUMENT");
+expectThrow("setSfxVolume('1')", () => Sound.setSfxVolume("1"), TypeError);
+
 test("Sfx volume and pan", function() {
     pop.volume = 30;
     pop.pan = -100;
@@ -309,8 +395,36 @@ test("new Sound.Stream(wav with LIST chunk)", function() {
 expectThrow("Stream() without path", () => Sound.Stream(), TypeError);
 expectThrow("Stream({})", () => Sound.Stream({}), TypeError);
 expectThrow("Stream(missing)", () => Sound.Stream(DIR + "missing.ogg"), InternalError, /cannot open file/);
-expectThrow("Stream(16 kHz wav)", () => Sound.Stream(DIR + "rate16k.wav"), InternalError, /unsupported audio format/);
-expectThrow("Stream(float wav)", () => Sound.Stream(DIR + "float.wav"), InternalError, /unsupported audio format/);
+expectCode("Stream(mu-law wav)", () => Sound.Stream(DIR + "mulaw.wav"), InternalError, "BAD_FORMAT");
+expectThrow("Stream(6 channels)", () => Sound.Stream(DIR + "surround.wav"), InternalError, /only mono and stereo/);
+expectCode("Stream(missing) code", () => Sound.Stream(DIR + "missing.ogg"), InternalError, "NOT_FOUND");
+
+/* Formats audsrv cannot play directly are converted on the EE. */
+test("Stream(16 kHz wav) is converted", function() {
+    const s = new Sound.Stream(DIR + "rate16k.wav");
+    assertEqual(s.rate, 16000, "rate");
+    assertEqual(s.converted, true, "converted");
+    assertNear(s.length, 2000, 1, "length");
+    s.free();
+});
+test("Stream(float wav) is converted", function() {
+    const s = new Sound.Stream(DIR + "float.wav");
+    assertEqual(s.rate, 44100, "rate");
+    assertEqual(s.channels, 2, "channels");
+    assertEqual(s.converted, true, "converted");
+    assertNear(s.length, 1000, 1, "length");
+    s.free();
+});
+test("Stream(8-bit stereo 22050 Hz) is converted", function() {
+    const s = new Sound.Stream(DIR + "stereo8.wav");
+    assertEqual(s.converted, true, "converted");
+    s.free();
+});
+test("Stream(22050 Hz mono 16-bit) is not converted", function() {
+    const s = new Sound.Stream(DIR + "short.wav");
+    assertEqual(s.converted, false, "converted");
+    s.free();
+});
 expectThrow("Stream(wav without data)", () => Sound.Stream(DIR + "nodata.wav"), InternalError, /unsupported audio format/);
 expectThrow("Stream(text file)", () => Sound.Stream(DIR + "garbage.bin"), InternalError, /unsupported audio format/);
 expectThrow("Stream(adp)", () => Sound.Stream(ADP), InternalError, /unsupported audio format/);
@@ -382,6 +496,153 @@ test("Stream.loop", function() {
     assert(waitUntil(() => !short.playing(), 1500), "never ended after loop = false");
     short.free();
 });
+
+/* ------------------------------------------------------------------ */
+/* Stream: converted formats                                            */
+/* ------------------------------------------------------------------ */
+
+test("converted streams play and advance", function() {
+    ["rate16k.wav", "stereo8.wav", "float.wav"].forEach(function(name) {
+        const s = new Sound.Stream(DIR + name);
+        s.play();
+        wait(500);
+        assertEqual(s.playing(), true, name + " playing");
+        assertNear(s.position, 500, 300, name + " position");
+        s.free();
+    });
+});
+
+test("converted stream seeks, pauses and ends", function() {
+    const s = new Sound.Stream(DIR + "rate16k.wav");
+    s.play();
+    wait(200);
+    s.position = 1000;
+    assertNear(s.position, 1000, 60, "right after seek");
+    wait(300);
+    assertNear(s.position, 1300, 300, "300 ms after seek");
+    s.pause();
+    const paused = s.position;
+    wait(200);
+    assertEqual(s.position, paused, "moved while paused");
+    s.play();
+    assert(waitUntil(() => !s.playing(), 2000), "never ended");
+    assertEqual(s.ended, true, "ended");
+    assertEqual(s.position, 0, "position after the end");
+    s.free();
+});
+
+/* ------------------------------------------------------------------ */
+/* Stream: events                                                       */
+/* ------------------------------------------------------------------ */
+
+test("ended and onEnd through Sound.process()", function() {
+    const s = new Sound.Stream(DIR + "short.wav");
+    let calls = 0;
+    let self = null;
+    s.onEnd = function() { calls++; self = this; };
+    assertEqual(s.ended, false, "ended before play");
+    s.play();
+    Sound.process();
+    assertEqual(calls, 0, "onEnd before the end");
+    assert(waitUntil(() => s.ended, 1500), "never ended");
+    assert(Sound.process() >= 1, "process() ran no callback");
+    assertEqual(calls, 1, "onEnd calls");
+    assert(self === s, "this is not the stream");
+    Sound.process();
+    assertEqual(calls, 1, "onEnd ran twice");
+    s.play();
+    assertEqual(s.ended, false, "ended after play()");
+    s.free();
+});
+
+test("onLoop fires while looping, onEnd does not", function() {
+    const s = new Sound.Stream(DIR + "short.wav");
+    let loops = 0;
+    let ends = 0;
+    s.loop = true;
+    s.onLoop = () => loops++;
+    s.onEnd = () => ends++;
+    s.play();
+    wait(1300);
+    Sound.process();
+    assert(loops >= 1, "loops " + loops);
+    assertEqual(ends, 0, "ends while looping");
+    assertEqual(s.ended, false, "ended while looping");
+    s.free();
+});
+
+expectCode("onEnd must be a function", () => { wav.onEnd = 1; }, TypeError, "INVALID_ARGUMENT");
+test("onEnd = null clears it", function() {
+    wav.onEnd = () => {};
+    wav.onEnd = null;
+    assertEqual(wav.onEnd, null, "onEnd");
+});
+
+test("a callback exception propagates from Sound.process()", function() {
+    const s = new Sound.Stream(DIR + "short.wav");
+    s.onEnd = () => { throw new Error("boom"); };
+    s.position = s.length - 100;
+    s.play();
+    assert(waitUntil(() => s.ended, 1500), "never ended");
+    const error = captureError(() => Sound.process());
+    assertEqual(error.message, "boom", "message");
+    s.free();
+});
+
+test("streams whose callback captures them are collected", function() {
+    // Each stream holds an open file: leaked cycles would run out of
+    // descriptors long before 64 and the constructor would throw.
+    for (let i = 0; i < 64; i++) {
+        (function() {
+            const s = new Sound.Stream(DIR + "short.wav");
+            s.onEnd = function() { s.play(); };
+        })();
+        std.gc();
+    }
+    assertEqual(Sound.process(), 0, "callbacks of collected streams");
+});
+
+/* ------------------------------------------------------------------ */
+/* Stream: fades                                                        */
+/* ------------------------------------------------------------------ */
+
+test("play({fade}) fades in", function() {
+    wav.position = 5000;
+    wav.play({ fade: 400 });
+    assertEqual(wav.playing(), true, "playing");
+    wait(600);
+    assertNear(wav.position, 5600, 400, "position");
+});
+
+test("pause({fade}) plays until the fade ends", function() {
+    wav.pause({ fade: 400 });
+    assertEqual(wav.playing(), true, "playing during the fade");
+    assert(waitUntil(() => !wav.playing(), 1500), "never paused");
+    const paused = wav.position;
+    wait(300);
+    assertEqual(wav.position, paused, "moved after the fade-out");
+    assert(paused > 5600, "position " + paused);
+});
+
+test("play() during a fade-out cancels it", function() {
+    wav.play();
+    wav.pause({ fade: 600 });
+    wait(100);
+    wav.play({ fade: 100 });
+    wait(900);
+    assertEqual(wav.playing(), true, "paused anyway");
+});
+
+test("stop({fade}) rewinds after the fade", function() {
+    wav.stop({ fade: 300 });
+    assertEqual(wav.playing(), true, "playing during the fade");
+    assert(waitUntil(() => !wav.playing(), 1500), "never stopped");
+    assertEqual(wav.position, 0, "position");
+});
+
+expectCode("play({fade: -1})", () => wav.play({ fade: -1 }), RangeError, "INVALID_ARGUMENT");
+expectCode("play({fade: 'x'})", () => wav.play({ fade: "x" }), TypeError, "INVALID_ARGUMENT");
+expectThrow("pause('x')", () => wav.pause("x"), TypeError);
 
 test("setVolume while a stream plays", function() {
     wav.play();
@@ -465,8 +726,41 @@ test("streams collected while playing", function() {
 expectThrow("Stream method on another object", () => Sound.Stream.prototype.play.call({}), TypeError);
 expectThrow("Stream.play(1)", () => wav.play(1), TypeError);
 
-wav.free();
-pop.free();
+/* Loops: the SPU2 flags them as ended after the first pass (200 ms here). */
+test("a looping sample plays until stopped", function() {
+    const sfx = new Sound.Sfx(DIR + "loop.adp");
+    assertEqual(sfx.play(23), 23, "channel");
+    wait(500);
+    assertEqual(sfx.playing(23), true, "playing after two passes");
+    assertEqual(pop.play(23), -1, "its channel is busy");
+    sfx.stop(23);
+    assertEqual(sfx.playing(23), false, "playing after stop()");
+    // The muted loop gives way to the next sample played on its channel.
+    assertEqual(pop.play(23), 23, "channel reused after stop()");
+    assertEqual(pop.playing(23), true, "pop on 23");
+    sfx.free();
+});
+
+test("free() of a looping sample releases its channel", function() {
+    const sfx = new Sound.Sfx(DIR + "loop.adp");
+    const channel = sfx.play();
+    assert(channel >= 0, "channel " + channel);
+    wait(500);
+    sfx.free();
+    assertEqual(pop.play(channel), channel, "channel reused after free()");
+});
+
+test("Sfx.stop() of a one-shot sample", function() {
+    const channel = pop.play();
+    assert(channel >= 0, "channel " + channel);
+    pop.stop();
+    assertEqual(pop.playing(channel), false, "playing after stop()");
+});
+expectThrow("Sfx.stop(24)", () => pop.stop(24), RangeError);
+expectThrow("Sfx.stop('1')", () => pop.stop("1"), TypeError);
+
+if (wav) wav.free();
+if (pop) pop.free();
 
 console.log("Result: " + passed + " passed, " + failed + " failed");
 if (failed !== 0) throw new Error("Sound tests failed");

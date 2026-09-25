@@ -1,4 +1,7 @@
 #include <math.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include <ath_env.h>
 #include <athena/sound.h>
@@ -8,34 +11,60 @@
 static JSClassID stream_class_id;
 static JSClassID sfx_class_id;
 
-static void stream_finalizer(JSRuntime *rt, JSValue value) {
-    AthenaSoundStream *stream = JS_GetOpaque(value, stream_class_id);
-    if (stream) athena_sound_stream_destroy(stream);
+/*
+ * A Stream object. Streams with pending callbacks are found by
+ * Sound.process() through this list; `object` is not a counted reference,
+ * the finalizer unlinks the entry before the object goes away.
+ */
+typedef struct JSSoundStream {
+    AthenaSoundStream *stream;
+    JSValue object;
+    JSValue on_end;
+    JSValue on_loop;
+    uint32_t seen_ends;
+    uint32_t seen_loops;
+    struct JSSoundStream *prev;
+    struct JSSoundStream *next;
+} JSSoundStream;
+
+static JSSoundStream *js_streams;
+
+/* --- Errors ------------------------------------------------------------- */
+
+typedef enum {
+    SOUND_TYPE_ERROR,
+    SOUND_RANGE_ERROR,
+    SOUND_INTERNAL_ERROR,
+} SoundErrorKind;
+
+/* Throws with a stable `error.code`, like Archive. */
+static JSValue sound_raise(JSContext *ctx, SoundErrorKind kind, const char *code, const char *fmt, ...) {
+    char message[384];
+    va_list args;
+    JSValue error;
+
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+    if (kind == SOUND_TYPE_ERROR)
+        JS_ThrowTypeError(ctx, "%s", message);
+    else if (kind == SOUND_RANGE_ERROR)
+        JS_ThrowRangeError(ctx, "%s", message);
+    else
+        JS_ThrowInternalError(ctx, "%s", message);
+    error = JS_GetException(ctx);
+    JS_SetPropertyStr(ctx, error, "code", JS_NewString(ctx, code));
+    return JS_Throw(ctx, error);
 }
-
-static void sfx_finalizer(JSRuntime *rt, JSValue value) {
-    AthenaSfx *sfx = JS_GetOpaque(value, sfx_class_id);
-    if (sfx) athena_sfx_destroy(sfx);
-}
-
-static JSClassDef stream_class = {
-    "Stream",
-    .finalizer = stream_finalizer,
-};
-
-static JSClassDef sfx_class = {
-    "Sfx",
-    .finalizer = sfx_finalizer,
-};
 
 static int sound_argc(JSContext *ctx, int argc, int minimum, int maximum, const char *name) {
     if (argc < minimum || argc > maximum) {
         if (minimum == maximum)
-            JS_ThrowTypeError(ctx, "%s expects %d argument%s", name, minimum,
-                minimum == 1 ? "" : "s");
+            sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT", "%s expects %d argument%s",
+                name, minimum, minimum == 1 ? "" : "s");
         else
-            JS_ThrowTypeError(ctx, "%s expects between %d and %d arguments", name,
-                minimum, maximum);
+            sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT",
+                "%s expects between %d and %d arguments", name, minimum, maximum);
         return 0;
     }
     return 1;
@@ -47,34 +76,73 @@ static int sound_int(JSContext *ctx, JSValueConst value, int minimum, int maximu
     double number;
 
     if (!JS_IsNumber(value)) {
-        JS_ThrowTypeError(ctx, "%s must be a number", name);
+        sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT", "%s must be a number", name);
         return 0;
     }
     if (JS_ToFloat64(ctx, &number, value))
         return 0;
     if (!isfinite(number) || floor(number) != number || number < minimum || number > maximum) {
-        JS_ThrowRangeError(ctx, "%s must be an integer between %d and %d", name, minimum, maximum);
+        sound_raise(ctx, SOUND_RANGE_ERROR, "INVALID_ARGUMENT",
+            "%s must be an integer between %d and %d", name, minimum, maximum);
         return 0;
     }
     *out = (int)number;
     return 1;
 }
 
-static JSValue sound_throw(JSContext *ctx, const char *name, int result, const char *path) {
+/*
+ * Throws for a native failure. With `detail` the message also carries
+ * athena_sound_error_detail(), set by the open/load that just failed.
+ */
+static JSValue sound_throw(JSContext *ctx, const char *name, int result, const char *path, bool detail) {
+    const char *extra = detail ? athena_sound_error_detail() : "";
+    const char *code = athena_sound_result_code(result);
+    const char *what = athena_sound_result_string(result);
+
     if (result == ATHENA_SOUND_ERR_ARGS)
-        return JS_ThrowRangeError(ctx, "%s: %s", name, athena_sound_result_string(result));
+        return sound_raise(ctx, SOUND_RANGE_ERROR, code, "%s: %s", name, what);
+    if (extra[0] && path)
+        return sound_raise(ctx, SOUND_INTERNAL_ERROR, code, "%s: %s (%s): %s", name, what, extra, path);
+    if (extra[0])
+        return sound_raise(ctx, SOUND_INTERNAL_ERROR, code, "%s: %s (%s)", name, what, extra);
     if (path)
-        return JS_ThrowInternalError(ctx, "%s: %s: %s", name,
-            athena_sound_result_string(result), path);
-    return JS_ThrowInternalError(ctx, "%s: %s", name, athena_sound_result_string(result));
+        return sound_raise(ctx, SOUND_INTERNAL_ERROR, code, "%s: %s: %s", name, what, path);
+    return sound_raise(ctx, SOUND_INTERNAL_ERROR, code, "%s: %s", name, what);
 }
 
 static const char *sound_path(JSContext *ctx, JSValueConst value, const char *name) {
     if (!JS_IsString(value)) {
-        JS_ThrowTypeError(ctx, "%s: path must be a string", name);
+        sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT", "%s: path must be a string", name);
         return NULL;
     }
     return JS_ToCString(ctx, value);
+}
+
+/* Optional `{ fade: ms }` of play/pause/stop. */
+static int sound_fade_option(JSContext *ctx, int argc, JSValueConst *argv, const char *name,
+    uint32_t *fade_ms) {
+    char what[48];
+    JSValue fade;
+    int ms = 0;
+    int ok;
+
+    *fade_ms = 0;
+    if (!sound_argc(ctx, argc, 0, 1, name))
+        return 0;
+    if (argc == 0 || JS_IsUndefined(argv[0]))
+        return 1;
+    if (!JS_IsObject(argv[0]) || JS_IsFunction(ctx, argv[0])) {
+        sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT", "%s: options must be an object", name);
+        return 0;
+    }
+    fade = JS_GetPropertyStr(ctx, argv[0], "fade");
+    if (JS_IsException(fade))
+        return 0;
+    snprintf(what, sizeof(what), "%s options.fade", name);
+    ok = JS_IsUndefined(fade) || sound_int(ctx, fade, 0, ATHENA_SOUND_MAX_FADE_MS, what, &ms);
+    JS_FreeValue(ctx, fade);
+    *fade_ms = (uint32_t)ms;
+    return ok;
 }
 
 /* Creates an object of `class_id` whose prototype follows `new_target`. */
@@ -101,7 +169,7 @@ static JSValue js_sound_set_volume(JSContext *ctx, JSValueConst this_val, int ar
         return JS_EXCEPTION;
     result = athena_sound_set_volume(volume);
     if (result < 0)
-        return sound_throw(ctx, "Sound.setVolume", result, NULL);
+        return sound_throw(ctx, "Sound.setVolume", result, NULL, false);
     return JS_UNDEFINED;
 }
 
@@ -111,6 +179,24 @@ static JSValue js_sound_get_volume(JSContext *ctx, JSValueConst this_val, int ar
     return JS_NewInt32(ctx, athena_sound_get_volume());
 }
 
+static JSValue js_sound_set_sfx_volume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int volume, result;
+
+    if (!sound_argc(ctx, argc, 1, 1, "Sound.setSfxVolume") ||
+        !sound_int(ctx, argv[0], 0, ATHENA_SOUND_MAX_VOLUME, "Sound.setSfxVolume volume", &volume))
+        return JS_EXCEPTION;
+    result = athena_sfx_set_master_volume(volume);
+    if (result < 0)
+        return sound_throw(ctx, "Sound.setSfxVolume", result, NULL, false);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_sound_get_sfx_volume(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (!sound_argc(ctx, argc, 0, 0, "Sound.getSfxVolume"))
+        return JS_EXCEPTION;
+    return JS_NewInt32(ctx, athena_sfx_get_master_volume());
+}
+
 static JSValue js_sound_find_channel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     int result;
 
@@ -118,23 +204,138 @@ static JSValue js_sound_find_channel(JSContext *ctx, JSValueConst this_val, int 
         return JS_EXCEPTION;
     result = athena_sound_ensure();
     if (result < 0)
-        return sound_throw(ctx, "Sound.findChannel", result, NULL);
+        return sound_throw(ctx, "Sound.findChannel", result, NULL, false);
     return JS_NewInt32(ctx, athena_sfx_find_channel());
+}
+
+static JSValue js_sound_get_memory_stats(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AthenaSoundMemoryStats stats;
+    JSValue object;
+
+    if (!sound_argc(ctx, argc, 0, 0, "Sound.getMemoryStats"))
+        return JS_EXCEPTION;
+    athena_sfx_get_memory_stats(&stats);
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "total", JS_NewUint32(ctx, stats.total));
+    JS_SetPropertyStr(ctx, object, "used", JS_NewUint32(ctx, stats.used));
+    JS_SetPropertyStr(ctx, object, "free", JS_NewUint32(ctx, stats.free));
+    JS_SetPropertyStr(ctx, object, "wasted", JS_NewUint32(ctx, stats.wasted));
+    JS_SetPropertyStr(ctx, object, "samples", JS_NewUint32(ctx, stats.samples));
+    return object;
+}
+
+/*
+ * Runs the onLoop/onEnd callbacks of streams that looped or ended since the
+ * last call; each at most once per call. Returns how many ran. A callback
+ * may free or create streams: the calls are collected first.
+ */
+static JSValue js_sound_process(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue *calls;
+    int count = 0, pending = 0;
+
+    if (!sound_argc(ctx, argc, 0, 0, "Sound.process"))
+        return JS_EXCEPTION;
+    for (JSSoundStream *entry = js_streams; entry; entry = entry->next)
+        count++;
+    if (count == 0)
+        return JS_NewInt32(ctx, 0);
+    /* Pairs of (stream object, callback). */
+    calls = js_malloc(ctx, sizeof(JSValue) * 4 * (size_t)count);
+    if (!calls)
+        return JS_EXCEPTION;
+
+    for (JSSoundStream *entry = js_streams; entry; entry = entry->next) {
+        uint32_t ends = entry->seen_ends, loops = entry->seen_loops;
+        bool looped, ended;
+
+        athena_sound_stream_get_events(entry->stream, &ends, &loops);
+        looped = loops != entry->seen_loops;
+        ended = ends != entry->seen_ends;
+        entry->seen_loops = loops;
+        entry->seen_ends = ends;
+        if (looped && JS_IsFunction(ctx, entry->on_loop)) {
+            calls[pending++] = JS_DupValue(ctx, entry->object);
+            calls[pending++] = JS_DupValue(ctx, entry->on_loop);
+        }
+        if (ended && JS_IsFunction(ctx, entry->on_end)) {
+            calls[pending++] = JS_DupValue(ctx, entry->object);
+            calls[pending++] = JS_DupValue(ctx, entry->on_end);
+        }
+    }
+
+    for (int i = 0; i < pending; i += 2) {
+        JSValue result = JS_Call(ctx, calls[i + 1], calls[i], 0, NULL);
+
+        if (JS_IsException(result)) {
+            /* The exception propagates as is; the other callbacks are dropped. */
+            for (int j = i; j < pending; j++)
+                JS_FreeValue(ctx, calls[j]);
+            js_free(ctx, calls);
+            return JS_EXCEPTION;
+        }
+        JS_FreeValue(ctx, result);
+        JS_FreeValue(ctx, calls[i]);
+        JS_FreeValue(ctx, calls[i + 1]);
+    }
+    js_free(ctx, calls);
+    return JS_NewInt32(ctx, pending / 2);
 }
 
 /* --- Stream ------------------------------------------------------------- */
 
-static AthenaSoundStream *stream_this(JSContext *ctx, JSValueConst value) {
-    AthenaSoundStream *stream = JS_GetOpaque(value, stream_class_id);
+static void stream_entry_release(JSRuntime *rt, JSSoundStream *entry) {
+    if (entry->prev)
+        entry->prev->next = entry->next;
+    else
+        js_streams = entry->next;
+    if (entry->next)
+        entry->next->prev = entry->prev;
+    athena_sound_stream_destroy(entry->stream);
+    JS_FreeValueRT(rt, entry->on_end);
+    JS_FreeValueRT(rt, entry->on_loop);
+    free(entry);
+}
+
+static void stream_finalizer(JSRuntime *rt, JSValue value) {
+    JSSoundStream *entry = JS_GetOpaque(value, stream_class_id);
+    if (entry) stream_entry_release(rt, entry);
+}
+
+/* The callbacks often capture the stream itself: let the GC see the cycle. */
+static void stream_gc_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func) {
+    JSSoundStream *entry = JS_GetOpaque(value, stream_class_id);
+
+    if (entry) {
+        JS_MarkValue(rt, entry->on_end, mark_func);
+        JS_MarkValue(rt, entry->on_loop, mark_func);
+    }
+}
+
+static JSClassDef stream_class = {
+    "Stream",
+    .finalizer = stream_finalizer,
+    .gc_mark = stream_gc_mark,
+};
+
+static JSSoundStream *stream_entry(JSContext *ctx, JSValueConst value) {
+    JSSoundStream *entry = JS_GetOpaque(value, stream_class_id);
 
     /* Also NULL after free(). */
-    if (!stream)
-        JS_ThrowTypeError(ctx, "not a Sound.Stream, or it was freed");
-    return stream;
+    if (!entry)
+        sound_raise(ctx, SOUND_TYPE_ERROR, "FREED", "not a Sound.Stream, or it was freed");
+    return entry;
+}
+
+static AthenaSoundStream *stream_this(JSContext *ctx, JSValueConst value) {
+    JSSoundStream *entry = stream_entry(ctx, value);
+    return entry ? entry->stream : NULL;
 }
 
 static JSValue js_stream_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv) {
     AthenaSoundStream *stream;
+    JSSoundStream *entry;
     const char *path;
     JSValue object;
     int result;
@@ -146,49 +347,65 @@ static JSValue js_stream_ctor(JSContext *ctx, JSValueConst new_target, int argc,
         return JS_EXCEPTION;
     stream = athena_sound_stream_open(path, &result);
     if (!stream) {
-        object = sound_throw(ctx, "Sound.Stream", result, path);
+        object = sound_throw(ctx, "Sound.Stream", result, path, true);
         JS_FreeCString(ctx, path);
         return object;
     }
     JS_FreeCString(ctx, path);
 
+    entry = calloc(1, sizeof(*entry));
+    if (!entry) {
+        athena_sound_stream_destroy(stream);
+        return JS_ThrowOutOfMemory(ctx);
+    }
     object = sound_new_object(ctx, new_target, stream_class_id);
     if (JS_IsException(object)) {
         athena_sound_stream_destroy(stream);
+        free(entry);
         return object;
     }
-    JS_SetOpaque(object, stream);
+    entry->stream = stream;
+    entry->object = object;
+    entry->on_end = JS_NULL;
+    entry->on_loop = JS_NULL;
+    entry->next = js_streams;
+    if (js_streams)
+        js_streams->prev = entry;
+    js_streams = entry;
+    JS_SetOpaque(object, entry);
     return object;
 }
 
 static JSValue js_stream_play(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     AthenaSoundStream *stream = stream_this(ctx, this_val);
+    uint32_t fade_ms;
     int result;
 
-    if (!stream || !sound_argc(ctx, argc, 0, 0, "Stream.play"))
+    if (!stream || !sound_fade_option(ctx, argc, argv, "Stream.play", &fade_ms))
         return JS_EXCEPTION;
-    result = athena_sound_stream_play(stream);
+    result = athena_sound_stream_play(stream, fade_ms);
     if (result < 0)
-        return sound_throw(ctx, "Stream.play", result, NULL);
+        return sound_throw(ctx, "Stream.play", result, NULL, false);
     return JS_UNDEFINED;
 }
 
 static JSValue js_stream_pause(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     AthenaSoundStream *stream = stream_this(ctx, this_val);
+    uint32_t fade_ms;
 
-    if (!stream || !sound_argc(ctx, argc, 0, 0, "Stream.pause"))
+    if (!stream || !sound_fade_option(ctx, argc, argv, "Stream.pause", &fade_ms))
         return JS_EXCEPTION;
-    athena_sound_stream_pause(stream);
+    athena_sound_stream_pause(stream, fade_ms);
     return JS_UNDEFINED;
 }
 
 static JSValue js_stream_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     AthenaSoundStream *stream = stream_this(ctx, this_val);
+    uint32_t fade_ms;
 
-    if (!stream || !sound_argc(ctx, argc, 0, 0, "Stream.stop"))
+    if (!stream || !sound_fade_option(ctx, argc, argv, "Stream.stop", &fade_ms))
         return JS_EXCEPTION;
-    athena_sound_stream_pause(stream);
-    athena_sound_stream_rewind(stream);
+    athena_sound_stream_stop(stream, fade_ms);
     return JS_UNDEFINED;
 }
 
@@ -210,13 +427,13 @@ static JSValue js_stream_rewind(JSContext *ctx, JSValueConst this_val, int argc,
 }
 
 static JSValue js_stream_free(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    AthenaSoundStream *stream = stream_this(ctx, this_val);
+    JSSoundStream *entry = stream_entry(ctx, this_val);
 
-    if (!stream || !sound_argc(ctx, argc, 0, 0, "Stream.free"))
+    if (!entry || !sound_argc(ctx, argc, 0, 0, "Stream.free"))
         return JS_EXCEPTION;
     /* Cleared first so the finalizer does not free it again. */
     JS_SetOpaque((JSValue)this_val, NULL);
-    athena_sound_stream_destroy(stream);
+    stream_entry_release(JS_GetRuntime(ctx), entry);
     return JS_UNDEFINED;
 }
 
@@ -227,13 +444,19 @@ enum {
     STREAM_PROP_RATE,
     STREAM_PROP_CHANNELS,
     STREAM_PROP_FORMAT,
+    STREAM_PROP_ENDED,
+    STREAM_PROP_CONVERTED,
+    STREAM_PROP_ON_END,
+    STREAM_PROP_ON_LOOP,
 };
 
 static JSValue js_stream_get(JSContext *ctx, JSValueConst this_val, int magic) {
-    AthenaSoundStream *stream = stream_this(ctx, this_val);
+    JSSoundStream *entry = stream_entry(ctx, this_val);
+    AthenaSoundStream *stream;
 
-    if (!stream)
+    if (!entry)
         return JS_EXCEPTION;
+    stream = entry->stream;
     switch (magic) {
     case STREAM_PROP_LOOP:
         return JS_NewBool(ctx, athena_sound_stream_get_loop(stream));
@@ -245,18 +468,43 @@ static JSValue js_stream_get(JSContext *ctx, JSValueConst this_val, int magic) {
         return JS_NewInt32(ctx, athena_sound_stream_get_rate(stream));
     case STREAM_PROP_CHANNELS:
         return JS_NewInt32(ctx, athena_sound_stream_get_channels(stream));
+    case STREAM_PROP_ENDED:
+        return JS_NewBool(ctx, athena_sound_stream_ended(stream));
+    case STREAM_PROP_CONVERTED:
+        return JS_NewBool(ctx, athena_sound_stream_is_converted(stream));
+    case STREAM_PROP_ON_END:
+        return JS_DupValue(ctx, entry->on_end);
+    case STREAM_PROP_ON_LOOP:
+        return JS_DupValue(ctx, entry->on_loop);
     default:
         return JS_NewString(ctx,
             athena_sound_stream_get_type(stream) == ATHENA_SOUND_STREAM_OGG ? "ogg" : "wav");
     }
 }
 
+static JSValue stream_set_callback(JSContext *ctx, JSValue *slot, JSValueConst value, const char *name) {
+    if (JS_IsUndefined(value))
+        value = JS_NULL;
+    if (!JS_IsNull(value) && !JS_IsFunction(ctx, value))
+        return sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT",
+            "%s must be a function or null", name);
+    JS_FreeValue(ctx, *slot);
+    *slot = JS_DupValue(ctx, value);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_stream_set(JSContext *ctx, JSValueConst this_val, JSValueConst value, int magic) {
-    AthenaSoundStream *stream = stream_this(ctx, this_val);
+    JSSoundStream *entry = stream_entry(ctx, this_val);
+    AthenaSoundStream *stream;
     double position;
 
-    if (!stream)
+    if (!entry)
         return JS_EXCEPTION;
+    stream = entry->stream;
+    if (magic == STREAM_PROP_ON_END)
+        return stream_set_callback(ctx, &entry->on_end, value, "Stream.onEnd");
+    if (magic == STREAM_PROP_ON_LOOP)
+        return stream_set_callback(ctx, &entry->on_loop, value, "Stream.onLoop");
     if (magic == STREAM_PROP_LOOP) {
         int loop = JS_ToBool(ctx, value);
         if (loop < 0)
@@ -265,11 +513,11 @@ static JSValue js_stream_set(JSContext *ctx, JSValueConst this_val, JSValueConst
         return JS_UNDEFINED;
     }
     if (!JS_IsNumber(value))
-        return JS_ThrowTypeError(ctx, "Stream.position must be a number");
+        return sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT", "Stream.position must be a number");
     if (JS_ToFloat64(ctx, &position, value))
         return JS_EXCEPTION;
     if (!isfinite(position))
-        return JS_ThrowRangeError(ctx, "Stream.position must be finite");
+        return sound_raise(ctx, SOUND_RANGE_ERROR, "INVALID_ARGUMENT", "Stream.position must be finite");
     /* Past either end clamps, so `position -= 5000` near the start is fine. */
     if (position < 0)
         position = 0;
@@ -288,20 +536,34 @@ static const JSCFunctionListEntry stream_proto[] = {
     JS_CFUNC_DEF("free", 0, js_stream_free),
     JS_CGETSET_MAGIC_DEF("loop", js_stream_get, js_stream_set, STREAM_PROP_LOOP),
     JS_CGETSET_MAGIC_DEF("position", js_stream_get, js_stream_set, STREAM_PROP_POSITION),
+    JS_CGETSET_MAGIC_DEF("onEnd", js_stream_get, js_stream_set, STREAM_PROP_ON_END),
+    JS_CGETSET_MAGIC_DEF("onLoop", js_stream_get, js_stream_set, STREAM_PROP_ON_LOOP),
+    JS_CGETSET_MAGIC_DEF("ended", js_stream_get, NULL, STREAM_PROP_ENDED),
     JS_CGETSET_MAGIC_DEF("length", js_stream_get, NULL, STREAM_PROP_LENGTH),
     JS_CGETSET_MAGIC_DEF("rate", js_stream_get, NULL, STREAM_PROP_RATE),
     JS_CGETSET_MAGIC_DEF("channels", js_stream_get, NULL, STREAM_PROP_CHANNELS),
     JS_CGETSET_MAGIC_DEF("format", js_stream_get, NULL, STREAM_PROP_FORMAT),
+    JS_CGETSET_MAGIC_DEF("converted", js_stream_get, NULL, STREAM_PROP_CONVERTED),
 };
 
 /* --- Sfx ---------------------------------------------------------------- */
+
+static void sfx_finalizer(JSRuntime *rt, JSValue value) {
+    AthenaSfx *sfx = JS_GetOpaque(value, sfx_class_id);
+    if (sfx) athena_sfx_destroy(sfx);
+}
+
+static JSClassDef sfx_class = {
+    "Sfx",
+    .finalizer = sfx_finalizer,
+};
 
 static AthenaSfx *sfx_this(JSContext *ctx, JSValueConst value) {
     AthenaSfx *sfx = JS_GetOpaque(value, sfx_class_id);
 
     /* Also NULL after free(). */
     if (!sfx)
-        JS_ThrowTypeError(ctx, "not a Sound.Sfx, or it was freed");
+        sound_raise(ctx, SOUND_TYPE_ERROR, "FREED", "not a Sound.Sfx, or it was freed");
     return sfx;
 }
 
@@ -318,7 +580,7 @@ static JSValue js_sfx_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
         return JS_EXCEPTION;
     sfx = athena_sfx_load(path, &result);
     if (!sfx) {
-        object = sound_throw(ctx, "Sound.Sfx", result, path);
+        object = sound_throw(ctx, "Sound.Sfx", result, path, true);
         JS_FreeCString(ctx, path);
         return object;
     }
@@ -344,8 +606,9 @@ static JSValue js_sfx_play(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         !sound_int(ctx, argv[0], 0, ATHENA_SOUND_CHANNELS - 1, "Sfx.play channel", &channel))
         return JS_EXCEPTION;
     result = athena_sfx_play(sfx, channel);
+    /* Below -1: the upload after an IOP reset may have failed, with detail. */
     if (result < -1)
-        return sound_throw(ctx, "Sfx.play", result, NULL);
+        return sound_throw(ctx, "Sfx.play", result, NULL, true);
     return JS_NewInt32(ctx, result);
 }
 
@@ -358,8 +621,24 @@ static JSValue js_sfx_playing(JSContext *ctx, JSValueConst this_val, int argc, J
         return JS_EXCEPTION;
     result = athena_sfx_is_playing(sfx, channel);
     if (result < 0)
-        return sound_throw(ctx, "Sfx.playing", result, NULL);
+        return sound_throw(ctx, "Sfx.playing", result, NULL, false);
     return JS_NewBool(ctx, result);
+}
+
+static JSValue js_sfx_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    AthenaSfx *sfx = sfx_this(ctx, this_val);
+    int channel = -1;
+    int result;
+
+    if (!sfx || !sound_argc(ctx, argc, 0, 1, "Sfx.stop"))
+        return JS_EXCEPTION;
+    if (argc > 0 && !JS_IsUndefined(argv[0]) &&
+        !sound_int(ctx, argv[0], 0, ATHENA_SOUND_CHANNELS - 1, "Sfx.stop channel", &channel))
+        return JS_EXCEPTION;
+    result = athena_sfx_stop(sfx, channel);
+    if (result < 0)
+        return sound_throw(ctx, "Sfx.stop", result, NULL, false);
+    return JS_UNDEFINED;
 }
 
 static JSValue js_sfx_free(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -415,10 +694,10 @@ static JSValue js_sfx_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
         athena_sfx_set_pan(sfx, number);
         return JS_UNDEFINED;
     case SFX_PROP_LOOP:
-        return JS_ThrowTypeError(ctx,
-            "Sfx.loop is read-only: looping is encoded in the .adp file (adpenc -L)");
+        return sound_raise(ctx, SOUND_TYPE_ERROR, "UNSUPPORTED",
+            "Sfx.loop is read-only: looping is encoded in the .adp file (wav2adp -L)");
     default:
-        return JS_ThrowTypeError(ctx,
+        return sound_raise(ctx, SOUND_TYPE_ERROR, "UNSUPPORTED",
             "Sfx.pitch is not supported: audsrv plays samples at their encoded rate");
     }
 }
@@ -426,6 +705,7 @@ static JSValue js_sfx_set(JSContext *ctx, JSValueConst this_val, JSValueConst va
 static const JSCFunctionListEntry sfx_proto[] = {
     JS_CFUNC_DEF("play", 1, js_sfx_play),
     JS_CFUNC_DEF("playing", 1, js_sfx_playing),
+    JS_CFUNC_DEF("stop", 0, js_sfx_stop),
     JS_CFUNC_DEF("free", 0, js_sfx_free),
     JS_CGETSET_MAGIC_DEF("volume", js_sfx_get, js_sfx_set, SFX_PROP_VOLUME),
     JS_CGETSET_MAGIC_DEF("pan", js_sfx_get, js_sfx_set, SFX_PROP_PAN),
@@ -440,7 +720,11 @@ static const JSCFunctionListEntry sfx_proto[] = {
 static const JSCFunctionListEntry sound_module_funcs[] = {
     JS_CFUNC_DEF("setVolume", 1, js_sound_set_volume),
     JS_CFUNC_DEF("getVolume", 0, js_sound_get_volume),
+    JS_CFUNC_DEF("setSfxVolume", 1, js_sound_set_sfx_volume),
+    JS_CFUNC_DEF("getSfxVolume", 0, js_sound_get_sfx_volume),
     JS_CFUNC_DEF("findChannel", 0, js_sound_find_channel),
+    JS_CFUNC_DEF("getMemoryStats", 0, js_sound_get_memory_stats),
+    JS_CFUNC_DEF("process", 0, js_sound_process),
     JS_PROP_INT32_DEF("CHANNELS", ATHENA_SOUND_CHANNELS, JS_PROP_ENUMERABLE),
 };
 

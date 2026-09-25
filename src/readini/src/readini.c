@@ -13,8 +13,14 @@ bool readini_close(IniReader* ini) {
     return fclose(ini->handle);
 }
 
+/*
+ * Reads the next line with control characters (\r, \n, \t...) and commas
+ * turned into spaces, and without leading or trailing spaces, so values do
+ * not carry the line ending ("tests/a.js\n" used to become "tests/a.js ").
+ */
 bool readini_getline(IniReader* ini) {
-    char* v1 = ini->cur_line;
+    char* start = ini->cur_line;
+    size_t length;
 
     if( !fgets(ini->cur_line, LINE_BUFSIZE, ini->handle) ) {
         if(!feof(ini->handle)) {
@@ -24,26 +30,19 @@ bool readini_getline(IniReader* ini) {
         return false;
     }
 
-    char first_char = ini->cur_line[0];
-    if ( ini->cur_line[0] )
-    {
-      char* v4 = ini->cur_line;
-      do
-      {
-        if ( *v4 < ' ' || *v4 == ',' )
-          *v4 = ' ';
-      }
-      while ( *++v4 );
-      first_char = ini->cur_line[0];
+    for (char* c = ini->cur_line; *c; c++) {
+        if ( *c < ' ' || *c == ',' )
+            *c = ' ';
     }
 
-    for ( ; first_char <= ' '; first_char = *++v1 )
-    {
-      if ( !first_char )
-        break;
-    }
+    while (*start == ' ')
+        start++;
+    length = strlen(start);
+    while (length > 0 && start[length - 1] == ' ')
+        length--;
 
-    strcpy(ini->cur_line, v1);
+    memmove(ini->cur_line, start, length);
+    ini->cur_line[length] = '\0';
 
     return true;
 }
@@ -60,109 +59,88 @@ bool readini_comment(IniReader* ini, char* value_ptr) {
     return false;
 }
 
+/* readini_getline() leaves blank lines empty. */
 bool readini_emptyline(IniReader* ini) {
-    if(ini->cur_line[0]) {
-        if (ini->cur_line[0] == "\n" || (ini->cur_line[0] == "\r" && ini->cur_line[1] == "\n")) {
-            return true;
-        }
-        return false;
-    }
+    return ini->cur_line[0] == '\0';
+}
 
-    return true;
+/*
+ * Splits "key = value" into `tmp_str`. Returns false when the line has no
+ * value or the key is not `key`.
+ */
+static bool readini_match(IniReader* ini, const char* key, char* tmp_str, char** value_str) {
+    char* key_str;
+
+    strcpy(tmp_str, ini->cur_line);
+    key_str = strtok(tmp_str, " ,\t=");
+    *value_str = strtok(NULL, " ,\t=");
+
+    return key_str && *value_str && !strcasecmp(key_str, key);
 }
 
 bool readini_bool(IniReader* ini, const char* key, bool* value_ptr) {
-    int ret = true;
+    char tmp_str[LINE_BUFSIZE];
+    char* value_str;
 
-    char tmp_str[512];
-    strcpy(tmp_str, ini->cur_line);
+    if (!readini_match(ini, key, tmp_str, &value_str))
+        return false;
 
-    char* key_str = strtok(tmp_str, " ,\t=");
-    char* value_str = strtok(NULL, " ,\t=");
-
-    ret = strcasecmp(key_str, key);
-    if ( !ret )
-    {   
-        if (!strcasecmp("false", value_str)) {
-            *value_ptr = false;
-            ret = false;
-        } else if (!strcasecmp("true", value_str)) {
-            *value_ptr = true;
-            ret = false;
-        } else {
-            ret = true;
-        }
+    if (!strcasecmp("false", value_str)) {
+        *value_ptr = false;
+        return true;
+    }
+    if (!strcasecmp("true", value_str)) {
+        *value_ptr = true;
+        return true;
     }
 
-    return !ret;
+    return false;
 }
 
 bool readini_int(IniReader* ini, const char* key, int* value_ptr) {
-    int ret = true;
+    char tmp_str[LINE_BUFSIZE];
+    char* value_str;
 
-    char tmp_str[512];
-    strcpy(tmp_str, ini->cur_line);
+    if (!readini_match(ini, key, tmp_str, &value_str))
+        return false;
 
-    char* key_str = strtok(tmp_str, " ,\t=");
-    char* value_str = strtok(NULL, " ,\t=");
-
-    ret = strcasecmp(key_str, key);
-    if ( !ret )
-    {
-        *value_ptr = atoi(value_str);
-    }
-
-    return !ret;
+    *value_ptr = atoi(value_str);
+    return true;
 }
 
 bool readini_float(IniReader* ini, const char* key, float* value_ptr) {
-    int ret = true;
+    char tmp_str[LINE_BUFSIZE];
+    char* value_str;
 
-    char tmp_str[512];
-    strcpy(tmp_str, ini->cur_line);
+    if (!readini_match(ini, key, tmp_str, &value_str))
+        return false;
 
-    char* key_str = strtok(tmp_str, " ,\t=");
-    char* value_str = strtok(NULL, " ,\t=");
-
-    ret = strcasecmp(key_str, key);
-    if ( !ret )
-    {
-        *value_ptr = strtof(value_str, NULL);;
-    }
-
-    return !ret;
+    *value_ptr = strtof(value_str, NULL);
+    return true;
 }
 
+/*
+ * The value runs to the end of the line; a value in quotes ("a b" or 'a b')
+ * keeps its spaces and stops at the closing quote.
+ */
 bool readini_string(IniReader* ini, const char* key, char* value_ptr) {
-    int ret = true;
-    char* tmp_value_ptr = value_ptr;
+    char tmp_str[LINE_BUFSIZE];
+    char* value_str;
+    const char* value;
 
-    char tmp_str[512];
-    char tmp_real_str[512];
-    strcpy(tmp_str, ini->cur_line);
+    if (!readini_match(ini, key, tmp_str, &value_str))
+        return false;
 
-    char* key_str = strtok(tmp_str, " ,\t=");
-    char* value_str = strtok(NULL, " ,\t=");
+    value = ini->cur_line + (value_str - tmp_str);
+    if (*value == '"' || *value == '\'') {
+        char quote = *value++;
 
-    strcpy(tmp_real_str, ini->cur_line+(value_str-tmp_str));
-
-    ret = strcasecmp(key_str, key);
-    if ( !ret )
-    {
-        if(*tmp_real_str == '"' || *tmp_real_str == '\'') {
-            char * totally_real_str = &tmp_real_str[1];
-
-            while (*totally_real_str != '"' && *totally_real_str != '\'') {
-                *tmp_value_ptr++ = *totally_real_str++;
-            }
-
-            *totally_real_str = '\0';
-
-        } else {
-            strcpy(value_ptr, tmp_real_str);
-        }
-
+        while (*value && *value != quote)
+            *value_ptr++ = *value++;
+        *value_ptr = '\0';
+    } else {
+        strcpy(value_ptr, value);
     }
 
-    return !ret;
+    return true;
 }

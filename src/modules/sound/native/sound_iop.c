@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 
 #include <audsrv.h>
@@ -11,7 +12,10 @@
 iopman_define_module(libsd);
 iopman_define_module(audsrv);
 
+static module_entry *audsrv_entry;
 static bool audsrv_ready;
+/* audsrv_init() was called for the driver now resident on the IOP. */
+static bool audsrv_attempted;
 static uint32_t audsrv_generation;
 
 /*
@@ -23,6 +27,14 @@ static int sound_audsrv_started(void *module) {
     int result;
 
     (void)module;
+    /*
+     * The EE side of audsrv has no guard of its own: a second audsrv_init()
+     * binds the RPC again and starts another callback thread. A failure is
+     * not retried until the driver is loaded again.
+     */
+    if (audsrv_attempted)
+        return audsrv_ready ? 0 : -1;
+    audsrv_attempted = true;
     result = audsrv_init();
     if (result != AUDSRV_ERR_NOERROR) {
         dbgprintf("[Sound] audsrv_init failed: %d\n", result);
@@ -30,8 +42,7 @@ static int sound_audsrv_started(void *module) {
     }
     audsrv_ready = true;
     audsrv_generation++;
-    /* Stops every voice and drops the samples of a previous session. */
-    audsrv_adpcm_init();
+    /* The driver's _start already ran audsrv_adpcm_init(): voices are off. */
     sound_sfx_audsrv_started();
     sound_stream_audsrv_started();
     dbgprintf("[Sound] audsrv ready\n");
@@ -40,6 +51,7 @@ static int sound_audsrv_started(void *module) {
 
 static int sound_audsrv_stopping(void *module) {
     (void)module;
+    audsrv_attempted = false;
     if (!audsrv_ready)
         return 0;
     sound_stream_halt();
@@ -61,8 +73,16 @@ void athena_sound_register_iop(void) {
         return;
     entry = iopman_ensure_module_buffer("audsrv", audsrv, after_libsd,
         sound_audsrv_started, sound_audsrv_stopping);
-    if (entry && entry->init != sound_audsrv_started)
+    if (!entry)
+        return;
+    /* Registered by another module without hooks: the EE side is ours. */
+    if (!entry->init && !entry->end) {
+        entry->init = sound_audsrv_started;
+        entry->end = sound_audsrv_stopping;
+    }
+    if (entry->init != sound_audsrv_started)
         dbgprintf("[Sound] audsrv was registered by another module\n");
+    audsrv_entry = entry;
 }
 
 void athena_sound_module_shutdown(void) {
@@ -72,24 +92,29 @@ void athena_sound_module_shutdown(void) {
     audsrv_adpcm_init();
 }
 
+/*
+ * Loads audsrv on the IOP once. The IOP manager skips modules already
+ * started, so this never runs SifExecModuleBuffer twice for the same driver.
+ */
 int athena_sound_ensure(void) {
-    module_entry *entry;
     int status;
 
     if (audsrv_ready)
         return ATHENA_SOUND_OK;
-    entry = iopman_search_module("audsrv");
-    if (!entry) {
+    if (!audsrv_entry) {
         dbgprintf("[Sound] audsrv is not registered\n");
         return ATHENA_SOUND_ERR_IOP;
     }
-    if (!entry->started) {
-        status = iopman_load_module(entry, 0, NULL);
+    if (!audsrv_entry->started) {
+        status = iopman_load_module(audsrv_entry, 0, NULL);
         if (status != MODULE_STATUS_LOADED) {
             dbgprintf("[Sound] failed to load audsrv (%d)\n", status);
             return ATHENA_SOUND_ERR_IOP;
         }
     }
+    /* Loaded through another module's hooks: ours did not run. */
+    if (audsrv_entry->init != sound_audsrv_started)
+        sound_audsrv_started(audsrv_entry);
     /* Started, but audsrv_init failed: not retried until the next reset. */
     return audsrv_ready ? ATHENA_SOUND_OK : ATHENA_SOUND_ERR_IOP;
 }
@@ -112,8 +137,42 @@ const char *athena_sound_result_string(int result) {
     case ATHENA_SOUND_ERR_FORMAT: return "unsupported audio format";
     case ATHENA_SOUND_ERR_MEMORY: return "out of memory";
     case ATHENA_SOUND_ERR_SPU_MEMORY: return "not enough SPU2/IOP memory for the sample";
-    case ATHENA_SOUND_ERR_STALE: return "sound effect was unloaded by an IOP reset; load it again";
+    case ATHENA_SOUND_ERR_CORRUPT: return "corrupt ADPCM data";
     case ATHENA_SOUND_ERR_THREAD: return "cannot start the streaming thread";
     default: return "unknown error";
     }
+}
+
+const char *athena_sound_result_code(int result) {
+    switch (result) {
+    case ATHENA_SOUND_ERR_ARGS: return "INVALID_ARGUMENT";
+    case ATHENA_SOUND_ERR_IOP: return "IOP";
+    case ATHENA_SOUND_ERR_OPEN: return "NOT_FOUND";
+    case ATHENA_SOUND_ERR_READ: return "IO";
+    case ATHENA_SOUND_ERR_FORMAT: return "BAD_FORMAT";
+    case ATHENA_SOUND_ERR_MEMORY: return "NO_MEMORY";
+    case ATHENA_SOUND_ERR_SPU_MEMORY: return "SPU_MEMORY";
+    case ATHENA_SOUND_ERR_CORRUPT: return "CORRUPT";
+    case ATHENA_SOUND_ERR_THREAD: return "THREAD";
+    default: return "UNKNOWN";
+    }
+}
+
+/* Written and read on the script thread only (open/load paths). */
+static char sound_detail[160];
+
+void sound_set_detail(const char *fmt, ...) {
+    va_list args;
+
+    if (!fmt) {
+        sound_detail[0] = '\0';
+        return;
+    }
+    va_start(args, fmt);
+    vsnprintf(sound_detail, sizeof(sound_detail), fmt, args);
+    va_end(args);
+}
+
+const char *athena_sound_error_detail(void) {
+    return sound_detail;
 }

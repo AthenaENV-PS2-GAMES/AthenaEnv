@@ -50,10 +50,32 @@ wav("short.wav", [
     chunk("LIST", Buffer.from("INFOISFT\x05\x00\x00\x00test\x00", "binary")),
     chunk("data", tone(22050, 1, 500)),
 ]);
-// audsrv has no 16000 Hz upsampler.
-wav("rate16k.wav", [chunk("fmt ", fmt(1, 1, 16000, 16)), chunk("data", tone(16000, 1, 100))]);
+/* 440 Hz sine as 8-bit unsigned or 32-bit float samples. */
+function toneAs(rate, channels, ms, kind) {
+    const frames = Math.floor(rate * ms / 1000);
+    const size = kind === "u8" ? 1 : 4;
+    const data = Buffer.alloc(frames * channels * size);
+    for (let i = 0; i < frames; i++) {
+        const value = Math.sin(2 * Math.PI * 440 * i / rate) * 0.25;
+        for (let c = 0; c < channels; c++) {
+            const at = (i * channels + c) * size;
+            if (kind === "u8") data[at] = 128 + Math.round(value * 127);
+            else data.writeFloatLE(value, at);
+        }
+    }
+    return data;
+}
+
+// Formats audsrv cannot play directly: converted on the EE.
+// 16000 Hz (audsrv has no upsampler for it): played at 32000 Hz.
+wav("rate16k.wav", [chunk("fmt ", fmt(1, 1, 16000, 16)), chunk("data", tone(16000, 1, 2000))]);
 // IEEE float samples.
-wav("float.wav", [chunk("fmt ", fmt(3, 2, 44100, 32)), chunk("data", Buffer.alloc(4096))]);
+wav("float.wav", [chunk("fmt ", fmt(3, 2, 44100, 32)), chunk("data", toneAs(44100, 2, 1000, "f32"))]);
+// 8-bit stereo exists in audsrv only at 11025 Hz.
+wav("stereo8.wav", [chunk("fmt ", fmt(1, 2, 22050, 8)), chunk("data", toneAs(22050, 2, 1000, "u8"))]);
+// Still refused: mu-law and more than two channels.
+wav("mulaw.wav", [chunk("fmt ", fmt(7, 1, 8000, 8)), chunk("data", Buffer.alloc(800))]);
+wav("surround.wav", [chunk("fmt ", fmt(1, 6, 48000, 16)), chunk("data", Buffer.alloc(4800))]);
 // Header with no "data" chunk.
 wav("nodata.wav", [chunk("fmt ", fmt(1, 2, 44100, 16))]);
 
@@ -62,3 +84,26 @@ fs.writeFileSync(path.join(dir, "garbage.bin"), Buffer.from("this is not audio a
 const badAdpcm = Buffer.alloc(64);
 badAdpcm.write("XPCM", 0, "ascii");
 fs.writeFileSync(path.join(dir, "bad.adp"), badAdpcm);
+
+// Sound effects made with tools/wav2adp.js (same encoder as adpenc).
+const { encodeWav } = require("../../../tools/wav2adp.js");
+const wavBytes = (rate, ms) => {
+    const data = tone(rate, 1, ms);
+    const riff = Buffer.concat([Buffer.from("WAVE", "ascii"),
+        chunk("fmt ", fmt(1, 1, rate, 16)), chunk("data", data)]);
+    const header = Buffer.alloc(8);
+    header.write("RIFF", 0, "ascii");
+    header.writeUInt32LE(riff.length, 4);
+    return Buffer.concat([header, riff]);
+};
+// 200 ms that loop forever.
+const loopAdpcm = encodeWav(wavBytes(22050, 200), { loop: true });
+fs.writeFileSync(path.join(dir, "loop.adp"), loopAdpcm);
+// Cut in the middle of a block: the SPU2 would never find the end flag.
+const oneShot = encodeWav(wavBytes(22050, 200));
+fs.writeFileSync(path.join(dir, "truncated.adp"), oneShot.subarray(0, oneShot.length - 24));
+// Whole blocks, but the end flags removed from the last two.
+const noEnd = Buffer.from(oneShot);
+noEnd[noEnd.length - 16 + 1] = 0;
+noEnd[noEnd.length - 32 + 1] = 0;
+fs.writeFileSync(path.join(dir, "noend.adp"), noEnd);
