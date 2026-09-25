@@ -43,10 +43,13 @@ struct AthenaThread {
     atomic_bool stop_requested;
     atomic_bool running;
     atomic_bool started;
+    atomic_bool detached;
     int completion_semaphore;
     void *owner;
     AthenaThreadOwnerInvalidator owner_invalidate;
 };
+
+static void athena_thread_reap_detached(void);
 
 void athena_thread_manager_init(void) {
     if (s_manager_initialized) return;
@@ -95,6 +98,7 @@ AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func,
     if (!s_manager_initialized) {
         athena_thread_manager_init();
     }
+    athena_thread_reap_detached();
 
     if (stack_size == 0) stack_size = ATHENA_THREAD_DEFAULT_STACK_SIZE;
     if (priority <= 0 || priority > 127) priority = ATHENA_THREAD_DEFAULT_PRIORITY;
@@ -110,6 +114,7 @@ AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func,
     atomic_init(&thread->stop_requested, false);
     atomic_init(&thread->running, false);
     atomic_init(&thread->started, false);
+    atomic_init(&thread->detached, false);
 
     if (name && name[0] != '\0') {
         snprintf(thread->name, sizeof(thread->name), "%s", name);
@@ -254,6 +259,10 @@ void athena_thread_core_finalize(AthenaThread *thread) {
     if (thread->id >= 0) {
         if (thread->owner_invalidate)
             thread->owner_invalidate(thread->owner);
+        /* The worker clears running before SignalSema/ExitThread, so it may
+         * still be READY here; force it dormant before freeing its stack. */
+        if (atomic_load_explicit(&thread->started, memory_order_acquire))
+            TerminateThread(thread->id);
         DeleteThread(thread->id);
         for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
             if (s_tasks[i].active && s_tasks[i].id == thread->id) {
@@ -285,6 +294,33 @@ void athena_thread_core_wait_all(void) {
     for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
         if (s_tasks[i].active && s_tasks[i].thread)
             athena_thread_core_wait(s_tasks[i].thread);
+    }
+
+    athena_thread_reap_detached();
+}
+
+void athena_thread_core_release(AthenaThread *thread) {
+    if (!thread) return;
+    thread->owner = NULL;
+    thread->owner_invalidate = NULL;
+
+    if (athena_thread_core_is_current(thread) ||
+        atomic_load_explicit(&thread->running, memory_order_acquire)) {
+        atomic_store_explicit(&thread->stop_requested, true, memory_order_release);
+        atomic_store_explicit(&thread->detached, true, memory_order_release);
+        return;
+    }
+
+    athena_thread_core_finalize(thread);
+}
+
+static void athena_thread_reap_detached(void) {
+    for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
+        AthenaThread *thread = s_tasks[i].active ? s_tasks[i].thread : NULL;
+        if (thread &&
+            atomic_load_explicit(&thread->detached, memory_order_acquire) &&
+            !atomic_load_explicit(&thread->running, memory_order_acquire))
+            athena_thread_core_finalize(thread);
     }
 }
 

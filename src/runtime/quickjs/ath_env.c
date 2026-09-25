@@ -214,6 +214,7 @@ const char* run_script(const char* script, bool isBuffer)
         return "AthenaError: Runtime creation failed"; 
     }
     
+    athena_js_gil_set_runtime(rt);
     js_std_set_worker_new_context_func(JS_NewCustomContext);
     js_std_init_handlers(rt);
     js_std_set_interrupt_handler(rt);
@@ -223,6 +224,7 @@ const char* run_script(const char* script, bool isBuffer)
 
     JSContext *ctx = JS_NewCustomContext(rt); 
     if (!ctx) { 
+        athena_js_gil_set_runtime(NULL);
         athena_js_gil_unlock();
         athena_js_gil_destroy();
         JS_FreeRuntime(rt);
@@ -269,6 +271,7 @@ const char* run_script(const char* script, bool isBuffer)
         athena_modules_quiesce();
         athena_js_gil_lock();
         destroy_vm(ctx);
+        athena_js_gil_set_runtime(NULL);
         athena_js_gil_unlock();
         athena_js_gil_destroy();
         return error_buf; 
@@ -279,6 +282,7 @@ const char* run_script(const char* script, bool isBuffer)
     athena_modules_quiesce();
     athena_js_gil_lock();
     destroy_vm(ctx);
+    athena_js_gil_set_runtime(NULL);
     athena_js_gil_unlock();
     athena_js_gil_destroy();
     dbgprintf("[AthenaCore] QuickJS runtime destroyed\n");

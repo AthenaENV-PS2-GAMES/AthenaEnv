@@ -26,6 +26,8 @@ AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func,
 int athena_thread_core_start(AthenaThread *thread);
 int athena_thread_core_stop(AthenaThread *thread);
 void athena_thread_core_destroy(AthenaThread *thread);
+/* Drops the owner without blocking; an active thread is reaped once it exits. */
+void athena_thread_core_release(AthenaThread *thread);
 int athena_thread_core_is_current(const AthenaThread *thread);
 int athena_thread_core_stop_requested(void);
 AthenaThread *athena_thread_core_get_by_id(int id);

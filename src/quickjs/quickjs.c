@@ -316,11 +316,13 @@ struct JSRuntime {
     void *user_opaque;
 };
 
+/* State owned by the native thread currently executing in the runtime. The
+   job list stays runtime-wide: pending jobs belong to the event loop, not to
+   the thread that queued them. */
 typedef struct JSRuntimeInternalThreadState {
-    const uint8_t *stack_top;
+    uintptr_t stack_top;
     JSValue current_exception;
     struct JSStackFrame *current_stack_frame;
-    struct list_head job_list;
 } JSRuntimeInternalThreadState;
 
 struct JSClass {
@@ -1798,11 +1800,20 @@ JSRuntime *JS_NewRuntime(void)
     return JS_NewRuntime2(&def_malloc_funcs, NULL);
 }
 
+static void update_stack_limit(JSRuntime *rt);
+
+/* Called by a native thread entering the runtime with no JS frames of its own. */
 void JS_Enter(JSRuntime *rt)
 {
     rt->stack_top = js_get_stack_pointer();
+    update_stack_limit(rt);
+    rt->current_exception = JS_NULL;
+    rt->current_stack_frame = NULL;
 }
 
+/* Saves the calling thread's execution state before another native thread
+   uses the runtime. Each thread keeps its own C stack, so the frame chain and
+   stack bounds must not leak across threads. */
 void JS_Suspend(JSRuntime *rt, JSRuntimeThreadState *state)
 {
     JSRuntimeInternalThreadState *s = (JSRuntimeInternalThreadState *)state;
@@ -1810,12 +1821,9 @@ void JS_Suspend(JSRuntime *rt, JSRuntimeThreadState *state)
     s->stack_top = rt->stack_top;
     s->current_exception = rt->current_exception;
     s->current_stack_frame = rt->current_stack_frame;
-    memcpy(&s->job_list, &rt->job_list, sizeof(rt->job_list));
 
-    rt->stack_top = NULL;
     rt->current_exception = JS_NULL;
     rt->current_stack_frame = NULL;
-    init_list_head(&rt->job_list);
 }
 
 void JS_Resume(JSRuntime *rt, const JSRuntimeThreadState *state)
@@ -1824,14 +1832,16 @@ void JS_Resume(JSRuntime *rt, const JSRuntimeThreadState *state)
         (const JSRuntimeInternalThreadState *)state;
 
     rt->stack_top = s->stack_top;
+    update_stack_limit(rt);
     rt->current_exception = s->current_exception;
     rt->current_stack_frame = s->current_stack_frame;
-    list_splice(&s->job_list, &rt->job_list);
 }
 
+/* Called by a native thread leaving the runtime for good. */
 void JS_Leave(JSRuntime *rt)
 {
-    rt->stack_top = NULL;
+    rt->current_exception = JS_NULL;
+    rt->current_stack_frame = NULL;
 }
 
 

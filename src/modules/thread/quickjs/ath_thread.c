@@ -12,6 +12,9 @@ typedef struct {
     AthenaThread *thread;
     JSContext *ctx;
     JSValue func;
+    /* Strong reference held while the worker runs, so the handle cannot be
+     * finalized (with the gate held by the main thread) under an active worker. */
+    JSValue self;
 } AthenaThreadJsObject;
 
 static void athena_thread_invalidate_owner(void *owner) {
@@ -30,19 +33,28 @@ static void athena_thread_worker(void *arg) {
 
     athena_js_gil_lock();
 
-    JSRuntime *rt = JS_GetRuntime(obj->ctx);
-    JS_UpdateStackTop(rt);
+    /* Releasing self may finalize obj on this thread, so cache what is
+     * needed afterwards. */
+    AthenaThread *thread = obj->thread;
+    JSContext *ctx = obj->ctx;
+    JSRuntime *rt = JS_GetRuntime(ctx);
 
-    if (JS_IsFunction(obj->ctx, obj->func)) {
+    if (JS_IsFunction(ctx, obj->func)) {
         JSValue ret;
         JSValue func_dup = JS_DupValueRT(rt, obj->func);
-        ret = JS_Call(obj->ctx, func_dup, JS_UNDEFINED, 0, NULL);
+        ret = JS_Call(ctx, func_dup, JS_UNDEFINED, 0, NULL);
         JS_FreeValueRT(rt, func_dup);
+        if (JS_IsException(ret))
+            JS_FreeValueRT(rt, JS_GetException(ctx));
         JS_FreeValueRT(rt, ret);
     }
 
-    athena_js_gil_unlock();
-    athena_thread_core_worker_finished(obj->thread);
+    JSValue self = obj->self;
+    obj->self = JS_UNDEFINED;
+    JS_FreeValueRT(rt, self);
+
+    athena_js_gil_leave();
+    athena_thread_core_worker_finished(thread);
     ExitThread();
 }
 
@@ -57,16 +69,10 @@ static void athena_thread_wait_and_finalize(AthenaThread *thread) {
 static void athena_thread_finalizer(JSRuntime *rt, JSValue value) {
     AthenaThreadJsObject *obj = JS_GetOpaque(value, athena_thread_class_id);
     if (obj) {
+        /* Finalizers run in the middle of object teardown: never release the
+         * gate or block here. An active worker is detached and reaped later. */
         if (obj->thread) {
-            if (athena_thread_core_is_current(obj->thread)) {
-                athena_thread_core_stop(obj->thread);
-                return;
-            }
-            if (athena_thread_core_get_status(obj->thread) >= 0) {
-                athena_thread_wait_and_finalize(obj->thread);
-            } else {
-                athena_thread_core_finalize(obj->thread);
-            }
+            athena_thread_core_release(obj->thread);
             obj->thread = NULL;
         }
         JS_FreeValueRT(rt, obj->func);
@@ -150,6 +156,7 @@ static JSValue athena_thread_new(JSContext *ctx, JSValueConst this_val, int argc
 
     obj->ctx = ctx;
     obj->func = JS_DupValue(ctx, argv[0]);
+    obj->self = JS_UNDEFINED;
 
     obj->thread = athena_thread_core_create(name_str, athena_thread_worker, obj, stack_size, priority);
     if (allocated_name) {
@@ -175,12 +182,28 @@ static JSValue athena_thread_new(JSContext *ctx, JSValueConst this_val, int argc
     return js_val;
 }
 
+static JSValue athena_thread_start_object(JSContext *ctx, AthenaThreadJsObject *obj, JSValueConst value) {
+    /* The worker cannot run JS until this call returns the gate, so it
+     * always observes self set. */
+    int retained = JS_IsUndefined(obj->self);
+    if (retained)
+        obj->self = JS_DupValue(ctx, value);
+
+    int result = athena_thread_core_start(obj->thread);
+    if (result < 0 && retained) {
+        JSValue self = obj->self;
+        obj->self = JS_UNDEFINED;
+        JS_FreeValue(ctx, self);
+    }
+    return JS_NewInt32(ctx, result);
+}
+
 static JSValue athena_thread_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     if (argc != 1) return JS_ThrowTypeError(ctx, "Thread.start expects 1 argument");
     AthenaThreadJsObject *obj = thread_from_value(ctx, argv[0]);
     if (!obj) return JS_EXCEPTION;
 
-    return JS_NewInt32(ctx, athena_thread_core_start(obj->thread));
+    return athena_thread_start_object(ctx, obj, argv[0]);
 }
 
 static JSValue athena_thread_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -281,7 +304,10 @@ static JSValue athena_thread_kill(JSContext *ctx, JSValueConst this_val, int arg
         athena_js_gil_unlock();
         result = athena_thread_core_wait(thread);
         athena_js_gil_lock();
-        if (result >= 0)
+        /* A detached thread may have been reaped while the gate was released. */
+        if (athena_thread_core_get_by_id(id) != thread)
+            result = 0;
+        else if (result >= 0)
             athena_thread_core_finalize(thread);
     }
     return JS_NewInt32(ctx, result);
@@ -294,7 +320,7 @@ static JSValue athena_thread_kill(JSContext *ctx, JSValueConst this_val, int arg
 static JSValue athena_thread_proto_start(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     AthenaThreadJsObject *obj = thread_from_value(ctx, this_val);
     if (!obj) return JS_EXCEPTION;
-    return JS_NewInt32(ctx, athena_thread_core_start(obj->thread));
+    return athena_thread_start_object(ctx, obj, this_val);
 }
 
 static JSValue athena_thread_proto_stop(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
