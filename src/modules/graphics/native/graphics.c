@@ -574,15 +574,23 @@ void set_screen_param(uint8_t param, uint64_t value) {
 			test.fields.dest_alpha_test_method = (int)value;
 			break;
 		case DEPTH_TEST_ENABLE:
+			/*
+			 * The GS forbids ZTE=0, so "disabled" is ZTE=1 with ZTST=ALWAYS.
+			 * Disabling keeps the real method to restore on enable; enabling
+			 * without one uses GEQUAL, the gsKit default for z-buffering.
+			 */
 			if (value) {
-				test.fields.depth_test_enabled = (bool)value;
-				if (saved_depth_method_valid[gsGlobal->PrimContext])
+				test.fields.depth_test_enabled = true;
+				if (test.fields.depth_test_method == DEPTH_ALWAYS)
 					test.fields.depth_test_method =
-						saved_depth_method[gsGlobal->PrimContext];
+						saved_depth_method_valid[gsGlobal->PrimContext] ?
+						saved_depth_method[gsGlobal->PrimContext] : DEPTH_GEQUAL;
 			} else {
-				saved_depth_method[gsGlobal->PrimContext] =
-					test.fields.depth_test_method;
-				saved_depth_method_valid[gsGlobal->PrimContext] = true;
+				if (test.fields.depth_test_method != DEPTH_ALWAYS) {
+					saved_depth_method[gsGlobal->PrimContext] =
+						test.fields.depth_test_method;
+					saved_depth_method_valid[gsGlobal->PrimContext] = true;
+				}
 				test.fields.depth_test_enabled = true;
 				test.fields.depth_test_method = DEPTH_ALWAYS;
 			}

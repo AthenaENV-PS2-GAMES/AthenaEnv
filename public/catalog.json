@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-25T18:20:16.162Z",
+  "generatedAt": "2026-09-25T19:40:49.480Z",
   "modules": [
     {
       "id": "archive",
@@ -292,6 +292,27 @@
         "ee_libs": []
       },
       "global_alias": "IOP",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "loop",
+      "name": "Loop",
+      "description": "Game loop driven by the runtime: clears the screen, calls a per-frame callback with the native delta time and flips.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Loop",
       "api": {
         "native": true,
         "quickjs": true
