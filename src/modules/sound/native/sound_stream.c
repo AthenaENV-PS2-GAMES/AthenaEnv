@@ -15,23 +15,40 @@
 #include "sound_internal.h"
 
 /*
- * One stream plays at a time, fed by a worker thread into audsrv's ring
- * buffer on the IOP. That ring holds only ~100 ms and keeps whatever was
- * last written: after a pause, seek or track change, the first ~50 ms read
- * after audsrv_set_format() would be stale audio. So the worker never stops
- * abruptly: it mutes, queues one ring of silence ("drain") and only then
- * stops or restarts, leaving the ring clean for the next start.
+ * One stream plays at a time, through two threads:
+ *
+ * - the reader decodes (and converts) the current stream into a queue of
+ *   blocks, up to ~0.5 s ahead. File I/O only ever blocks this thread;
+ * - the feeder copies blocks into audsrv's ring on the IOP. That ring holds
+ *   only ~100 ms, so the feeder never touches the file.
+ *
+ * Every write to audsrv is recorded as a segment (byte offset, file frame).
+ * The byte being heard is `written - audsrv_queued()`, so the position is
+ * the segment it falls in, and loop/end events fire when they are heard.
+ * A seek, or a switch to a stream with the same format, drops the queued
+ * blocks and appends the new audio after what audsrv already holds: no gap.
+ *
+ * The ring keeps whatever was last written and audsrv keeps reading it, so
+ * whenever feeding stops the feeder first writes a ring of silence (the
+ * "drain"), and when the reader falls behind it writes silence rather than
+ * let old audio replay. A format change drains the ring, muted, before
+ * audsrv_set_format(), which would otherwise replay half of it.
  *
  * audsrv_wait_audio() is not used: it holds audsrv's RPC lock while it waits,
- * which would block sound effects on the script thread. The worker polls
+ * which would block sound effects on the script thread. The feeder polls
  * audsrv_available() and sleeps for the time the missing bytes take to play.
  *
  * Files audsrv cannot play as they are (16 kHz, 8-bit stereo, 24-bit, float)
- * are converted by the worker to 16-bit at a rate audsrv supports, with
+ * are converted by the reader to 16-bit at a rate audsrv supports, with
  * linear interpolation. Positions are always in frames of the file.
  */
 
-#define STREAM_CHUNK 4096
+/* Decoded audio queued between the reader and the feeder. */
+#define BLOCK_BYTES 4096
+#define BLOCK_COUNT 32
+#define READ_AHEAD_MS 500
+/* Writes to audsrv the position can still be mapped through. */
+#define SEGMENT_COUNT 64
 /* Source bytes decoded ahead by the converter. */
 #define STREAM_SOURCE_CHUNK 2048
 /* Bigger stdio buffer: fewer, larger reads through fileXio. */
@@ -43,6 +60,7 @@
 #define STREAM_RING_RESERVE 4
 #define STREAM_MIN_SLEEP_US 1000
 #define STREAM_MAX_SLEEP_US 10000
+#define READER_IDLE_US 3000
 #define STREAM_MIN_RATE 1000
 #define STREAM_MAX_RATE 192000
 /* 16.16 fixed point: gains and resampling steps. */
@@ -70,16 +88,11 @@ struct AthenaSoundStream {
     uint32_t total_frames;
     /* WAV: file offset of the first sample. */
     long data_offset;
-    /* Next frame the decoder produces. */
-    uint32_t frame;
-    /* While playing: frame at the end of the audio queued so far. */
-    uint32_t submitted;
-    /* While playing: frame playback started from; the position never goes below. */
-    uint32_t start_frame;
-    /* While playing: playback wrapped around at least once. */
-    bool wrapped;
     bool loop;
 
+    /* Decoder, used by the reader thread only (and before it starts). */
+    /* Next frame the decoder produces. */
+    uint32_t frame;
     /* Converter: output frames interpolate between `cur` and `next`. */
     uint8_t *source;
     uint32_t source_len;
@@ -95,7 +108,15 @@ struct AthenaSoundStream {
     /* The file ended (no loop): `next` repeats `cur`. */
     bool exhausted;
 
-    /* Events, counted by the worker. */
+    /* Under player.lock. */
+    /* Where playback continues from; the position when not playing. */
+    uint32_t resume_frame;
+    /* The reader must move the decoder to resume_frame first. */
+    bool reseek;
+    /* The reader queued the last block. */
+    bool eof;
+    /* The next block starts after a loop wrap. */
+    bool wrap_next;
     uint32_t ends;
     uint32_t loops;
     bool ended;
@@ -115,16 +136,57 @@ typedef enum {
     FADE_THEN_STOP,
 } FadeAction;
 
+enum {
+    /* The block starts right after a loop wrap. */
+    BLOCK_WRAP = 1,
+    /* The stream ends after this block (which may be empty). */
+    BLOCK_END = 2,
+};
+
+typedef struct {
+    char data[BLOCK_BYTES] __attribute__((aligned(64)));
+    uint32_t len;
+    /* Bytes already sent to audsrv. */
+    uint32_t sent;
+    /* File frame of data[0]. */
+    uint32_t frame;
+    uint8_t flags;
+} Block;
+
+typedef enum {
+    /* Audio of `stream` from `frame` on. */
+    SEGMENT_DATA,
+    /* Silence while `stream` waits at `frame`. */
+    SEGMENT_HOLD,
+    /* `stream` ended here. */
+    SEGMENT_END,
+} SegmentKind;
+
+typedef struct {
+    int64_t offset;
+    AthenaSoundStream *stream;
+    uint32_t frame;
+    uint8_t kind;
+    /* DATA: the audio starts right after a loop wrap. */
+    bool wrap;
+    /* Its event (loop, end) was processed. */
+    bool fired;
+} Segment;
+
 static struct {
     AthenaMutex *lock;
-    AthenaThread *thread;
-    /* The worker loops; cleared by the worker itself, under the lock. */
-    bool thread_running;
+    AthenaThread *feeder;
+    AthenaThread *reader;
+    /* The threads loop; each clears its flag itself, under the lock. */
+    bool feeder_running;
+    bool reader_running;
     bool halting;
     AthenaSoundStream *current;
     PlayerState state;
     bool resume_after_drain;
-    /* Volume forced to 0 while a pause/seek/switch drains. */
+    /* Draining after the current stream's last block: it plays until heard. */
+    bool end_pending;
+    /* Volume forced to 0 while a pause/switch drains. */
     bool muted;
     /* audsrv_set_format() is due before `current` is fed. */
     bool format_pending;
@@ -136,9 +198,31 @@ static struct {
     uint32_t frame_bytes;
     int bits;
     int channels;
-    uint32_t step;
     uint32_t ring_bytes;
     uint32_t bytes_per_second;
+
+    /* Reader -> feeder queue. */
+    Block blocks[BLOCK_COUNT];
+    uint32_t block_head;
+    uint32_t block_count;
+    uint32_t queued_bytes;
+    /* Bumped to discard what the reader is decoding. */
+    uint32_t read_gen;
+    /* Stream the reader decodes outside the lock. */
+    AthenaSoundStream *decoding;
+
+    /* Bytes written to audsrv since audsrv_set_format(). */
+    int64_t written;
+    Segment segments[SEGMENT_COUNT];
+    uint32_t segment_head;
+    uint32_t segment_count;
+    /* A seek or switch not heard yet: until `seek_offset`, the position is `seek_frame`. */
+    bool seek_active;
+    int64_t seek_offset;
+    uint32_t seek_frame;
+    /* File frame right after the audio written last. */
+    uint32_t next_frame;
+
     /*
      * Fade applied to the samples (audsrv's own volume has 26 steps): gain
      * goes from gain_from to gain_to (16.16) over gain_frames output frames.
@@ -155,8 +239,8 @@ static struct {
     .gain_to = FIXED_ONE,
 };
 
-/* Worker-only buffer. */
-static char stream_chunk[STREAM_CHUNK] __attribute__((aligned(64)));
+/* Feeder-only buffer for silence. */
+static char silence_chunk[BLOCK_BYTES] __attribute__((aligned(64)));
 
 /* Formats audsrv can upsample (iop/sound/audsrv/src/upsamplers.c). */
 static const struct {
@@ -444,7 +528,7 @@ fail:
     return NULL;
 }
 
-/* --- Decoding ----------------------------------------------------------- */
+/* --- Decoding (reader thread) ------------------------------------------- */
 
 /* Moves the decoder only; the converter keeps its state (loop wrap). */
 static void stream_seek_decoder(AthenaSoundStream *stream, uint32_t frame) {
@@ -470,11 +554,6 @@ static void stream_seek(AthenaSoundStream *stream, uint32_t frame) {
     stream->primed = false;
     stream->exhausted = false;
     stream->phase = 0;
-}
-
-/* Frame being fed next, in frames of the file. */
-static uint32_t stream_feed_frame(const AthenaSoundStream *stream) {
-    return stream->convert && stream->primed ? stream->cur_frame : stream->frame;
 }
 
 /* Decodes up to `bytes` (a multiple of the frame size); *end at end of data. */
@@ -515,14 +594,16 @@ static uint32_t stream_decode(AthenaSoundStream *stream, char *out, uint32_t byt
 
 /*
  * Fills `bytes` of file data, wrapping to the start of looping streams.
- * With stop_at_wrap it returns at the wrap instead, so a converter buffer
- * never holds frames from both sides of it.
+ * With stop_at_wrap it returns at the wrap instead (setting *wrapped), so a
+ * buffer never holds frames from both sides of it.
  */
 static uint32_t stream_fill(AthenaSoundStream *stream, char *out, uint32_t bytes, bool *ended,
-    bool stop_at_wrap) {
+    bool stop_at_wrap, bool *wrapped) {
     uint32_t filled = 0;
 
     *ended = false;
+    if (wrapped)
+        *wrapped = false;
     while (filled < bytes) {
         bool end;
         uint32_t got = stream_decode(stream, out + filled, bytes - filled, &end);
@@ -535,14 +616,14 @@ static uint32_t stream_fill(AthenaSoundStream *stream, char *out, uint32_t bytes
             break;
         }
         stream_seek_decoder(stream, 0);
-        stream->loops++;
+        if (wrapped)
+            *wrapped = true;
         if (stop_at_wrap)
             break;
-        stream->wrapped = true;
-        stream->start_frame = 0;
     }
     return filled;
 }
+
 
 static int16_t stream_sample(const AthenaSoundStream *stream, const uint8_t *bytes) {
     switch (stream->fmt.bits) {
@@ -584,7 +665,7 @@ static bool stream_next_frame(AthenaSoundStream *stream, int16_t frame[2], uint3
             bool ended;
 
             stream->source_first = stream->frame;
-            stream->source_len = stream_fill(stream, (char *)stream->source, chunk, &ended, true);
+            stream->source_len = stream_fill(stream, (char *)stream->source, chunk, &ended, true, NULL);
             if (ended && stream->source_len == 0)
                 return false;
         }
@@ -600,13 +681,22 @@ static bool stream_next_frame(AthenaSoundStream *stream, int16_t frame[2], uint3
     return true;
 }
 
-/* Fills `bytes` of 16-bit output, resampled; *ended once the file ran out. */
-static uint32_t stream_convert(AthenaSoundStream *stream, char *out, uint32_t bytes, bool *ended) {
+
+/*
+ * Fills `bytes` of 16-bit output, resampled. Returns early at a loop wrap,
+ * so the next call starts right after it (*wrap_at_start); *first is the
+ * file frame of the first output frame; *ended once the file ran out.
+ */
+static uint32_t stream_convert(AthenaSoundStream *stream, char *out, uint32_t bytes, bool *ended,
+    bool *wrap_at_start, uint32_t *first) {
     int16_t *samples = (int16_t *)out;
     uint32_t frames = bytes / stream->out_frame_bytes;
     int channels = stream->out.channels;
+    uint32_t done = 0;
 
     *ended = false;
+    *wrap_at_start = false;
+    *first = stream->frame;
     if (!stream->primed) {
         if (!stream_next_frame(stream, stream->cur, &stream->cur_frame)) {
             *ended = true;
@@ -621,22 +711,17 @@ static uint32_t stream_convert(AthenaSoundStream *stream, char *out, uint32_t by
         stream->primed = true;
     }
 
-    for (uint32_t done = 0; done < frames; done++) {
-        for (int c = 0; c < channels; c++) {
-            int32_t delta = stream->next[c] - stream->cur[c];
-            samples[done * channels + c] =
-                (int16_t)(stream->cur[c] + (int32_t)(((int64_t)delta * stream->phase) >> 16));
-        }
-        stream->phase += stream->step;
+    while (done < frames) {
         while (stream->phase >= FIXED_ONE) {
-            stream->phase -= FIXED_ONE;
             if (stream->exhausted) {
                 *ended = true;
-                return (done + 1) * stream->out_frame_bytes;
+                return done * stream->out_frame_bytes;
             }
+            /* Promoting would cross the loop wrap: that starts the next buffer. */
             if (stream->next_frame < stream->cur_frame) {
-                stream->wrapped = true;
-                stream->start_frame = 0;
+                if (done > 0)
+                    return done * stream->out_frame_bytes;
+                *wrap_at_start = true;
             }
             memcpy(stream->cur, stream->next, sizeof(stream->cur));
             stream->cur_frame = stream->next_frame;
@@ -644,40 +729,152 @@ static uint32_t stream_convert(AthenaSoundStream *stream, char *out, uint32_t by
                 stream->next_frame = stream->cur_frame;
                 stream->exhausted = true;
             }
+            stream->phase -= FIXED_ONE;
         }
+        if (done == 0)
+            *first = stream->cur_frame;
+        for (int c = 0; c < channels; c++) {
+            int32_t delta = stream->next[c] - stream->cur[c];
+            samples[done * channels + c] =
+                (int16_t)(stream->cur[c] + (int32_t)(((int64_t)delta * stream->phase) >> 16));
+        }
+        done++;
+        stream->phase += stream->step;
     }
-    return frames * stream->out_frame_bytes;
+    return done * stream->out_frame_bytes;
 }
 
-/* --- Player (all under player.lock) ------------------------------------- */
+/* --- Player (under player.lock unless noted) ----------------------------- */
 
-static uint32_t player_live_frame(AthenaSoundStream *stream) {
-    int queued = audsrv_queued();
-    uint32_t queued_out = queued > 0 ? (uint32_t)queued / player.frame_bytes : 0;
-    uint32_t queued_frames = (uint32_t)(((uint64_t)queued_out * player.step) >> 16);
-    uint32_t submitted = stream->submitted;
+static Block *player_block(uint32_t index) {
+    return &player.blocks[(player.block_head + index) % BLOCK_COUNT];
+}
+
+/* Drops the queued blocks and whatever the reader is decoding. */
+static void player_flush(void) {
+    player.read_gen++;
+    player.block_count = 0;
+    player.queued_bytes = 0;
+}
+
+static uint32_t player_read_ahead(const AthenaSoundStream *stream) {
+    uint32_t bytes = (uint32_t)(((uint64_t)stream->out.freq * stream->out_frame_bytes *
+        READ_AHEAD_MS) / 1000);
+
+    return bytes < BLOCK_BYTES ? BLOCK_BYTES : bytes;
+}
+
+/* Playback of `stream` continues from `frame`: the reader moves there first. */
+static void stream_request_seek(AthenaSoundStream *stream, uint32_t frame) {
+    stream->resume_frame = frame;
+    stream->reseek = true;
+    stream->eof = false;
+    stream->wrap_next = false;
+}
+
+static Segment *player_segment(uint32_t index) {
+    return &player.segments[(player.segment_head + index) % SEGMENT_COUNT];
+}
+
+static void player_clear_segments(void) {
+    player.segment_head = 0;
+    player.segment_count = 0;
+}
+
+/* A loop or end is counted when its audio is heard. */
+static void player_fire(Segment *segment) {
+    AthenaSoundStream *stream = segment->stream;
+
+    if (segment->fired)
+        return;
+    segment->fired = true;
+    if (!stream)
+        return;
+    if (segment->kind == SEGMENT_DATA && segment->wrap) {
+        stream->loops++;
+    } else if (segment->kind == SEGMENT_END) {
+        stream->ends++;
+        if (stream == player.current)
+            player.end_pending = false;
+        /* Not when play() already started it over during its tail. */
+        if (!(stream == player.current && player.resume_after_drain))
+            stream->ended = true;
+    }
+}
+
+static void player_add_segment(AthenaSoundStream *stream, SegmentKind kind, uint32_t frame,
+    bool wrap) {
+    Segment *segment;
+
+    if (player.segment_count == SEGMENT_COUNT) {
+        player_fire(player_segment(0));
+        player.segment_head = (player.segment_head + 1) % SEGMENT_COUNT;
+        player.segment_count--;
+    }
+    segment = player_segment(player.segment_count++);
+    segment->offset = player.written;
+    segment->stream = stream;
+    segment->frame = frame;
+    segment->kind = (uint8_t)kind;
+    segment->wrap = wrap;
+    segment->fired = false;
+}
+
+/* Offset in the written audio that audsrv is playing now. */
+static int64_t player_heard(int queued) {
+    return player.written - (queued > 0 ? queued : 0);
+}
+
+/* Fires the events heard and forgets segments the position no longer needs. */
+static void player_process_heard(int64_t heard) {
+    for (uint32_t i = 0; i < player.segment_count; i++) {
+        Segment *segment = player_segment(i);
+        if (segment->offset > heard)
+            break;
+        player_fire(segment);
+    }
+    while (player.segment_count >= 2 && player_segment(1)->offset <= heard) {
+        player.segment_head = (player.segment_head + 1) % SEGMENT_COUNT;
+        player.segment_count--;
+    }
+    if (player.seek_active && heard >= player.seek_offset)
+        player.seek_active = false;
+}
+
+/* File frame of `stream` at `heard`. */
+static uint32_t player_frame_at(AthenaSoundStream *stream, int64_t heard) {
+    const Segment *found = NULL;
+    bool last = false;
     uint32_t frame;
 
-    if (submitted >= queued_frames)
-        frame = submitted - queued_frames;
-    else if (stream->wrapped)
-        frame = stream->total_frames - (queued_frames - submitted) % stream->total_frames;
-    else
-        frame = 0;
-    /* The ring starts with ~50 ms of silence queued before the first chunk. */
-    if (!stream->wrapped && frame < stream->start_frame)
-        frame = stream->start_frame;
+    /* A seek or switch plays after what audsrv still holds: report its target. */
+    if (player.seek_active && heard < player.seek_offset)
+        return player.seek_frame;
+    for (uint32_t i = 0; i < player.segment_count; i++) {
+        const Segment *segment = player_segment(i);
+        if (segment->offset > heard)
+            break;
+        found = segment;
+        last = i + 1 == player.segment_count;
+    }
+    if (!found || found->stream != stream || found->kind == SEGMENT_END)
+        return stream->resume_frame;
+    if (found->kind == SEGMENT_HOLD)
+        return found->frame;
+    frame = found->frame + (uint32_t)(((uint64_t)((heard - found->offset) / player.frame_bytes) *
+        stream->step) >> 16);
+    /* audsrv ran past the audio written (late feeder): do not run ahead. */
+    if (last && frame > player.next_frame)
+        frame = player.next_frame;
     return frame < stream->total_frames ? frame : stream->total_frames;
 }
 
-/* Rewinds the decoder of the playing stream to the frame being heard. */
+/* Playback of the current stream will continue from the frame being heard. */
 static void player_keep_heard_position(void) {
     AthenaSoundStream *stream = player.current;
 
-    if (stream && player.state == PLAYER_PLAYING) {
-        stream_seek(stream, player_live_frame(stream));
-        stream->wrapped = false;
-    }
+    if (stream && player.state == PLAYER_PLAYING && !player.format_pending)
+        stream_request_seek(stream, player_frame_at(stream, player_heard(audsrv_queued())));
 }
 
 static void player_set_volume(int volume) {
@@ -688,9 +885,20 @@ static void player_set_volume(int volume) {
 }
 
 static void player_drain(bool resume, bool mute) {
+    /*
+     * Nothing was fed since play(): the ring still holds the last drain's
+     * silence, and after audsrv_stop_audio() the IOP consumes nothing until
+     * audsrv is written to, so a drain now could never finish. Resuming
+     * keeps the pending audsrv_set_format(), for the current stream.
+     */
+    if (player.state == PLAYER_PLAYING && player.format_pending) {
+        if (!resume)
+            player.state = PLAYER_IDLE;
+        return;
+    }
     if (player.state == PLAYER_PLAYING) {
         player.state = PLAYER_DRAINING;
-        /* One ring of silence overwrites everything audsrv_set_format() could replay. */
+        /* One ring of silence overwrites everything audsrv could replay. */
         player.drain_left = player.ring_bytes;
     }
     player.resume_after_drain = resume;
@@ -753,27 +961,114 @@ static void player_apply_gain(char *buffer, uint32_t bytes) {
     }
 }
 
-/* A fade-out that reached silence pauses or stops the stream. */
-static void player_finish_fade(void) {
+/* Pauses (or stops) the current stream now, at the position heard. */
+static void player_halt_current(FadeAction action) {
     AthenaSoundStream *stream = player.current;
-    FadeAction action = player.fade_action;
 
-    if (action == FADE_THEN_NOTHING || player.gain_done < player.gain_frames || !stream)
-        return;
     player_keep_heard_position();
-    player_drain(false, true);
-    if (action == FADE_THEN_STOP)
-        stream_seek(stream, 0);
+    if (player.state == PLAYER_PLAYING) {
+        player_flush();
+        player_drain(false, true);
+    } else if (player.state == PLAYER_DRAINING) {
+        player.resume_after_drain = false;
+    }
     player_reset_fade();
+    if (action == FADE_THEN_STOP && stream)
+        stream_request_seek(stream, 0);
 }
 
-static void stream_worker(void *arg) {
+/* A fade-out that reached silence pauses or stops the stream. */
+static void player_finish_fade(void) {
+    if (player.fade_action != FADE_THEN_NOTHING && player.gain_done >= player.gain_frames &&
+        player.current)
+        player_halt_current(player.fade_action);
+}
+
+static void player_write_silence(uint32_t bytes) {
+    memset(silence_chunk, player.bits == 8 ? 0x80 : 0, bytes);
+    audsrv_play_audio(silence_chunk, (int)bytes);
+    player.written += bytes;
+}
+
+/* Feeds up to `bytes` of the current stream. */
+static void player_feed(uint32_t bytes, int queued) {
+    AthenaSoundStream *stream = player.current;
+    Block *block;
+    uint32_t count;
+
+    if (player.block_count == 0) {
+        /* The reader is late: silence, rather than let audsrv replay old audio. */
+        if ((uint32_t)(queued > 0 ? queued : 0) < player.ring_bytes / 4) {
+            count = bytes < player.ring_bytes / 4 ? bytes : player.ring_bytes / 4;
+            count -= count % player.frame_bytes;
+            if (count > 0) {
+                player_add_segment(stream, SEGMENT_HOLD, player.next_frame, false);
+                player_write_silence(count);
+            }
+        }
+        return;
+    }
+
+    block = player_block(0);
+    count = block->len - block->sent;
+    if (count > bytes)
+        count = bytes;
+    if (count > 0) {
+        uint32_t frame = block->frame + (uint32_t)(((uint64_t)(block->sent / player.frame_bytes) *
+            stream->step) >> 16);
+
+        player_apply_gain(block->data + block->sent, count);
+        player_add_segment(stream, SEGMENT_DATA, frame,
+            block->sent == 0 && (block->flags & BLOCK_WRAP));
+        audsrv_play_audio(block->data + block->sent, (int)count);
+        player.written += count;
+        block->sent += count;
+        player.queued_bytes -= count;
+        player.next_frame = block->frame + (uint32_t)(((uint64_t)(block->sent /
+            player.frame_bytes) * stream->step) >> 16);
+    }
+    if (block->sent == block->len) {
+        uint8_t flags = block->flags;
+
+        player.block_head = (player.block_head + 1) % BLOCK_COUNT;
+        player.block_count--;
+        if (flags & BLOCK_END) {
+            /* Plays (and counts as playing) until its last sample is heard. */
+            player_add_segment(stream, SEGMENT_END, 0, false);
+            player_reset_fade();
+            player.end_pending = true;
+            player_drain(false, false);
+            return;
+        }
+    }
+    player_finish_fade();
+}
+
+static void player_feed_drain(uint32_t bytes) {
+    if (bytes > player.drain_left)
+        bytes = player.drain_left;
+    player_write_silence(bytes);
+    player.drain_left -= bytes;
+    if (player.drain_left > 0)
+        return;
+    if (player.resume_after_drain && player.current) {
+        player_start();
+    } else {
+        player.state = PLAYER_IDLE;
+        /* Everything written has been heard by now. */
+        player_process_heard(player.written);
+        player.end_pending = false;
+    }
+}
+
+/* Feeds audsrv; never touches files. */
+static void stream_feeder(void *arg) {
     AthenaThread *self;
 
     (void)arg;
-    /* Set by player_ensure_worker(), which holds the lock until we start. */
+    /* Set by player_ensure_threads(), which holds the lock until we start. */
     player_lock();
-    self = player.thread;
+    self = player.feeder;
     player_unlock();
 
     for (;;) {
@@ -781,7 +1076,7 @@ static void stream_worker(void *arg) {
         bool set_format = false;
         bool exiting = false;
         int volume = -1;
-        int available;
+        int available, queued;
         uint32_t threshold;
         uint32_t bytes;
 
@@ -789,7 +1084,7 @@ static void stream_worker(void *arg) {
         if (player.halting || athena_thread_core_stop_requested() ||
             player.state == PLAYER_IDLE) {
             player.state = PLAYER_IDLE;
-            player.thread_running = false;
+            player.feeder_running = false;
             exiting = true;
         } else {
             if (player.state == PLAYER_PLAYING && player.format_pending) {
@@ -801,14 +1096,18 @@ static void stream_worker(void *arg) {
                 player.frame_bytes = stream->out_frame_bytes;
                 player.bits = format.bits;
                 player.channels = format.channels;
-                player.step = stream->step;
                 player.bytes_per_second = (uint32_t)format.freq * stream->out_frame_bytes;
                 /* audsrv: 10 feeds of 512 output samples, in input bytes. */
                 player.ring_bytes = (uint32_t)((512 * format.freq) / 48000) *
                     stream->out_frame_bytes * 10;
-                stream->submitted = stream_feed_frame(stream);
-                stream->start_frame = stream->submitted;
-                stream->wrapped = false;
+                /* The ring restarts: events still pending were heard already. */
+                player_process_heard(INT64_MAX);
+                player_clear_segments();
+                player.written = 0;
+                player.seek_active = true;
+                player.seek_offset = 0;
+                player.seek_frame = stream->resume_frame;
+                player.next_frame = stream->resume_frame;
             }
             if (!set_format && player.frame_bytes == 0) {
                 /* Nothing was ever configured to feed. */
@@ -857,7 +1156,7 @@ static void stream_worker(void *arg) {
          * bytes and consumes nothing until the first audsrv_play_audio(), so
          * waiting for ring / 2 could deadlock (22050 Hz mono: 2348 < 2350).
          */
-        threshold = player.ring_bytes / 4 < STREAM_CHUNK ? player.ring_bytes / 4 : STREAM_CHUNK;
+        threshold = player.ring_bytes / 4 < BLOCK_BYTES ? player.ring_bytes / 4 : BLOCK_BYTES;
         threshold -= threshold % player.frame_bytes;
         if (threshold == 0)
             threshold = player.frame_bytes;
@@ -865,6 +1164,9 @@ static void stream_worker(void *arg) {
             uint32_t missing = threshold - (available > 0 ? (uint32_t)available : 0);
             uint32_t sleep_us = (uint32_t)(((uint64_t)missing * 1000000) / player.bytes_per_second);
 
+            player_lock();
+            player_process_heard(player_heard(audsrv_queued()));
+            player_unlock();
             if (sleep_us < STREAM_MIN_SLEEP_US)
                 sleep_us = STREAM_MIN_SLEEP_US;
             else if (sleep_us > STREAM_MAX_SLEEP_US)
@@ -872,44 +1174,103 @@ static void stream_worker(void *arg) {
             DelayThread(sleep_us);
             continue;
         }
-        bytes = (uint32_t)available < STREAM_CHUNK ? (uint32_t)available : STREAM_CHUNK;
+        bytes = (uint32_t)available < BLOCK_BYTES ? (uint32_t)available : BLOCK_BYTES;
         bytes -= bytes % player.frame_bytes;
 
-        /* Held across the RPC so the position can be read consistently. */
+        /* Held across the RPCs so the position can be read consistently. */
         player_lock();
-        if (player.state == PLAYER_PLAYING && player.current) {
-            AthenaSoundStream *stream = player.current;
-            bool ended;
-            uint32_t got = stream->convert ?
-                stream_convert(stream, stream_chunk, bytes, &ended) :
-                stream_fill(stream, stream_chunk, bytes, &ended, false);
+        queued = audsrv_queued();
+        if (player.state == PLAYER_PLAYING && player.current && !player.format_pending)
+            player_feed(bytes, queued);
+        else if (player.state == PLAYER_DRAINING)
+            player_feed_drain(bytes);
+        if (player.state != PLAYER_IDLE)
+            player_process_heard(player_heard(audsrv_queued()));
+        player_unlock();
+    }
 
-            if (got > 0) {
-                player_apply_gain(stream_chunk, got);
-                audsrv_play_audio(stream_chunk, (int)got);
+    athena_thread_core_worker_finished(self);
+    ExitThread();
+}
+
+/* Whether the reader should decode another block of `stream`. */
+static bool reader_wants(const AthenaSoundStream *stream) {
+    if (!stream || stream->eof)
+        return false;
+    if (player.state != PLAYER_PLAYING &&
+        !(player.state == PLAYER_DRAINING && player.resume_after_drain))
+        return false;
+    return player.block_count < BLOCK_COUNT && player.queued_bytes < player_read_ahead(stream);
+}
+
+/* Decodes the current stream into blocks; the only thread doing file I/O. */
+static void stream_reader(void *arg) {
+    AthenaThread *self;
+
+    (void)arg;
+    player_lock();
+    self = player.reader;
+    player_unlock();
+
+    for (;;) {
+        AthenaSoundStream *stream;
+        Block *block;
+        uint32_t gen, seek_to, len, first;
+        bool seek, ended = false, wrap_at_start = false, wrapped_after = false;
+
+        player_lock();
+        if (player.halting || athena_thread_core_stop_requested() ||
+            player.state == PLAYER_IDLE) {
+            player.reader_running = false;
+            player_unlock();
+            break;
+        }
+        stream = player.current;
+        if (!reader_wants(stream)) {
+            player_unlock();
+            DelayThread(READER_IDLE_US);
+            continue;
+        }
+        gen = player.read_gen;
+        seek = stream->reseek;
+        seek_to = stream->resume_frame;
+        stream->reseek = false;
+        /* The slot after the queue: the feeder never reads it, a flush leaves it free. */
+        block = player_block(player.block_count);
+        player.decoding = stream;
+        player_unlock();
+
+        if (seek)
+            stream_seek(stream, seek_to);
+        len = BLOCK_BYTES - BLOCK_BYTES % stream->out_frame_bytes;
+        if (stream->convert) {
+            len = stream_convert(stream, block->data, len, &ended, &wrap_at_start, &first);
+        } else {
+            first = stream->frame;
+            len = stream_fill(stream, block->data, len, &ended, true, &wrapped_after);
+        }
+
+        player_lock();
+        player.decoding = NULL;
+        /* Otherwise a seek, switch or pause came meanwhile, and asked for a reseek. */
+        if (gen == player.read_gen && player.current == stream) {
+            if (len > 0 || ended) {
+                block->len = len;
+                block->sent = 0;
+                block->frame = first;
+                block->flags = (uint8_t)(((stream->wrap_next || wrap_at_start) ? BLOCK_WRAP : 0) |
+                    (ended ? BLOCK_END : 0));
+                stream->wrap_next = false;
+                player.block_count++;
+                player.queued_bytes += len;
             }
-            stream->submitted = stream_feed_frame(stream);
+            if (wrapped_after)
+                stream->wrap_next = true;
             if (ended) {
-                /* Let the tail play out; the next play() starts over. */
-                stream->ends++;
-                stream->ended = true;
-                stream_seek(stream, 0);
-                player_reset_fade();
-                player_drain(false, false);
-            } else {
-                player_finish_fade();
-            }
-        } else if (player.state == PLAYER_DRAINING) {
-            if (bytes > player.drain_left)
-                bytes = player.drain_left;
-            memset(stream_chunk, player.bits == 8 ? 0x80 : 0, bytes);
-            audsrv_play_audio(stream_chunk, (int)bytes);
-            player.drain_left -= bytes;
-            if (player.drain_left == 0) {
-                if (player.resume_after_drain && player.current)
-                    player_start();
-                else
-                    player.state = PLAYER_IDLE;
+                /* Played again, it starts over. */
+                stream->eof = true;
+                stream->resume_frame = 0;
+                stream->reseek = true;
             }
         }
         player_unlock();
@@ -919,7 +1280,7 @@ static void stream_worker(void *arg) {
     ExitThread();
 }
 
-/* Joins a worker that has left its loop. */
+/* Joins a thread that has left its loop. Called under the lock. */
 static void player_join(AthenaThread *thread) {
     if (!thread)
         return;
@@ -932,59 +1293,78 @@ static void player_join(AthenaThread *thread) {
     athena_thread_core_finalize(thread);
 }
 
-/* Starts the worker if it is not looping. Called under the lock. */
-static int player_ensure_worker(void) {
-    ee_thread_status_t status;
-    int priority = STREAM_PRIORITY;
-
-    if (player.thread_running)
+static int player_spawn(AthenaThread **slot, bool *running, const char *name,
+    void (*func)(void *), int priority) {
+    if (*running)
         return ATHENA_SOUND_OK;
-    /* A previous worker has already stopped the audio and is exiting. */
-    player_join(player.thread);
-    player.thread = NULL;
-    /* Stay above the script thread even if it runs at a raised priority. */
-    if (ReferThreadStatus(GetThreadId(), &status) >= 0 &&
-        status.current_priority <= priority)
-        priority = status.current_priority > 1 ? status.current_priority - 1 : 1;
-    player.thread = athena_thread_core_create("Sound stream", stream_worker, NULL,
-        STREAM_STACK_SIZE, priority);
-    if (!player.thread)
+    /* A previous instance has left its loop and is exiting. */
+    player_join(*slot);
+    *slot = athena_thread_core_create(name, func, NULL, STREAM_STACK_SIZE, priority);
+    if (!*slot)
         return ATHENA_SOUND_ERR_THREAD;
-    player.thread_running = true;
-    if (athena_thread_core_start(player.thread) < 0) {
-        player.thread_running = false;
-        athena_thread_core_destroy(player.thread);
-        player.thread = NULL;
+    *running = true;
+    if (athena_thread_core_start(*slot) < 0) {
+        *running = false;
+        athena_thread_core_destroy(*slot);
+        *slot = NULL;
         return ATHENA_SOUND_ERR_THREAD;
     }
     return ATHENA_SOUND_OK;
 }
 
+/* Starts the feeder and the reader if they are not looping. Called under the lock. */
+static int player_ensure_threads(void) {
+    ee_thread_status_t status;
+    int priority = STREAM_PRIORITY;
+    int result;
+
+    /* Both stay above the script thread, even at a raised priority; the feeder highest. */
+    if (ReferThreadStatus(GetThreadId(), &status) >= 0 &&
+        status.current_priority <= priority + 1)
+        priority = status.current_priority > 2 ? status.current_priority - 2 : 1;
+    result = player_spawn(&player.feeder, &player.feeder_running, "Sound stream",
+        stream_feeder, priority);
+    if (result == ATHENA_SOUND_OK)
+        result = player_spawn(&player.reader, &player.reader_running, "Sound reader",
+            stream_reader, priority + 1);
+    return result;
+}
+
 void sound_stream_halt(void) {
-    AthenaThread *thread;
+    AthenaThread *feeder, *reader;
 
     if (!player.lock)
         return;
     player_lock();
     player.halting = true;
-    thread = player.thread;
+    feeder = player.feeder;
+    reader = player.reader;
     player_unlock();
 
-    player_join(thread);
+    player_join(feeder);
+    player_join(reader);
 
     player_lock();
-    player.thread = NULL;
+    player.feeder = NULL;
+    player.reader = NULL;
     player.halting = false;
-    player.thread_running = false;
+    player.feeder_running = false;
+    player.reader_running = false;
     player.state = PLAYER_IDLE;
     player.muted = false;
+    player.end_pending = false;
     player.applied_volume = -1;
     player_reset_fade();
+    player_flush();
+    player_clear_segments();
+    player.seek_active = false;
+    if (player.current)
+        stream_request_seek(player.current, player.current->resume_frame);
     player_unlock();
 }
 
 void sound_stream_audsrv_started(void) {
-    /* No worker runs here: audsrv was just (re)loaded. */
+    /* No thread runs here: audsrv was just (re)loaded. */
     player.applied_volume = -1;
 }
 
@@ -996,14 +1376,34 @@ void athena_sound_stream_destroy(AthenaSoundStream *stream) {
     if (player.lock) {
         player_lock();
         if (player.current == stream) {
-            player_drain(false, true);
+            if (player.state == PLAYER_PLAYING)
+                player_drain(false, true);
+            else if (player.state == PLAYER_DRAINING)
+                player.resume_after_drain = false;
+            player_flush();
             player_reset_fade();
+            player.end_pending = false;
             player.current = NULL;
+        }
+        for (uint32_t i = 0; i < player.segment_count; i++) {
+            if (player_segment(i)->stream == stream)
+                player_segment(i)->stream = NULL;
+        }
+        /* The reader may be in the middle of a block of it. */
+        while (player.decoding == stream) {
+            player_unlock();
+            DelayThread(1000);
+            player_lock();
         }
         player_unlock();
     }
     stream_close(stream);
     free(stream);
+}
+
+static bool same_output(const AthenaSoundStream *a, const AthenaSoundStream *b) {
+    return a->out.freq == b->out.freq && a->out.bits == b->out.bits &&
+        a->out.channels == b->out.channels;
 }
 
 int athena_sound_stream_play(AthenaSoundStream *stream, uint32_t fade_ms) {
@@ -1018,17 +1418,31 @@ int athena_sound_stream_play(AthenaSoundStream *stream, uint32_t fade_ms) {
     player_lock();
     stream->ended = false;
     if (player.current != stream) {
+        AthenaSoundStream *old = player.current;
+        bool feeding = player.state == PLAYER_PLAYING && !player.format_pending;
+
         player_keep_heard_position();
+        player_flush();
+        player.end_pending = false;
         player.current = stream;
-        if (player.state == PLAYER_PLAYING)
+        stream_request_seek(stream, stream->resume_frame);
+        if (feeding && old && same_output(old, stream)) {
+            /* Same format: the new stream follows what audsrv still holds. */
+            player.seek_active = true;
+            player.seek_offset = player.written;
+            player.seek_frame = stream->resume_frame;
+            player.next_frame = stream->resume_frame;
+        } else if (feeding) {
             player_drain(true, true);
+        }
         /* A new stream starts from silence when it fades in. */
         player_reset_fade();
         if (fade_ms)
             player.gain_from = player.gain_to = 0;
     } else if (player.state == PLAYER_IDLE ||
         (player.state == PLAYER_DRAINING && !player.resume_after_drain)) {
-        /* Resuming from a pause. */
+        /* Resuming after a pause, or after (or during the tail of) its end. */
+        stream_request_seek(stream, stream->resume_frame);
         player_reset_fade();
         if (fade_ms)
             player.gain_from = player.gain_to = 0;
@@ -1039,7 +1453,7 @@ int athena_sound_stream_play(AthenaSoundStream *stream, uint32_t fade_ms) {
         player_start();
     else if (player.state == PLAYER_DRAINING)
         player.resume_after_drain = true;
-    result = player_ensure_worker();
+    result = player_ensure_threads();
     if (result < 0)
         player.state = PLAYER_IDLE;
     player_unlock();
@@ -1051,20 +1465,13 @@ static void stream_halt(AthenaSoundStream *stream, uint32_t fade_ms, FadeAction 
     if (!stream)
         return;
     player_lock();
-    if (player.current == stream && player.state == PLAYER_PLAYING && fade_ms > 0) {
+    if (player.current == stream && player.state == PLAYER_PLAYING && !player.format_pending &&
+        fade_ms > 0) {
         player_fade(stream, 0, fade_ms, action);
-        player_unlock();
-        return;
-    }
-    if (player.current == stream) {
-        player_keep_heard_position();
-        if (player.state != PLAYER_IDLE)
-            player_drain(false, true);
-        player_reset_fade();
-    }
-    if (action == FADE_THEN_STOP) {
-        stream_seek(stream, 0);
-        stream->wrapped = false;
+    } else if (player.current == stream) {
+        player_halt_current(action);
+    } else if (action == FADE_THEN_STOP) {
+        stream_request_seek(stream, 0);
     }
     player_unlock();
 }
@@ -1082,7 +1489,7 @@ bool athena_sound_stream_is_playing(AthenaSoundStream *stream) {
 
     player_lock();
     playing = player.current == stream && (player.state == PLAYER_PLAYING ||
-        (player.state == PLAYER_DRAINING && player.resume_after_drain));
+        (player.state == PLAYER_DRAINING && (player.resume_after_drain || player.end_pending)));
     player_unlock();
     return playing;
 }
@@ -1097,15 +1504,20 @@ int athena_sound_stream_set_position(AthenaSoundStream *stream, uint32_t ms) {
         frame = stream->total_frames;
 
     player_lock();
-    stream_seek(stream, (uint32_t)frame);
-    stream->wrapped = false;
     stream->ended = false;
-    if (player.current == stream) {
-        /* Restart from the new position once the queued audio is flushed. */
-        if (player.state == PLAYER_PLAYING)
-            player_drain(true, true);
-        else if (player.state == PLAYER_DRAINING && player.resume_after_drain)
-            player.muted = true;
+    stream_request_seek(stream, (uint32_t)frame);
+    if (player.current == stream && player.state != PLAYER_IDLE) {
+        player_flush();
+        if (player.state == PLAYER_PLAYING && !player.format_pending) {
+            /* No gap: the new position follows what audsrv still holds. */
+            player.seek_active = true;
+            player.seek_offset = player.written;
+            player.seek_frame = (uint32_t)frame;
+            player.next_frame = (uint32_t)frame;
+        } else if (player.state == PLAYER_DRAINING && player.end_pending) {
+            /* Seeking during the tail of its end keeps it playing. */
+            player.resume_after_drain = true;
+        }
     }
     player_unlock();
     return ATHENA_SOUND_OK;
@@ -1121,10 +1533,11 @@ uint32_t athena_sound_stream_get_position(AthenaSoundStream *stream) {
     if (!stream)
         return 0;
     player_lock();
-    if (player.current == stream && player.state == PLAYER_PLAYING && !player.format_pending)
-        frame = player_live_frame(stream);
+    if (player.current == stream && !player.format_pending &&
+        (player.state == PLAYER_PLAYING || (player.state == PLAYER_DRAINING && player.end_pending)))
+        frame = player_frame_at(stream, player_heard(audsrv_queued()));
     else
-        frame = stream_feed_frame(stream);
+        frame = stream->resume_frame;
     player_unlock();
     return (uint32_t)(((uint64_t)frame * 1000) / (uint64_t)stream->fmt.freq);
 }
@@ -1139,7 +1552,22 @@ void athena_sound_stream_set_loop(AthenaSoundStream *stream, bool loop) {
     if (!stream)
         return;
     player_lock();
-    stream->loop = loop;
+    if (stream->loop != loop) {
+        stream->loop = loop;
+        /* What is queued was decoded with the old setting: decode it again. */
+        if (player.current == stream && player.state == PLAYER_PLAYING &&
+            !player.format_pending) {
+            uint32_t frame = player.next_frame;
+
+            if (player.block_count > 0) {
+                Block *block = player_block(0);
+                frame = block->frame + (uint32_t)(((uint64_t)(block->sent /
+                    player.frame_bytes) * stream->step) >> 16);
+            }
+            stream_request_seek(stream, frame);
+            player_flush();
+        }
+    }
     player_unlock();
 }
 

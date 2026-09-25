@@ -126,6 +126,34 @@ AthenaSfx *athena_sfx_load(const char *path, int *result);
 void athena_sfx_destroy(AthenaSfx *sfx);
 
 /*
+ * athena_sfx_load() in two steps: a worker thread reads and checks the file,
+ * then athena_sfx_job_poll() on the calling (script) thread uploads it. The
+ * upload stays on that thread since it updates the sample and channel tables.
+ */
+typedef struct AthenaSfxJob AthenaSfxJob;
+
+typedef enum {
+    ATHENA_SFX_JOB_RUNNING,
+    ATHENA_SFX_JOB_DONE,
+    ATHENA_SFX_JOB_FAILED,
+    ATHENA_SFX_JOB_CANCELLED,
+} AthenaSfxJobState;
+
+AthenaSfxJob *athena_sfx_load_async(const char *path, int *result);
+/*
+ * Once the file was read, uploads it: returns DONE and hands the sample to
+ * the caller in *out (on that call only), or FAILED with *result and
+ * athena_sound_error_detail(). Every later call returns the same state.
+ */
+AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *result);
+/* Waits until poll() would not return RUNNING, or timeout_ms (< 0: no limit). */
+bool athena_sfx_job_wait(AthenaSfxJob *job, int timeout_ms);
+/* The job ends as CANCELLED unless it already finished. */
+void athena_sfx_job_cancel(AthenaSfxJob *job);
+/* Cancels, waits for the worker (a read cannot be interrupted) and frees. */
+void athena_sfx_job_destroy(AthenaSfxJob *job);
+
+/*
  * Plays on `channel` (0..23), or on a free channel when `channel` is < 0.
  * Returns the channel, -1 when it (or every channel) is busy, or a negative
  * AthenaSoundResult below -1. A sample unloaded by an IOP reset is uploaded

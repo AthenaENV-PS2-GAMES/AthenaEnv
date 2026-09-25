@@ -17,6 +17,15 @@ services:
       - ATHENAENV_SRC=/src/src
     command: make clean debug
 
+  # C unit tests of the runtime on the build machine (tests/host/run.sh).
+  host-tests:
+    build: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    entrypoint: /bin/sh
+    command: tests/host/run.sh
+
   shell:
     build: .
     volumes:

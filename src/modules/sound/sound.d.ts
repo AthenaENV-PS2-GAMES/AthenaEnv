@@ -13,9 +13,13 @@
  *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
  *   float) is converted on the EE while it plays; see `converted`;
  * - `pause()` keeps the position heard, so `play()` resumes exactly there;
+ * - seeking, or switching to a stream of the same format, has no gap: the
+ *   new audio follows the ~0.1 s audsrv already holds (other formats pause
+ *   ~0.15 s while audsrv is reconfigured);
  * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
- * - decoding runs on a worker thread, so the frame loop only has to keep
- *   calling `Screen.flip()` (or otherwise block) for audio to flow;
+ * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
+ *   does not interrupt the music; the frame loop only has to keep calling
+ *   `Screen.flip()` (or otherwise block) for audio to flow;
  * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
  *
  * Sound effects:
@@ -24,6 +28,8 @@
  *   SPU2 play past their end are refused (`CORRUPT`);
  * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
  *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
+ * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
+ *   does not stall the frame;
  * - after `IOP.reset()` a sample is uploaded again from its file the next
  *   time it plays.
  *
@@ -71,7 +77,9 @@ declare namespace Sound {
         /** Sfx.pitch, or assigning Sfx.loop. */
         | 'UNSUPPORTED'
         /** The object was used after free(). */
-        | 'FREED';
+        | 'FREED'
+        /** The loadSfxAsync() job was cancelled. */
+        | 'CANCELLED';
 
     interface Error {
         code: ErrorCode;
@@ -125,6 +133,50 @@ declare namespace Sound {
      */
     function process(): number;
 
+    /**
+     * Opaque handle of a `loadSfxAsync()` job. Dropping it cancels the job
+     * (and frees the sample if nobody took it from `poll()`).
+     */
+    interface Job<T> {
+        readonly __brand: 'SoundJob';
+        readonly __result?: T;
+    }
+
+    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
+
+    interface JobStatus<T> {
+        state: JobState;
+        /** When `state` is `'done'`. The same object on every later poll. */
+        result?: T;
+        /** When `state` is `'failed'` or `'cancelled'`. */
+        error?: Error;
+    }
+
+    /**
+     * Starts loading a sound effect: a worker thread reads and checks the
+     * file while the frame loop runs, then the `poll()` that sees it read
+     * uploads it to SPU2 memory (a short DMA, on the script thread).
+     *
+     * @example
+     * ```js
+     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
+     * // each frame:
+     * const status = Sound.poll(job);
+     * if (status.state === "done") boom = status.result;
+     * ```
+     */
+    function loadSfxAsync(path: string): Job<Sfx>;
+    /** The job's state without blocking; uploads the sample once it was read. */
+    function poll<T>(job: Job<T>): JobStatus<T>;
+    /**
+     * Blocks until the job is no longer running or `timeoutMs` passes
+     * (default: no limit), letting other threads run meanwhile, then
+     * returns `poll(job)`.
+     */
+    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    function cancel(job: Job<unknown>): void;
+
     /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
     class Stream {
         /** Opens `path`; also callable without `new`. Does not start playback. */
@@ -142,7 +194,7 @@ declare namespace Sound {
         pause(options?: FadeOptions): void;
         /** Pauses and rewinds to the start, after the fade-out if any. */
         stop(options?: FadeOptions): void;
-        /** True from `play()` until paused, stopped or finished. */
+        /** True from `play()` until paused, stopped, or its last sample is heard. */
         playing(): boolean;
         /** Moves to the start; keeps playing if it was. */
         rewind(): void;
@@ -150,19 +202,22 @@ declare namespace Sound {
         free(): void;
         /** Restart from the beginning at the end instead of stopping. */
         loop: boolean;
-        /** Playback position in milliseconds; assigning seeks (clamped to 0..length). */
+        /**
+         * Playback position heard, in milliseconds; assigning seeks (clamped
+         * to 0..length). Right after a seek it reads the target, and starts
+         * moving once the new audio is heard (~0.1 s later).
+         */
         position: number;
         /**
-         * Called by `Sound.process()` after the stream reached its end
-         * (without `loop`); `this` is the stream.
+         * Called by `Sound.process()` after the stream's last sample was
+         * heard (without `loop`); `this` is the stream.
          */
         onEnd: ((this: Stream) => void) | null;
-        /** Called by `Sound.process()` after a looping stream wrapped around. */
+        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
         onLoop: ((this: Stream) => void) | null;
         /**
-         * The stream reached its end (without `loop`); cleared by `play()`,
-         * a seek or `rewind()`. Set when the last sample is decoded, up to
-         * ~0.1 s before it is heard.
+         * The stream's last sample was heard (without `loop`); cleared by
+         * `play()`, a seek or `rewind()`.
          */
         readonly ended: boolean;
         /** Duration in milliseconds. */

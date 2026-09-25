@@ -3,12 +3,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <kernel.h>
+#include <delaythread.h>
 #include <audsrv.h>
 
 #include <athena/debug.h>
+#include <athena/mutex.h>
 #include <athena/sound.h>
+#include <athena/thread.h>
 
 #include "sound_internal.h"
 
@@ -132,7 +137,12 @@ static bool sfx_is_current(const AthenaSfx *sfx) {
     return athena_sound_ready() && sfx->resident && sfx->generation == sound_iop_generation();
 }
 
-static int sfx_read_file(const char *path, uint8_t **out, int *out_size) {
+/*
+ * Reads an .adp file into a DMA-ready buffer. Touches no shared state, so
+ * it also runs on the loadSfxAsync() worker; `detail` explains failures.
+ */
+static int sfx_read_file(const char *path, uint8_t **out, int *out_size, char *detail,
+    size_t detail_size) {
     FILE *file = fopen(path, "rb");
     long size;
     size_t padded;
@@ -151,8 +161,8 @@ static int sfx_read_file(const char *path, uint8_t **out, int *out_size) {
     }
     if ((unsigned long)size > ADPCM_MAX_SIZE) {
         fclose(file);
-        sound_set_detail("%ld bytes, SPU2 sample memory holds %u", size - ADPCM_HEADER_SIZE,
-            SPU_SAMPLE_END - SPU_SAMPLE_BASE);
+        snprintf(detail, detail_size, "%ld bytes, SPU2 sample memory holds %u",
+            size - ADPCM_HEADER_SIZE, SPU_SAMPLE_END - SPU_SAMPLE_BASE);
         return ATHENA_SOUND_ERR_SPU_MEMORY;
     }
     /* SIF DMA moves 16-byte blocks from a cache-line aligned buffer. */
@@ -180,7 +190,8 @@ static int sfx_read_file(const char *path, uint8_t **out, int *out_size) {
  * plays blocks until one has the end flag, so a truncated file would run on
  * into the samples placed after it.
  */
-static int sfx_validate(const uint8_t *buffer, int size, AdpcmHeader *header) {
+static int sfx_validate(const uint8_t *buffer, int size, AdpcmHeader *header, char *detail,
+    size_t detail_size) {
     uint32_t data_size = (uint32_t)size - ADPCM_HEADER_SIZE;
     uint32_t blocks;
 
@@ -188,48 +199,58 @@ static int sfx_validate(const uint8_t *buffer, int size, AdpcmHeader *header) {
     if (memcmp(header->magic, "APCM", 4) != 0)
         return ATHENA_SOUND_ERR_FORMAT;
     if (header->pitch == 0 || header->pitch > ADPCM_MAX_PITCH) {
-        sound_set_detail("pitch 0x%x out of range", (unsigned)header->pitch);
+        snprintf(detail, detail_size, "pitch 0x%x out of range", (unsigned)header->pitch);
         return ATHENA_SOUND_ERR_FORMAT;
     }
     if (data_size % ADPCM_BLOCK_SIZE != 0) {
-        sound_set_detail("%u data bytes are not whole 16-byte blocks; truncated?",
+        snprintf(detail, detail_size, "%u data bytes are not whole 16-byte blocks; truncated?",
             (unsigned)data_size);
         return ATHENA_SOUND_ERR_CORRUPT;
     }
     blocks = data_size / ADPCM_BLOCK_SIZE;
     if (!(buffer[ADPCM_HEADER_SIZE + (blocks - 1) * ADPCM_BLOCK_SIZE + 1] & ADPCM_FLAG_END)) {
-        sound_set_detail("last block has no end flag; truncated?");
+        snprintf(detail, detail_size, "last block has no end flag; truncated?");
         return ATHENA_SOUND_ERR_CORRUPT;
     }
     if (header->samples > blocks * ADPCM_BLOCK_SAMPLES) {
-        sound_set_detail("header says %u samples, data holds %u",
+        snprintf(detail, detail_size, "header says %u samples, data holds %u",
             (unsigned)header->samples, (unsigned)(blocks * ADPCM_BLOCK_SAMPLES));
         return ATHENA_SOUND_ERR_CORRUPT;
     }
     return ATHENA_SOUND_OK;
 }
 
-/* Reads, checks and uploads sfx->path into the current audsrv session. */
-static int sfx_upload(AthenaSfx *sfx) {
-    AdpcmHeader header;
-    uint8_t *buffer = NULL;
-    uint32_t data_size, next_address;
-    int size = 0;
+/* Reads and checks `path`; the buffer is the caller's on success. Any thread. */
+static int sfx_read_checked(const char *path, uint8_t **buffer, int *size, AdpcmHeader *header,
+    char *detail, size_t detail_size) {
+    int status;
+
+    detail[0] = '\0';
+    status = sfx_read_file(path, buffer, size, detail, detail_size);
+    if (status < 0)
+        return status;
+    status = sfx_validate(*buffer, *size, header, detail, detail_size);
+    if (status < 0) {
+        free(*buffer);
+        *buffer = NULL;
+    }
+    return status;
+}
+
+/*
+ * Uploads a checked file into the current audsrv session and frees the
+ * buffer. Script thread only: it updates the sample and channel tables.
+ */
+static int sfx_upload_buffer(AthenaSfx *sfx, uint8_t *buffer, int size, const AdpcmHeader *header) {
+    uint32_t data_size = (uint32_t)size - ADPCM_HEADER_SIZE;
+    uint32_t next_address;
     int status;
 
     status = athena_sound_ensure();
-    if (status < 0)
-        return status;
-    status = sfx_read_file(sfx->path, &buffer, &size);
-    if (status < 0)
-        return status;
-    status = sfx_validate(buffer, size, &header);
     if (status < 0) {
         free(buffer);
         return status;
     }
-
-    data_size = (uint32_t)size - ADPCM_HEADER_SIZE;
     next_address = sfx_next_address();
     if (next_address + data_size > SPU_SAMPLE_END) {
         uint32_t free_bytes = SPU_SAMPLE_END - next_address;
@@ -261,16 +282,71 @@ static int sfx_upload(AthenaSfx *sfx) {
 
     sfx_link(sfx, data_size);
     sfx->generation = sound_iop_generation();
-    sfx->samples = header.samples;
-    sfx->rate = (int)(((uint64_t)header.pitch * 48000) / 4096);
-    sfx->loop = header.loop != 0;
+    sfx->samples = header->samples;
+    sfx->rate = (int)(((uint64_t)header->pitch * 48000) / 4096);
+    sfx->loop = header->loop != 0;
     /* Once per session: games load the same sample many times. */
-    if (header.channels > 1 && !stereo_warned) {
+    if (header->channels > 1 && !stereo_warned) {
         dbgprintf("[Sound] %s: audsrv plays only the first channel of a stereo .adp "
             "(tools/wav2adp.js mixes stereo down to mono)\n", sfx->path);
         stereo_warned = true;
     }
     return ATHENA_SOUND_OK;
+}
+
+/* Reads, checks and uploads sfx->path into the current audsrv session. */
+static int sfx_upload(AthenaSfx *sfx) {
+    char detail[160];
+    AdpcmHeader header;
+    uint8_t *buffer = NULL;
+    int size = 0;
+    int status;
+
+    status = sfx_read_checked(sfx->path, &buffer, &size, &header, detail, sizeof(detail));
+    if (status < 0) {
+        if (detail[0])
+            sound_set_detail("%s", detail);
+        return status;
+    }
+    return sfx_upload_buffer(sfx, buffer, size, &header);
+}
+
+/*
+ * `path` made absolute with the current directory, so the reload after an
+ * IOP reset still finds the file if the script changed directory since.
+ */
+static char *sfx_absolute_path(const char *path) {
+    char cwd[256];
+    size_t cwd_length;
+    char *absolute;
+
+    if (strchr(path, ':') || path[0] == '/' || !getcwd(cwd, sizeof(cwd)))
+        return strdup(path);
+    cwd_length = strlen(cwd);
+    absolute = malloc(cwd_length + strlen(path) + 2);
+    if (absolute)
+        sprintf(absolute, "%s%s%s", cwd,
+            cwd_length && cwd[cwd_length - 1] == '/' ? "" : "/", path);
+    return absolute;
+}
+
+static AthenaSfx *sfx_new(const char *path) {
+    AthenaSfx *sfx = calloc(1, sizeof(*sfx));
+
+    if (!sfx)
+        return NULL;
+    sfx->path = sfx_absolute_path(path);
+    if (!sfx->path) {
+        free(sfx);
+        return NULL;
+    }
+    sfx->volume = ATHENA_SOUND_MAX_VOLUME;
+    return sfx;
+}
+
+static void sfx_delete(AthenaSfx *sfx) {
+    free(sfx->path);
+    free(sfx);
 }
 
 AthenaSfx *athena_sfx_load(const char *path, int *result) {
@@ -282,20 +358,16 @@ AthenaSfx *athena_sfx_load(const char *path, int *result) {
         status = ATHENA_SOUND_ERR_ARGS;
         goto fail;
     }
-    sfx = calloc(1, sizeof(*sfx));
-    if (!sfx || !(sfx->path = strdup(path))) {
-        free(sfx);
+    sfx = sfx_new(path);
+    if (!sfx) {
         status = ATHENA_SOUND_ERR_MEMORY;
         goto fail;
     }
     status = sfx_upload(sfx);
     if (status < 0) {
-        free(sfx->path);
-        free(sfx);
+        sfx_delete(sfx);
         goto fail;
     }
-    sfx->volume = ATHENA_SOUND_MAX_VOLUME;
-    sfx->pan = 0;
     if (result)
         *result = ATHENA_SOUND_OK;
     return sfx;
@@ -304,6 +376,192 @@ fail:
     if (result)
         *result = status;
     return NULL;
+}
+
+/* --- Loading on a worker thread ------------------------------------------ */
+
+#define SFX_JOB_STACK_SIZE (16 * 1024)
+#define SFX_JOB_WAIT_POLL_US 1000
+
+struct AthenaSfxJob {
+    AthenaThread *thread;
+    AthenaMutex *mutex;
+    /* Immutable while the worker runs. */
+    char *path;
+    /* Protected by `mutex`, written by the worker. */
+    bool read_done;
+    bool cancel;
+    int read_status;
+    uint8_t *buffer;
+    int size;
+    AdpcmHeader header;
+    char detail[160];
+    /* Script thread only: the outcome, once the upload was attempted. */
+    AthenaSfxJobState state;
+    int result;
+};
+
+static void sfx_job_worker(void *arg) {
+    AthenaSfxJob *job = arg;
+    char detail[160] = "";
+    AdpcmHeader header;
+    uint8_t *buffer = NULL;
+    int size = 0;
+    int status;
+
+    status = sfx_read_checked(job->path, &buffer, &size, &header, detail, sizeof(detail));
+
+    athena_mutex_core_lock(job->mutex);
+    job->read_status = status;
+    job->header = header;
+    memcpy(job->detail, detail, sizeof(job->detail));
+    if (job->cancel) {
+        free(buffer);
+    } else {
+        job->buffer = buffer;
+        job->size = size;
+    }
+    job->read_done = true;
+    athena_mutex_core_unlock(job->mutex);
+
+    athena_thread_core_worker_finished(job->thread);
+    ExitThread();
+}
+
+static void sfx_job_free(AthenaSfxJob *job) {
+    if (job->mutex)
+        athena_mutex_core_destroy(job->mutex);
+    free(job->buffer);
+    free(job->path);
+    free(job);
+}
+
+AthenaSfxJob *athena_sfx_load_async(const char *path, int *result) {
+    AthenaSfxJob *job;
+    int status = ATHENA_SOUND_ERR_MEMORY;
+
+    if (!path || !path[0]) {
+        status = ATHENA_SOUND_ERR_ARGS;
+        goto fail;
+    }
+    job = calloc(1, sizeof(*job));
+    if (!job)
+        goto fail;
+    job->state = ATHENA_SFX_JOB_RUNNING;
+    job->path = sfx_absolute_path(path);
+    job->mutex = job->path ? athena_mutex_core_create() : NULL;
+    if (!job->mutex) {
+        sfx_job_free(job);
+        goto fail;
+    }
+    /* Below the script thread: it reads while the frame loop waits for vsync. */
+    job->thread = athena_thread_core_create("Sound sfx load", sfx_job_worker, job,
+        SFX_JOB_STACK_SIZE, ATHENA_THREAD_DEFAULT_PRIORITY + 1);
+    if (!job->thread) {
+        sfx_job_free(job);
+        status = ATHENA_SOUND_ERR_THREAD;
+        goto fail;
+    }
+    if (athena_thread_core_start(job->thread) < 0) {
+        /* Never started, so destroy() also finalizes the thread. */
+        athena_thread_core_destroy(job->thread);
+        sfx_job_free(job);
+        status = ATHENA_SOUND_ERR_THREAD;
+        goto fail;
+    }
+    if (result)
+        *result = ATHENA_SOUND_OK;
+    return job;
+
+fail:
+    if (result)
+        *result = status;
+    return NULL;
+}
+
+AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *result) {
+    uint8_t *buffer;
+    AthenaSfx *sfx;
+    bool done;
+
+    *out = NULL;
+    if (job->state == ATHENA_SFX_JOB_RUNNING) {
+        athena_mutex_core_lock(job->mutex);
+        done = job->read_done;
+        buffer = job->buffer;
+        job->buffer = NULL;
+        if (job->cancel) {
+            job->state = ATHENA_SFX_JOB_CANCELLED;
+        } else if (done && job->read_status < 0) {
+            job->state = ATHENA_SFX_JOB_FAILED;
+            job->result = job->read_status;
+        }
+        athena_mutex_core_unlock(job->mutex);
+
+        if (job->state == ATHENA_SFX_JOB_RUNNING && done) {
+            /* The upload goes through the script thread's tables. */
+            sound_set_detail(NULL);
+            sfx = sfx_new(job->path);
+            if (!sfx) {
+                free(buffer);
+                job->result = ATHENA_SOUND_ERR_MEMORY;
+            } else {
+                job->result = sfx_upload_buffer(sfx, buffer, job->size, &job->header);
+                if (job->result < 0) {
+                    snprintf(job->detail, sizeof(job->detail), "%s", athena_sound_error_detail());
+                    sfx_delete(sfx);
+                } else {
+                    *out = sfx;
+                }
+            }
+            job->state = job->result < 0 ? ATHENA_SFX_JOB_FAILED : ATHENA_SFX_JOB_DONE;
+        } else {
+            free(buffer);
+        }
+    }
+    if (job->state == ATHENA_SFX_JOB_FAILED)
+        sound_set_detail("%s", job->detail);
+    if (result)
+        *result = job->state == ATHENA_SFX_JOB_FAILED ? job->result : ATHENA_SOUND_OK;
+    return job->state;
+}
+
+bool athena_sfx_job_wait(AthenaSfxJob *job, int timeout_ms) {
+    clock_t start = clock();
+
+    for (;;) {
+        bool done;
+
+        athena_mutex_core_lock(job->mutex);
+        done = job->read_done || job->cancel;
+        athena_mutex_core_unlock(job->mutex);
+        if (done || job->state != ATHENA_SFX_JOB_RUNNING)
+            return true;
+        if (timeout_ms >= 0 &&
+            (clock() - start) * 1000 / CLOCKS_PER_SEC >= (clock_t)timeout_ms)
+            return false;
+        DelayThread(SFX_JOB_WAIT_POLL_US);
+    }
+}
+
+void athena_sfx_job_cancel(AthenaSfxJob *job) {
+    athena_mutex_core_lock(job->mutex);
+    job->cancel = true;
+    athena_mutex_core_unlock(job->mutex);
+}
+
+void athena_sfx_job_destroy(AthenaSfxJob *job) {
+    if (!job)
+        return;
+    athena_sfx_job_cancel(job);
+    /* The read cannot be interrupted: wait for it. */
+    athena_thread_core_stop(job->thread);
+    athena_thread_core_wait(job->thread);
+    for (int attempts = 0; attempts < 100 &&
+        athena_thread_core_get_status(job->thread) != THS_DORMANT; attempts++)
+        DelayThread(100);
+    athena_thread_core_finalize(job->thread);
+    sfx_job_free(job);
 }
 
 static void sfx_release_channel(int channel) {

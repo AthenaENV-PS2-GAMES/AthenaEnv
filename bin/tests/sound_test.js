@@ -367,6 +367,66 @@ test("Sfx use after free throws", function() {
 });
 
 /* ------------------------------------------------------------------ */
+/* Sfx loaded on a worker thread                                        */
+/* ------------------------------------------------------------------ */
+
+test("loadSfxAsync reads on a worker and uploads in poll()", function() {
+    const before = Sound.getMemoryStats().samples;
+    const job = Sound.loadSfxAsync(DIR + "over.adp");
+    const status = Sound.wait(job, 3000);
+    assertEqual(status.state, "done", "state");
+    assert(status.result instanceof Sound.Sfx, "result " + status.result);
+    assert(Sound.poll(job).result === status.result, "same Sfx on every poll");
+    assertEqual(Sound.getMemoryStats().samples, before + 1, "samples");
+    assert(status.result.play() >= 0, "plays");
+    status.result.free();
+});
+
+test("loadSfxAsync is followed with poll() from the frame loop", function() {
+    const job = Sound.loadSfxAsync(DIR + "over.adp");
+    const first = Sound.poll(job).state;
+    assert(first === "running" || first === "done", "first state " + first);
+    assert(waitUntil(() => Sound.poll(job).state === "done", 3000), "never done");
+    Sound.poll(job).result.free();
+});
+
+test("loadSfxAsync(missing) fails with NOT_FOUND", function() {
+    const status = Sound.wait(Sound.loadSfxAsync(DIR + "missing.adp"), 3000);
+    assertEqual(status.state, "failed", "state");
+    assert(status.error instanceof InternalError, "error " + status.error);
+    assertEqual(status.error.code, "NOT_FOUND", "code");
+});
+
+test("loadSfxAsync(corrupt) fails with CORRUPT", function() {
+    const status = Sound.wait(Sound.loadSfxAsync(DIR + "noend.adp"), 3000);
+    assertEqual(status.state, "failed", "state");
+    assertEqual(status.error.code, "CORRUPT", "code");
+    assert(/end flag/.test(status.error.message), "message " + status.error.message);
+});
+
+test("Sound.cancel", function() {
+    const before = Sound.getMemoryStats().samples;
+    const job = Sound.loadSfxAsync(DIR + "over.adp");
+    Sound.cancel(job);
+    const status = Sound.wait(job, 3000);
+    assertEqual(status.state, "cancelled", "state");
+    assertEqual(status.error.code, "CANCELLED", "code");
+    assertEqual(Sound.getMemoryStats().samples, before, "nothing uploaded");
+});
+
+test("dropped jobs are collected", function() {
+    const before = Sound.getMemoryStats().samples;
+    for (let i = 0; i < 10; i++)
+        Sound.loadSfxAsync(DIR + "pop.adp");
+    std.gc();
+    assertEqual(Sound.getMemoryStats().samples, before, "samples");
+});
+
+expectCode("loadSfxAsync(1)", () => Sound.loadSfxAsync(1), TypeError, "INVALID_ARGUMENT");
+expectCode("Sound.poll({})", () => Sound.poll({}), TypeError, "INVALID_ARGUMENT");
+expectCode("Sound.wait(job, -1)", () => Sound.wait(Sound.loadSfxAsync(ADP), -1), RangeError, "INVALID_ARGUMENT");
+
+/* ------------------------------------------------------------------ */
 /* Stream: WAV                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -459,6 +519,13 @@ test("Stream.position seeks", function() {
     // Relative seeks past the start clamp, as in the old sound.js sample.
     wav.position = wav.position - 60000;
     assertNear(wav.position, 0, 150, "clamped at 0");
+});
+test("a seek is heard within 200 ms and keeps playing", function() {
+    // Seeks append after the ~0.1 s audsrv holds: no silence gap.
+    wav.position = 10000;
+    assertEqual(wav.position, 10000, "right after the seek");
+    assert(waitUntil(() => wav.position > 10000, 200), "not heard after 200 ms");
+    assertEqual(wav.playing(), true, "playing");
 });
 expectThrow("Stream.position = 'x'", () => { wav.position = "x"; }, TypeError);
 expectThrow("Stream.position = NaN", () => { wav.position = NaN; }, RangeError);

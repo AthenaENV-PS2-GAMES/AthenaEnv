@@ -1344,6 +1344,7 @@ audsrv is loaded on the IOP the first time a sound is used. Errors throw with a 
 * Sound.findChannel() - First channel (0-23) no sound effect is playing on, or -1.
 * Sound.getMemoryStats() - SPU2 sample memory: `{ total, used, free, wasted, samples }`.
 * Sound.process() - Runs `onEnd`/`onLoop` stream callbacks; call it once per frame.
+* const job = Sound.loadSfxAsync(path) - Reads a sound effect on a worker thread. Follow it with `Sound.poll(job)` (returns `{ state, result, error }`; the sample is uploaded in the first poll after the read), `Sound.wait(job, timeoutMs)` or `Sound.cancel(job)`.
 * const bgm = Sound.Stream(path) - Opens a WAV (PCM 8/16/24/32-bit or float) or OGG file, mono or stereo. Formats audsrv cannot play directly (e.g. 16 kHz) are converted on the EE.  
 **Methods:**  
   • play(*{ fade: ms }*) - Play (or resume) the stream, replacing the one playing; optionally fading in.  
