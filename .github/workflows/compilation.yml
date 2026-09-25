@@ -41,8 +41,9 @@ jobs:
         run: |
           node tools/modules.js catalog
 
+      # Branch pushes only: a tag checkout has no branch to push the commit to.
       - name: Commit & push updated catalog (if changed)
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "chore: update catalog.json and public assets [skip ci]"
