@@ -1,0 +1,72 @@
+{
+  "id": "box2d",
+  "name": "Box2D",
+  "description": "2D rigid body physics with Box2D 3.2: worlds, bodies, shapes, chains, seven joint types, ray/shape casts, overlap queries, character movers and contact, sensor and body events.",
+  "category": "Physics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/box2d.c",
+    "native/box2d/aabb.c",
+    "native/box2d/arena_allocator.c",
+    "native/box2d/bitset.c",
+    "native/box2d/body.c",
+    "native/box2d/broad_phase.c",
+    "native/box2d/constraint_graph.c",
+    "native/box2d/contact.c",
+    "native/box2d/contact_solver.c",
+    "native/box2d/core.c",
+    "native/box2d/distance.c",
+    "native/box2d/distance_joint.c",
+    "native/box2d/dynamic_tree.c",
+    "native/box2d/geometry.c",
+    "native/box2d/hull.c",
+    "native/box2d/id_pool.c",
+    "native/box2d/island.c",
+    "native/box2d/joint.c",
+    "native/box2d/manifold.c",
+    "native/box2d/math_functions.c",
+    "native/box2d/motor_joint.c",
+    "native/box2d/mover.c",
+    "native/box2d/parallel_for.c",
+    "native/box2d/physics_world.c",
+    "native/box2d/prismatic_joint.c",
+    "native/box2d/recording.c",
+    "native/box2d/recording_replay.c",
+    "native/box2d/revolute_joint.c",
+    "native/box2d/scheduler.c",
+    "native/box2d/sensor.c",
+    "native/box2d/shape.c",
+    "native/box2d/solver.c",
+    "native/box2d/solver_set.c",
+    "native/box2d/table.c",
+    "native/box2d/timer.c",
+    "native/box2d/types.c",
+    "native/box2d/weld_joint.c",
+    "native/box2d/wheel_joint.c",
+    "native/box2d/world_snapshot.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "native": {
+    "init": "athena_box2d_module_init"
+  },
+  "quickjs": {
+    "cleanup_func": "athena_box2d_cleanup",
+    "sources": [
+      "quickjs/ath_box2d.c",
+      "quickjs/ath_box2d_body.c",
+      "quickjs/ath_box2d_shape.c",
+      "quickjs/ath_box2d_joint.c",
+      "quickjs/ath_box2d_query.c"
+    ],
+    "module_name": "Box2D",
+    "global_alias": "Box2D",
+    "init_func": "athena_box2d_init"
+  },
+  "types": "box2d.d.ts"
+}

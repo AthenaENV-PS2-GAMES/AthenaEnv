@@ -1,0 +1,30 @@
+{
+  "id": "box2ddraw",
+  "name": "Box2DDraw",
+  "description": "Debug drawing of Box2D worlds: shape outlines, joints, bounds, contacts and centers of mass, batched on the GS.",
+  "category": "Physics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/box2ddraw.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "box2d",
+      "graphics",
+      "color"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_box2ddraw.c"
+    ],
+    "module_name": "Box2DDraw",
+    "global_alias": "Box2DDraw",
+    "init_func": "athena_box2ddraw_init"
+  },
+  "types": "box2ddraw.d.ts"
+}

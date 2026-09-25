@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-25T05:29:25.977Z",
+  "generatedAt": "2026-09-25T17:08:51.205Z",
   "modules": [
     {
       "id": "archive",
@@ -24,6 +24,48 @@
         ]
       },
       "global_alias": "Archive",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "box2d",
+      "name": "Box2D",
+      "description": "2D rigid body physics with Box2D 3.2: worlds, bodies, shapes, chains, seven joint types, ray/shape casts, overlap queries, character movers and contact, sensor and body events.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Box2D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "box2ddraw",
+      "name": "Box2DDraw",
+      "description": "Debug drawing of Box2D worlds: shape outlines, joints, bounds, contacts and centers of mass, batched on the GS.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "box2d",
+          "graphics",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Box2DDraw",
       "api": {
         "native": true,
         "quickjs": true

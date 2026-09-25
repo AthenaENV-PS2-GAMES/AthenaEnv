@@ -14151,14 +14151,19 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
             double d1, d2;
 
         float64_compare:
-            /* can use floating point comparison */
+            /* can use floating point comparison. A float32 compared with a
+               float64 gets here too: its payload is not an int. */
             if (tag1 == JS_TAG_FLOAT64) {
                 d1 = JS_VALUE_GET_FLOAT64(op1);
+            } else if (tag1 == JS_CUSTOM_TAG_FLOAT32) {
+                d1 = JS_VALUE_GET_FLOAT32(op1);
             } else {
                 d1 = JS_VALUE_GET_INT(op1);
             }
             if (tag2 == JS_TAG_FLOAT64) {
                 d2 = JS_VALUE_GET_FLOAT64(op2);
+            } else if (tag2 == JS_CUSTOM_TAG_FLOAT32) {
+                d2 = JS_VALUE_GET_FLOAT32(op2);
             } else {
                 d2 = JS_VALUE_GET_INT(op2);
             }

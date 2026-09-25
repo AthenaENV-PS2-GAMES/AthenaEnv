@@ -123,6 +123,29 @@ function buildCatalog(modules = discoverModules()) {
 }
 
 /**
+ * core.d.ts followed by the typings of `modules`. With markOptional, modules
+ * outside the default build say how to enable them.
+ */
+function buildDts(modules, markOptional) {
+    const coreDtsPath = path.join(MODULES_DIR, 'core.d.ts');
+    let combined = '';
+
+    if (fs.existsSync(coreDtsPath)) {
+        combined += fs.readFileSync(coreDtsPath, 'utf8') + '\n\n';
+    }
+    for (const m of modules) {
+        const typesPath = m.types ? path.join(m._dirPath, m.types) : null;
+        if (!typesPath || !fs.existsSync(typesPath)) continue;
+        combined += `/* === Module: ${m.name} (${m.id}) === */\n`;
+        if (markOptional && !m.default && !m.required) {
+            combined += `/* Optional module, not in the default build: node tools/modules.js configure --modules=${m.id},... */\n`;
+        }
+        combined += fs.readFileSync(typesPath, 'utf8') + '\n\n';
+    }
+    return combined.trimEnd() + '\n';
+}
+
+/**
  * Command: catalog
  * Generates catalog.json and publishes it, the typings and the API types to public/.
  */
@@ -136,10 +159,11 @@ function commandCatalog() {
     const publicDir = path.join(ROOT_DIR, 'public');
     if (fs.existsSync(publicDir)) {
         fs.writeFileSync(path.join(publicDir, 'catalog.json'), JSON.stringify(catalog, null, 2), 'utf8');
-        const dtsSrc = path.join(BIN_DIR, 'athena.d.ts');
-        if (fs.existsSync(dtsSrc)) {
-            fs.copyFileSync(dtsSrc, path.join(publicDir, 'athena.d.ts'));
-        }
+        // Published typings cover every module, so optional ones are documented
+        // too; bin/athena.d.ts (configure) stays limited to the configured build.
+        const allModules = discoverModules();
+        const everyModule = resolveDependencies(allModules.map(m => m.id), allModules);
+        fs.writeFileSync(path.join(publicDir, 'athena.d.ts'), buildDts(everyModule, true), 'utf8');
         fs.copyFileSync(path.join(__dirname, 'athena-api.d.ts'), path.join(publicDir, 'athena-api.d.ts'));
     }
     return catalog;
@@ -435,25 +459,8 @@ function commandConfigure(selectedArg) {
     fs.writeFileSync(outputs.js, generateJsRegistry(configuredModules), 'utf8');
     fs.writeFileSync(outputs.makefile, generateMakefileModules(configuredModules), 'utf8');
 
-    /* TypeScript declarations */
-    const coreDtsPath = path.join(MODULES_DIR, 'core.d.ts');
-    let combinedDts = '';
-
-    if (fs.existsSync(coreDtsPath)) {
-        combinedDts += fs.readFileSync(coreDtsPath, 'utf8') + '\n\n';
-    }
-
-    for (const m of configuredModules) {
-        if (m.types) {
-            const typesPath = path.join(m._dirPath, m.types);
-            if (fs.existsSync(typesPath)) {
-                combinedDts += `/* === Module: ${m.name} (${m.id}) === */\n`;
-                combinedDts += fs.readFileSync(typesPath, 'utf8') + '\n\n';
-            }
-        }
-    }
-
-    fs.writeFileSync(outputs.dts, combinedDts.trimEnd() + '\n', 'utf8');
+    /* TypeScript declarations of this build */
+    fs.writeFileSync(outputs.dts, buildDts(configuredModules, false), 'utf8');
 
     // Also update catalog.json
     commandCatalog();

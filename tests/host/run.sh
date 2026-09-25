@@ -20,11 +20,22 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
     -o "$OUT/video_test" tests/host/video_test.c -lpthread
+# Box2D: the vendored library keeps upstream warnings (-w), the AthenaEnv
+# helpers and the test use the flags above. Both run under UBSan.
+B2=src/modules/box2d
+mkdir -p "$OUT/box2d"
+for src in "$B2"/native/box2d/*.c; do
+    $CC -std=gnu11 -O1 -g -w -fsanitize=undefined -fsanitize-undefined-trap-on-error \
+        -I"$B2/include" -c "$src" -o "$OUT/box2d/$(basename "$src" .c).o"
+done
+$CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/native/box2d.c" \
+    "$OUT"/box2d/*.o -lpthread -lm
 
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"
 "$OUT/video_test"
+"$OUT/box2d_test"
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js
 # (references from tests/host/wav2adp/make_refs.mjs) and, for 16-bit mono,

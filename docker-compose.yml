@@ -26,6 +26,16 @@ services:
     entrypoint: /bin/sh
     command: tests/host/run.sh
 
+  # Module test scripts under AddressSanitizer on an i386 host (tests/js/run.sh).
+  js-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.jstests
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: sh tests/js/run.sh
+
   shell:
     build: .
     volumes:

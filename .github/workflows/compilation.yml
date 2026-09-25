@@ -136,3 +136,42 @@ jobs:
           files: AthenaEnv.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional modules (box2d, box2ddraw, erl, ...) are not in the default
+  # build above: compile every module so they cannot rot unnoticed.
+  all-modules:
+    name: Build every module
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew@sha256:207523ad98f17fd406afa7dd0c6cfe10730627545cbe45247f0bd73c8a66c376
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure and compile every module (debug and native runtime)
+        run: |
+          apk add --no-cache nodejs
+          node tools/modules.js configure --all
+          chmod +x build-exports.sh
+          make clean debug
+          make all RUNTIME=native APP_SRCS=samples/native/hello/main.c
+        env:
+          ATHENAENV_SRC: "${{ github.workspace }}/src"
+
+  # Module test scripts (bin/tests/*.js) under AddressSanitizer and UBSan,
+  # in the i386 image of Dockerfile.jstests (QuickJS needs 32-bit pointers).
+  js-tests:
+    name: Script tests (ASan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run tests/js/run.sh
+        run: |
+          docker build -f Dockerfile.jstests -t athena-js-tests .
+          docker run --rm -v "$PWD":/src -w /src athena-js-tests sh tests/js/run.sh
