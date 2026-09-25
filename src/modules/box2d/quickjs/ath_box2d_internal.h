@@ -143,6 +143,14 @@ int b2js_query_filter(JSContext *ctx, int argc, JSValueConst *argv, int index, c
     b2QueryFilter *filter);
 /* Shape options shared by every create*Shape (density, material, events, filter). */
 int b2js_shape_def(JSContext *ctx, JSValueConst options, const char *where, b2ShapeDef *def);
+/*
+ * Surface material fields present in options (friction, restitution,
+ * rollingResistance, tangentSpeed, userMaterialId, customColor) into *material.
+ */
+int b2js_material(JSContext *ctx, JSValueConst options, const char *where, b2SurfaceMaterial *material);
+JSValue b2js_new_material(JSContext *ctx, b2SurfaceMaterial material);
+/* A body name: a string, cut to B2_NAME_LENGTH bytes at a UTF-8 character boundary. */
+int b2js_name(JSContext *ctx, JSValueConst value, const char *where, char out[B2_NAME_LENGTH + 1]);
 
 /* ------------------------------------------------------------------------ */
 /* Values                                                                    */
@@ -221,6 +229,20 @@ extern const JSCFunctionListEntry b2js_world_joint_funcs[];
 extern const int b2js_world_joint_funcs_count;
 extern const JSCFunctionListEntry b2js_world_query_funcs[];
 extern const int b2js_world_query_funcs_count;
+
+/*
+ * Shape geometry from an options object, validated as Box2D requires
+ * (ath_box2d_body.c): { radius, center? }, { halfWidth, halfHeight, center?,
+ * angle? }, { vertices, radius? }, { point1, point2, radius }, { point1, point2 }.
+ */
+int b2js_circle(JSContext *ctx, JSValueConst options, const char *where, b2Circle *circle);
+int b2js_box(JSContext *ctx, JSValueConst options, const char *where, b2Polygon *box);
+int b2js_polygon(JSContext *ctx, JSValueConst options, const char *where, b2Polygon *polygon);
+int b2js_capsule(JSContext *ctx, JSValueConst options, const char *where, b2Capsule *capsule);
+int b2js_segment(JSContext *ctx, JSValueConst options, const char *where, b2Segment *segment);
+
+/* { mass, center, rotationalInertia } (ath_box2d_body.c). */
+JSValue b2js_new_mass_data(JSContext *ctx, b2MassData data);
 
 /* [{ shapeA, shapeB, normal, points: [{ point, separation, normalImpulse }] }] (ath_box2d_body.c). */
 JSValue b2js_contact_array(JSContext *ctx, B2JSWorld *world, const b2ContactData *contacts, int count);

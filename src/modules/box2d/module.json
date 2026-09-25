@@ -3,7 +3,7 @@
   "name": "Box2D",
   "description": "2D rigid body physics with Box2D 3.2: worlds, bodies, shapes, chains, seven joint types, ray/shape casts, overlap queries, character movers and contact, sensor and body events.",
   "category": "Physics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": false,
   "sources": [

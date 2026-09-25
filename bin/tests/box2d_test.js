@@ -1087,6 +1087,21 @@ test("memory usage and limit", function() {
     world.destroy();
 });
 expectThrow("setMemoryLimit rejects negative sizes", function() { Box2D.setMemoryLimit(-1); }, RangeError);
+test("step refuses to run past the memory budget, leaving the world as it was", function() {
+    const scene = groundWorld();
+    const box = dynamicBox(scene.world, 0, 5);
+    Box2D.setMemoryLimit(Box2D.getMemoryUsage());
+    try {
+        const error = captureError(function() { scene.world.step(1 / 60, 4); });
+        assert(error instanceof RangeError && /memory/.test(error.message), "step refused: " + error);
+        assertEqual(box.getPosition().y, 5, "the world did not move");
+    } finally {
+        Box2D.setMemoryLimit(0);
+    }
+    step(scene.world, 10);
+    assert(box.getPosition().y < 5, "steps again without the limit");
+    scene.world.destroy();
+});
 
 /* ------------------------------------------------------------------------ */
 /* Batch reads and profile                                                   */
@@ -1347,6 +1362,305 @@ expectThrow("a motion lock getter destroying the body", function() {
     const body = world.createBody({ type: Box2D.DYNAMIC_BODY });
     body.setMotionLocks({ get linearX() { body.destroy(); return true; } });
 }, TypeError);
+
+/* ------------------------------------------------------------------------ */
+/* World tuning and counters                                                 */
+/* ------------------------------------------------------------------------ */
+
+test("world contact options and tuning", function() {
+    const world = Box2D.createWorld({ contactHertz: 60, contactDampingRatio: 5, contactSpeed: 2,
+        enableContactSoftening: true });
+    world.setContactTuning(30, 10, 3);
+    assertEqual(world.isWarmStartingEnabled(), true, "warm starting on by default");
+    world.enableWarmStarting(false);
+    assertEqual(world.isWarmStartingEnabled(), false, "warm starting off");
+    world.enableWarmStarting(true);
+    world.enableSpeculative(true);
+    world.setContactRecycleDistance(0.05);
+    assertNear(world.getContactRecycleDistance(), 0.05, 1e-6, "recycle distance");
+    world.rebuildStaticTree();
+    world.destroy();
+});
+expectThrow("setContactTuning rejects negative values", function() {
+    Box2D.createWorld().setContactTuning(30, -1, 3);
+}, RangeError);
+expectThrow("contactHertz rejects negative values", function() {
+    Box2D.createWorld({ contactHertz: -1 });
+}, RangeError);
+
+test("getCounters reports the simulation size", function() {
+    const scene = groundWorld();
+    dynamicBox(scene.world, 0, 0.5);
+    dynamicBox(scene.world, 2, 0.5);
+    step(scene.world, 5);
+    const counters = scene.world.getCounters();
+    assertEqual(counters.bodyCount, 3, "bodies");
+    assertEqual(counters.shapeCount, 3, "shapes");
+    assert(counters.contactCount >= 2, "contacts: " + counters.contactCount);
+    assert(counters.byteCount > 0, "bytes");
+    assertEqual(counters.colorCounts.length, 24, "graph colors");
+    scene.world.destroy();
+});
+
+/* ------------------------------------------------------------------------ */
+/* Body additions                                                            */
+/* ------------------------------------------------------------------------ */
+
+test("body vectors, local center and point velocities", function() {
+    const world = Box2D.createWorld({ gravity: { x: 0, y: 0 } });
+    const body = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 1, y: 2 }, angle: Math.PI / 2 });
+    body.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5, center: { x: 1, y: 0 } });
+    const v = body.getWorldVector(1, 0);
+    assertNear(v.x, 0, 1e-5, "world vector x");
+    assertNear(v.y, 1, 1e-5, "world vector y");
+    const back = body.getLocalVector(v.x, v.y);
+    assertNear(back.x, 1, 1e-5, "local vector x");
+    assertNear(back.y, 0, 1e-5, "local vector y");
+    assertNear(body.getLocalCenter().x, 1, 1e-5, "local center");
+    body.setAngularVelocity(2);
+    /* A point 1 m from the center of mass, spinning at 2 rad/s, moves at 2 m/s. */
+    const center = body.getWorldCenter();
+    const w = body.getWorldPointVelocity(center.x + 1, center.y);
+    assertNear(Math.sqrt(w.x * w.x + w.y * w.y), 2, 1e-4, "world point speed");
+    const l = body.getLocalPointVelocity(1, 0);
+    assertNear(l.x, 0, 1e-4, "center of mass does not move x");
+    assertNear(l.y, 0, 1e-4, "center of mass does not move y");
+    world.destroy();
+});
+
+test("body mass data", function() {
+    const world = Box2D.createWorld();
+    const body = world.createBody({ type: Box2D.DYNAMIC_BODY });
+    body.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5, density: 2 });
+    const data = body.getMassData();
+    assertNear(data.mass, 2, 1e-5, "mass");
+    assertNear(body.getRotationalInertia(), data.rotationalInertia, 1e-6, "inertia");
+    body.setMassData({ mass: 10 });
+    assertNear(body.getMass(), 10, 1e-5, "mass overridden");
+    assertNear(body.getMassData().rotationalInertia, data.rotationalInertia, 1e-6, "inertia kept");
+    body.applyMassFromShapes();
+    assertNear(body.getMass(), 2, 1e-5, "mass from shapes again");
+    world.destroy();
+});
+expectThrow("setMassData rejects a negative mass", function() {
+    Box2D.createWorld().createBody({ type: Box2D.DYNAMIC_BODY }).setMassData({ mass: -1 });
+}, RangeError);
+
+test("body sleep, contact recycling, events and name", function() {
+    const scene = groundWorld();
+    const body = scene.world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 0, y: 0.5 },
+        name: "crate", allowFastRotation: true, enableContactRecycling: false });
+    body.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5 });
+    assertEqual(body.getName(), "crate", "name from options");
+    body.setName("player");
+    assertEqual(body.getName(), "player", "name");
+    body.setName("a-very-long-body-name");
+    assert(body.getName().length > 0 && "a-very-long-body-name".indexOf(body.getName()) === 0,
+        "long names are cut: " + body.getName());
+    /* 2-byte characters from byte 9 on: whatever the length limit, the cut must not split one. */
+    const accented = "aaaaaaaaaççççççççççççççç";
+    body.setName(accented);
+    assert(body.getName().length > 0 && accented.indexOf(body.getName()) === 0,
+        "cut on a character boundary: " + body.getName());
+    assertEqual(body.isContactRecyclingEnabled(), false, "recycling from options");
+    body.enableContactRecycling(true);
+    assertEqual(body.isContactRecyclingEnabled(), true, "recycling");
+    assertEqual(body.isSleepEnabled(), true, "sleep on by default");
+    body.setSleepThreshold(0.1);
+    assertNear(body.getSleepThreshold(), 0.1, 1e-6, "sleep threshold");
+    body.enableSleep(false);
+    step(scene.world, 240);
+    assertEqual(body.isAwake(), true, "never sleeps");
+    body.enableContactEvents(true);
+    assertEqual(body.getShapes()[0].areContactEventsEnabled(), true, "contact events on the shapes");
+    body.enableHitEvents(true);
+    assertEqual(body.getShapes()[0].areHitEventsEnabled(), true, "hit events on the shapes");
+    body.applyForceToCenter(100, 0);
+    body.clearForces();
+    body.wakeTouching();
+    scene.world.destroy();
+});
+expectThrow("setName needs a string", function() {
+    Box2D.createWorld().createBody().setName(5);
+}, TypeError);
+
+/* ------------------------------------------------------------------------ */
+/* Shape additions                                                           */
+/* ------------------------------------------------------------------------ */
+
+test("shape geometry can be replaced", function() {
+    const world = Box2D.createWorld();
+    const body = world.createBody({ type: Box2D.DYNAMIC_BODY });
+    const shape = body.createCircleShape({ radius: 0.5 });
+    shape.setCircle({ radius: 1, center: { x: 1, y: 0 } });
+    assertNear(shape.getCircle().radius, 1, 1e-6, "circle radius");
+    shape.setBox({ halfWidth: 1, halfHeight: 2 });
+    assertEqual(shape.getType(), "polygon", "box");
+    assertEqual(shape.getPolygon().count, 4, "4 vertices");
+    shape.setPolygon({ vertices: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }] });
+    assertEqual(shape.getPolygon().count, 3, "triangle");
+    shape.setCapsule({ point1: { x: 0, y: 0 }, point2: { x: 0, y: 1 }, radius: 0.25 });
+    assertEqual(shape.getType(), "capsule", "capsule");
+    shape.setSegment({ point1: { x: 0, y: 0 }, point2: { x: 1, y: 0 } });
+    assertEqual(shape.getType(), "segment", "segment");
+    world.destroy();
+});
+expectThrow("setBox validates like createBoxShape", function() {
+    Box2D.createWorld().createBody().createCircleShape({ radius: 1 }).setBox({ halfWidth: 0, halfHeight: 1 });
+}, RangeError);
+expectThrow("setPolygon rejects collinear points", function() {
+    Box2D.createWorld().createBody().createCircleShape({ radius: 1 })
+        .setPolygon({ vertices: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }] });
+}, RangeError);
+expectThrow("chain segments keep their geometry", function() {
+    const chain = Box2D.createWorld().createBody().createChain(
+        [{ x: 3, y: 0 }, { x: 2, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }]);
+    chain.getShapes()[0].setCircle({ radius: 1 });
+}, TypeError);
+test("setCircle re-checks the shape after reading its options", function() {
+    const world = Box2D.createWorld();
+    const shape = world.createBody().createCircleShape({ radius: 1 });
+    const error = captureError(function() {
+        shape.setCircle({ get radius() { shape.destroy(); return 2; } });
+    });
+    assert(error instanceof TypeError, "destroyed while reading: " + error);
+    world.destroy();
+});
+
+test("surface material", function() {
+    const world = Box2D.createWorld();
+    const shape = world.createBody().createCircleShape({ radius: 1, friction: 0.3, userMaterialId: 7,
+        customColor: 0xff8800 });
+    let material = shape.getSurfaceMaterial();
+    assertNear(material.friction, 0.3, 1e-6, "friction");
+    assertEqual(material.userMaterialId, 7, "user material");
+    assertEqual(material.customColor, 0xff8800, "color");
+    shape.setSurfaceMaterial({ rollingResistance: 0.2, tangentSpeed: -1 });
+    material = shape.getSurfaceMaterial();
+    assertNear(material.friction, 0.3, 1e-6, "friction kept");
+    assertNear(material.rollingResistance, 0.2, 1e-6, "rolling resistance");
+    assertNear(material.tangentSpeed, -1, 1e-6, "tangent speed");
+    world.destroy();
+});
+expectThrow("customColor must fit 32 bits", function() {
+    Box2D.createWorld().createBody().createCircleShape({ radius: 1 }).setSurfaceMaterial({ customColor: -1 });
+}, RangeError);
+
+test("shape mass data, ray cast and wind", function() {
+    const world = Box2D.createWorld({ gravity: { x: 0, y: 0 } });
+    const body = world.createBody({ type: Box2D.DYNAMIC_BODY });
+    const shape = body.createBoxShape({ halfWidth: 1, halfHeight: 1, density: 1 });
+    assertNear(shape.computeMassData().mass, 4, 1e-5, "mass of a 2x2 box");
+    const hit = shape.rayCast(-5, 0, 10, 0);
+    assert(hit !== null && hit.shape === shape, "hit");
+    assertNear(hit.point.x, -1, 1e-4, "hit point");
+    assertNear(hit.normal.x, -1, 1e-4, "hit normal");
+    assertNear(hit.fraction, 0.4, 1e-4, "fraction");
+    assertEqual(shape.rayCast(-5, 5, 10, 0), null, "miss");
+    shape.applyWind(10, 0, 1, 0);
+    world.step(1 / 60, 4);
+    assert(body.getLinearVelocity().x > 0, "blown by the wind");
+    world.destroy();
+});
+
+/* ------------------------------------------------------------------------ */
+/* Joint additions                                                           */
+/* ------------------------------------------------------------------------ */
+
+test("revolute spring target angle", function() {
+    const world = Box2D.createWorld({ gravity: { x: 0, y: 0 } });
+    const base = world.createBody();
+    const arm = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 1, y: 0 } });
+    arm.createBoxShape({ halfWidth: 1, halfHeight: 0.1 });
+    const joint = world.createRevoluteJoint(base, arm, { anchor: { x: 0, y: 0 }, enableSpring: true,
+        hertz: 4, dampingRatio: 1, targetAngle: 0.5 });
+    assertNear(joint.getTargetAngle(), 0.5, 1e-6, "target from options");
+    step(world, 180);
+    assertNear(joint.getAngle(), 0.5, 0.02, "spring reached the target");
+    /* The arm is asleep by now: like the other joint setters, this does not wake it. */
+    joint.setTargetAngle(-0.5);
+    joint.wakeBodies();
+    step(world, 180);
+    assertNear(joint.getAngle(), -0.5, 0.02, "new target");
+    world.destroy();
+});
+
+test("prismatic spring target translation", function() {
+    const world = Box2D.createWorld({ gravity: { x: 0, y: 0 } });
+    const base = world.createBody();
+    const slider = world.createBody({ type: Box2D.DYNAMIC_BODY });
+    slider.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5 });
+    const joint = world.createPrismaticJoint(base, slider, { enableSpring: true, hertz: 4, dampingRatio: 1,
+        targetTranslation: 1 });
+    step(world, 180);
+    assertNear(joint.getTranslation(), 1, 0.02, "spring reached the target");
+    joint.setTargetTranslation(-1);
+    joint.wakeBodies();
+    assertEqual(joint.getTargetTranslation(), -1, "target");
+    step(world, 180);
+    assertNear(joint.getTranslation(), -1, 0.02, "new target");
+    world.destroy();
+});
+expectThrow("targetAngle is revolute only", function() {
+    const world = Box2D.createWorld();
+    world.createWeldJoint(world.createBody(), world.createBody({ type: Box2D.DYNAMIC_BODY })).getTargetAngle();
+}, TypeError);
+
+test("distance spring force range", function() {
+    const world = Box2D.createWorld();
+    const a = world.createBody();
+    const b = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 2, y: 0 } });
+    b.createCircleShape({ radius: 0.2 });
+    const joint = world.createDistanceJoint(a, b, { enableSpring: true, hertz: 2,
+        lowerSpringForce: -50, upperSpringForce: 100 });
+    let range = joint.getSpringForceRange();
+    assertEqual(range.lower, -50, "lower");
+    assertEqual(range.upper, 100, "upper");
+    joint.setSpringForceRange(-10, 10);
+    range = joint.getSpringForceRange();
+    assertEqual(range.upper, 10, "updated");
+    assertEqual(captureError(function() { joint.setSpringForceRange(1, 0); }) instanceof RangeError, true,
+        "lower > upper");
+    world.destroy();
+});
+expectThrow("createDistanceJoint rejects an inverted spring force range", function() {
+    const world = Box2D.createWorld();
+    world.createDistanceJoint(world.createBody(), world.createBody({ type: Box2D.DYNAMIC_BODY }),
+        { lowerSpringForce: 1, upperSpringForce: 0 });
+}, RangeError);
+
+test("joint local frames, separation and constraint tuning", function() {
+    const world = Box2D.createWorld({ gravity: { x: 0, y: 0 } });
+    const a = world.createBody();
+    const b = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 2, y: 0 } });
+    b.createCircleShape({ radius: 0.2 });
+    const joint = world.createRevoluteJoint(a, b, { anchor: { x: 1, y: 0 }, constraintHertz: 30,
+        constraintDampingRatio: 2 });
+    const frameA = joint.getLocalFrameA();
+    assertNear(frameA.x, 1, 1e-5, "frame A x");
+    assertNear(joint.getLocalFrameB().x, -1, 1e-5, "frame B x");
+    joint.setLocalFrameA(1.5, 0, 0.25);
+    const moved = joint.getLocalFrameA();
+    assertNear(moved.x, 1.5, 1e-5, "moved x");
+    assertNear(moved.angle, 0.25, 1e-5, "moved angle");
+    /* The anchor on A moved 0.5 m away from the one on B: that is the constraint error. */
+    assertNear(joint.getLinearSeparation(), 0.5, 1e-4, "linear separation");
+    assertEqual(typeof joint.getAngularSeparation(), "number", "angular separation");
+    step(world, 60);
+    assert(joint.getLinearSeparation() < 0.05, "the solver closed the gap: " + joint.getLinearSeparation());
+    let tuning = joint.getConstraintTuning();
+    assertNear(tuning.hertz, 30, 1e-5, "hertz from options");
+    assertNear(tuning.dampingRatio, 2, 1e-5, "damping from options");
+    joint.setConstraintTuning(60, 0);
+    tuning = joint.getConstraintTuning();
+    assertNear(tuning.hertz, 60, 1e-5, "hertz");
+    world.destroy();
+});
+expectThrow("setConstraintTuning rejects negative values", function() {
+    const world = Box2D.createWorld();
+    world.createWeldJoint(world.createBody(), world.createBody({ type: Box2D.DYNAMIC_BODY }))
+        .setConstraintTuning(-1, 0);
+}, RangeError);
 
 /* ------------------------------------------------------------------------ */
 /* Stress: the simulation stays bounded (no NaN on the EE to catch divergence) */

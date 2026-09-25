@@ -19,9 +19,11 @@
  * finite and within +-1e10; positions, points, distances and vectors
  * (`{ x, y }`) within +-100000 m (Box2D's B2_HUGE).
  *
- * Creating worlds, bodies, shapes, chains or joints throws a RangeError
- * when Box2D would exceed `setMemoryLimit()` or leave less than 256 KB of
- * free RAM: Box2D itself cannot recover from a failed allocation.
+ * Creating worlds, bodies, shapes, chains or joints, and `world.step()`,
+ * throw a RangeError when Box2D would exceed `setMemoryLimit()` or leave less
+ * than 256 KB of free RAM: Box2D itself cannot recover from a failed
+ * allocation. A refused step leaves the world as it was. The limit goes back
+ * to 0 (none) when the VM restarts (`std.reload()`).
  *
  * Performance: every getter allocates an object. To sync many sprites per
  * frame use `world.readTransforms(bodies, float32Array)` (no allocation) or
@@ -60,7 +62,10 @@ declare namespace Box2D {
     /** Most worlds alive at a time (8 on the EE). */
     const MAX_WORLDS: number;
 
-    /** Caps the bytes Box2D may hold (0 = no limit, the default). */
+    /**
+     * Caps the bytes Box2D may hold (0 = no limit, the default). Reset to 0
+     * when the VM restarts.
+     */
     function setMemoryLimit(bytes: number): void;
     function getMemoryLimit(): number;
     /** Bytes currently allocated by Box2D (all worlds). */
@@ -150,6 +155,14 @@ declare namespace Box2D {
         maximumLinearSpeed?: number;
         /** Accepted for compatibility (1..32); the EE always simulates on one worker. */
         workerCount?: number;
+        /** Contact stiffness in Hz, >= 0. Default 30. See `World.setContactTuning()`. */
+        contactHertz?: number;
+        /** Contact damping ratio, >= 0. Default 10. */
+        contactDampingRatio?: number;
+        /** Most speed (m/s) at which overlap is pushed out, >= 0. Default 3. */
+        contactSpeed?: number;
+        /** Softer contacts between bodies of very different mass (experimental). Default false. */
+        enableContactSoftening?: boolean;
         userData?: any;
     }
 
@@ -181,13 +194,20 @@ declare namespace Box2D {
         enableSleep?: boolean;
         isAwake?: boolean;
         isEnabled?: boolean;
+        /** Lets the body spin past Box2D's rotation speed cap (round wheels only). Default false. */
+        allowFastRotation?: boolean;
+        /**
+         * Reuse contact points between steps. Default true (faster); turn it
+         * off for characters that must not catch on ghost collisions.
+         */
+        enableContactRecycling?: boolean;
+        /** Debug name, cut to 10 bytes (B2_NAME_LENGTH) at a character boundary. */
+        name?: string;
         userData?: any;
     }
 
-    /** Options shared by every `create*Shape` method. */
-    interface ShapeOptions {
-        /** kg/m^2, >= 0. Default 1. */
-        density?: number;
+    /** Surface properties of a shape; see `Shape.setSurfaceMaterial()`. */
+    interface SurfaceMaterial {
         /** >= 0. Default 0.6. */
         friction?: number;
         /** Bounciness, >= 0 (above 1 gains energy). Default 0. */
@@ -196,6 +216,23 @@ declare namespace Box2D {
         rollingResistance?: number;
         /** Conveyor belt speed along the surface. Default 0. */
         tangentSpeed?: number;
+        /** Your own material id (e.g. for footstep sounds). Not used by Box2D. Default 0. */
+        userMaterialId?: Bits;
+        /** Debug draw color 0xRRGGBB; 0 = the default color. */
+        customColor?: number;
+    }
+
+    /** Mass properties. `center` is local; the inertia is about the center of mass. */
+    interface MassData {
+        mass: number;
+        center: Vec2;
+        rotationalInertia: number;
+    }
+
+    /** Options shared by every `create*Shape` method. */
+    interface ShapeOptions extends SurfaceMaterial {
+        /** kg/m^2, >= 0. Default 1. */
+        density?: number;
         /** Detects overlaps without colliding; see `World.getSensorEvents()`. */
         isSensor?: boolean;
         /** Report this shape to sensors (visitors need it too). Default false. */
@@ -247,13 +284,9 @@ declare namespace Box2D {
         point2: Vec2;
     }
 
-    interface ChainOptions {
+    interface ChainOptions extends SurfaceMaterial {
         /** Connects the last point to the first. Default false. */
         isLoop?: boolean;
-        friction?: number;
-        restitution?: number;
-        rollingResistance?: number;
-        tangentSpeed?: number;
         enableSensorEvents?: boolean;
         filter?: Filter;
         userData?: any;
@@ -266,6 +299,10 @@ declare namespace Box2D {
         forceThreshold?: number;
         /** Constraint torque (N·m) above which the joint reports a joint event. Default: never. */
         torqueThreshold?: number;
+        /** Stiffness of the joint constraint in Hz, >= 0 (advanced). Default 60. */
+        constraintHertz?: number;
+        /** Damping of the joint constraint, >= 0 (advanced). Default 2. */
+        constraintDampingRatio?: number;
         userData?: any;
     }
 
@@ -302,6 +339,13 @@ declare namespace Box2D {
         enableMotor?: boolean;
         maxMotorForce?: number;
         motorSpeed?: number;
+        /**
+         * Spring force range (N), lower <= upper: lower bounds the tension, upper
+         * the compression (upperSpringForce 0 makes a spring that only pulls).
+         * Default unlimited.
+         */
+        lowerSpringForce?: number;
+        upperSpringForce?: number;
     }
 
     interface RevoluteJointOptions extends AnchorOptions, SpringOptions {
@@ -312,6 +356,8 @@ declare namespace Box2D {
         enableMotor?: boolean;
         motorSpeed?: number;
         maxMotorTorque?: number;
+        /** Angle (radians) the spring pulls towards. Default 0. */
+        targetAngle?: number;
     }
 
     interface PrismaticJointOptions extends AnchorOptions, SpringOptions {
@@ -323,6 +369,8 @@ declare namespace Box2D {
         enableMotor?: boolean;
         motorSpeed?: number;
         maxMotorForce?: number;
+        /** Translation (m) the spring pulls towards. Default 0. */
+        targetTranslation?: number;
     }
 
     interface WeldJointOptions extends AnchorOptions {
@@ -412,10 +460,31 @@ declare namespace Box2D {
         fellAsleep: boolean;
     }
 
+    /** Sizes of the simulation, from `World.getCounters()`. */
+    interface Counters {
+        bodyCount: number;
+        shapeCount: number;
+        contactCount: number;
+        jointCount: number;
+        islandCount: number;
+        stackUsed: number;
+        staticTreeHeight: number;
+        treeHeight: number;
+        taskCount: number;
+        awakeContactCount: number;
+        recycledContactCount: number;
+        /** Bytes held by this world. */
+        byteCount: number;
+        /** Constraints per solver graph color (24 colors). */
+        colorCounts: number[];
+    }
+
     interface World {
         /**
          * Advances the simulation. Default 1/60 s and 4 sub-steps (1 to 64).
-         * Use a fixed time step for stable results.
+         * Use a fixed time step for stable results. Throws a RangeError, and
+         * leaves the world as it was, once the memory budget is spent (see
+         * `Box2D.setMemoryLimit()`).
          */
         step(timeStep?: number, subStepCount?: number): void;
         createBody(options?: BodyOptions): Body;
@@ -443,6 +512,23 @@ declare namespace Box2D {
         setMaximumLinearSpeed(value: number): void;
         getMaximumLinearSpeed(): number;
         getAwakeBodyCount(): number;
+        /**
+         * Contact softness (advanced): stiffness in Hz, damping ratio and the
+         * most speed (m/s) at which overlap is pushed out; all >= 0.
+         * Defaults 30, 10, 3.
+         */
+        setContactTuning(hertz: number, dampingRatio: number, pushSpeed: number): void;
+        /** Distance (m) within which contact points are reused between steps, >= 0 (0 disables). */
+        setContactRecycleDistance(distance: number): void;
+        getContactRecycleDistance(): number;
+        /** Solver warm starting; disabling it only makes stacks less stable (testing). */
+        enableWarmStarting(flag: boolean): void;
+        isWarmStartingEnabled(): boolean;
+        /** Speculative contacts (testing). */
+        enableSpeculative(flag: boolean): void;
+        getCounters(): Counters;
+        /** Rebalances the tree of static shapes, e.g. after building a level. */
+        rebuildStaticTree(): void;
         getUserData(): any;
         setUserData(value: any): void;
 
@@ -576,11 +662,50 @@ declare namespace Box2D {
         getWorldPoint(x: number, y: number): Vec2;
         /** World point to local. */
         getLocalPoint(x: number, y: number): Vec2;
+        /** Local direction to world (rotation only). */
+        getWorldVector(x: number, y: number): Vec2;
+        /** World direction to local (rotation only). */
+        getLocalVector(x: number, y: number): Vec2;
+        /** Velocity of a world point moving with the body. */
+        getWorldPointVelocity(x: number, y: number): Vec2;
+        /** Velocity of a local point of the body, in world coordinates. */
+        getLocalPointVelocity(x: number, y: number): Vec2;
         /** Center of mass in world coordinates. */
         getWorldCenter(): Vec2;
-        /** Recomputes mass after shape density changes made with updateBodyMass false. */
+        /** Center of mass in local coordinates. */
+        getLocalCenter(): Vec2;
+        /** About the center of mass, kg·m^2. */
+        getRotationalInertia(): number;
+        getMassData(): MassData;
+        /**
+         * Overrides the mass computed from the shapes (fields left out keep
+         * their value; mass and inertia >= 0) until the shapes change or
+         * `applyMassFromShapes()` is called.
+         */
+        setMassData(data: Partial<MassData>): void;
+        /** Recomputes mass after shape density or geometry changes. */
         applyMassFromShapes(): void;
         computeAABB(): AABB;
+        /** Drops the forces and torques applied since the last step. */
+        clearForces(): void;
+        /** Wakes the bodies touching this one. */
+        wakeTouching(): void;
+        /** When false the body never sleeps. Default true. */
+        enableSleep(flag: boolean): void;
+        isSleepEnabled(): boolean;
+        /** Speed (m/s) below which the body may sleep, >= 0. */
+        setSleepThreshold(threshold: number): void;
+        getSleepThreshold(): number;
+        /** See `BodyOptions.enableContactRecycling`. */
+        enableContactRecycling(flag: boolean): void;
+        isContactRecyclingEnabled(): boolean;
+        /** Sets the flag on every shape of the body (read it with `shape.areContactEventsEnabled()`). */
+        enableContactEvents(flag: boolean): void;
+        /** Sets the flag on every shape of the body. */
+        enableHitEvents(flag: boolean): void;
+        /** Debug name, cut to 10 bytes at a character boundary. */
+        setName(name: string): void;
+        getName(): string;
 
         createCircleShape(options: CircleOptions): Shape;
         createBoxShape(options: BoxOptions): Shape;
@@ -655,6 +780,30 @@ declare namespace Box2D {
         getSensorOverlaps(): Shape[];
 
         /**
+         * Replace the geometry (the type may change), with the options of the
+         * matching `create*Shape`. The body mass is kept: call
+         * `body.applyMassFromShapes()`. Chain segments throw a TypeError.
+         */
+        setCircle(circle: { radius: number; center?: Vec2 }): void;
+        setBox(box: { halfWidth: number; halfHeight: number; center?: Vec2; angle?: number }): void;
+        setPolygon(polygon: { vertices: Vec2[]; radius?: number }): void;
+        setCapsule(capsule: { point1: Vec2; point2: Vec2; radius: number }): void;
+        setSegment(segment: { point1: Vec2; point2: Vec2 }): void;
+        getSurfaceMaterial(): Required<SurfaceMaterial>;
+        /** Fields left out keep their value. */
+        setSurfaceMaterial(material: SurfaceMaterial): void;
+        /** Mass of this shape alone, from its density. */
+        computeMassData(): MassData;
+        /** Ray against this shape only (world coordinates); null when missed. */
+        rayCast(originX: number, originY: number, translationX: number, translationY: number): CastHit | null;
+        /**
+         * Air force on a circle, capsule or polygon of a dynamic body (other
+         * shapes are ignored). `drag` (>= 0) scales the shape's own velocity
+         * against the wind, `lift` the force across it. `wake` defaults to true.
+         */
+        applyWind(windX: number, windY: number, drag: number, lift: number, wake?: boolean): void;
+
+        /**
          * `updateBodyMass` defaults to true. Returns false if already
          * destroyed. Chain segments go away with their chain: destroying one
          * throws a TypeError.
@@ -697,6 +846,18 @@ declare namespace Box2D {
         getTorqueThreshold(): number;
         getConstraintForce(): Vec2;
         getConstraintTorque(): number;
+        /** Constraint error: meters apart the anchors are (ignoring allowed motion). */
+        getLinearSeparation(): number;
+        /** Constraint error in radians. */
+        getAngularSeparation(): number;
+        /** See `JointOptions.constraintHertz`; both >= 0. */
+        setConstraintTuning(hertz: number, dampingRatio: number): void;
+        getConstraintTuning(): { hertz: number; dampingRatio: number };
+        /** Joint frame in body A's (or B's) local space: anchor and axis angle. */
+        getLocalFrameA(): { x: number; y: number; angle: number };
+        getLocalFrameB(): { x: number; y: number; angle: number };
+        setLocalFrameA(x: number, y: number, angle: number): void;
+        setLocalFrameB(x: number, y: number, angle: number): void;
 
         /** distance, revolute, prismatic, wheel. */
         enableSpring(flag: boolean): void;
@@ -726,13 +887,25 @@ declare namespace Box2D {
 
         /** revolute: current angle in radians. */
         getAngle(): number;
+        /**
+         * revolute: angle the spring pulls towards. Like the other setters,
+         * this does not wake sleeping bodies: call `wakeBodies()`.
+         */
+        setTargetAngle(angle: number): void;
+        getTargetAngle(): number;
         /** prismatic: translation along the axis and its speed. */
         getTranslation(): number;
         getSpeed(): number;
+        /** prismatic: translation the spring pulls towards (does not wake the bodies). */
+        setTargetTranslation(translation: number): void;
+        getTargetTranslation(): number;
         /** distance: rest length (> 0) and current length. */
         getLength(): number;
         setLength(length: number): void;
         getCurrentLength(): number;
+        /** distance: see `DistanceJointOptions.lowerSpringForce`; lower <= upper. */
+        setSpringForceRange(lower: number, upper: number): void;
+        getSpringForceRange(): { lower: number; upper: number };
 
         /** weld, motor. */
         setLinearHertz(hertz: number): void;

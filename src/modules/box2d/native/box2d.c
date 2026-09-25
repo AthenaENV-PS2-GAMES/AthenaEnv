@@ -452,6 +452,14 @@ bool athena_box2d_joint_get(b2JointId joint, AthenaBox2DJointParam param, float 
         if (type != b2_prismaticJoint) return false;
         value = b2PrismaticJoint_GetSpeed(joint);
         break;
+    case ATHENA_BOX2D_TARGET_ANGLE:
+        if (type != b2_revoluteJoint) return false;
+        value = b2RevoluteJoint_GetTargetAngle(joint);
+        break;
+    case ATHENA_BOX2D_TARGET_TRANSLATION:
+        if (type != b2_prismaticJoint) return false;
+        value = b2PrismaticJoint_GetTargetTranslation(joint);
+        break;
     default:
         return false;
     }
@@ -572,6 +580,14 @@ bool athena_box2d_joint_set(b2JointId joint, AthenaBox2DJointParam param, float 
     case ATHENA_BOX2D_LENGTH:
         if (type != b2_distanceJoint) return false;
         b2DistanceJoint_SetLength(joint, value);
+        return true;
+    case ATHENA_BOX2D_TARGET_ANGLE:
+        if (type != b2_revoluteJoint) return false;
+        b2RevoluteJoint_SetTargetAngle(joint, value);
+        return true;
+    case ATHENA_BOX2D_TARGET_TRANSLATION:
+        if (type != b2_prismaticJoint) return false;
+        b2PrismaticJoint_SetTargetTranslation(joint, value);
         return true;
     default:
         /* Read-only: limits (see athena_box2d_joint_set_limits), forces, angle, ... */

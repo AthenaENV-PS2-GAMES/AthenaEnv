@@ -247,6 +247,10 @@ static bool supports(b2JointType type, AthenaBox2DJointParam param)
 		return type == b2_revoluteJoint;
 	case ATHENA_BOX2D_TRANSLATION: case ATHENA_BOX2D_SPEED:
 		return type == b2_prismaticJoint;
+	case ATHENA_BOX2D_TARGET_ANGLE:
+		return type == b2_revoluteJoint;
+	case ATHENA_BOX2D_TARGET_TRANSLATION:
+		return type == b2_prismaticJoint;
 	default:
 		return false;
 	}

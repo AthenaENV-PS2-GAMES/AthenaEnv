@@ -73,7 +73,9 @@ RangeError, but destroy worlds you are done with (level changes).
 
 Box2D worlds are not thread-safe, but the bindings never release the script
 lock (GIL) during a call, so worlds may be used from `Thread` workers: each
-call is atomic with respect to the other threads.
+call is atomic with respect to the other threads. The module serves one JS
+runtime at a time (the VM); importing it from a second runtime (an
+`os.Worker`, if a build enabled them) throws an InternalError.
 
 ## Events and queries
 
@@ -93,6 +95,43 @@ Events describe the last `step()`. A shape destroyed since then reads as
 State queries, without events: `body.getContacts()` / `shape.getContacts()`
 (touching contacts with their points and normal — e.g. "is the player on the
 ground?") and `sensor.getSensorOverlaps()`.
+
+## Changing things at run time
+
+- **Geometry:** `shape.setCircle/setBox/setPolygon/setCapsule/setSegment`
+  take the options of the matching `create*Shape` (the type may change: a
+  circle can become a box). The body keeps its mass until
+  `body.applyMassFromShapes()`. Chain segments keep their geometry.
+- **Material:** `shape.get/setSurfaceMaterial()` — friction, restitution,
+  rolling resistance, conveyor `tangentSpeed`, your own `userMaterialId`
+  (e.g. footstep sounds) and a debug `customColor`. The same fields are
+  options of `create*Shape` and `createChain`.
+- **Mass:** `body.getMassData()`, `setMassData({ mass?, center?,
+  rotationalInertia? })`, `getRotationalInertia()`, `getLocalCenter()`;
+  `shape.computeMassData()` for one shape.
+- **Springs:** revolute `targetAngle` and prismatic `targetTranslation`
+  (option and `set/getTarget*`) move the rest position of the spring — a
+  servo or an elevator without a motor. Distance joints bound the spring
+  force with `lowerSpringForce`/`upperSpringForce`. Like the other joint
+  setters these do not wake sleeping bodies: call `joint.wakeBodies()`.
+- **Joint frames:** `joint.get/setLocalFrameA/B()` read or move the anchor
+  and axis on each body; `getLinearSeparation()`/`getAngularSeparation()`
+  tell how far the solver is from satisfying the joint (detect a stretched
+  rope or a breaking chain).
+- **Bodies:** `getWorldVector`/`getLocalVector`, point velocities, sleep
+  (`enableSleep`, `setSleepThreshold`), `clearForces`, `wakeTouching`,
+  `enableContactEvents`/`enableHitEvents` on every shape at once, contact
+  recycling (turn it off for characters that catch on seams), debug names.
+- **Wind:** `shape.applyWind(windX, windY, drag, lift)` each step.
+- **Tuning (advanced):** world `contactHertz`/`contactDampingRatio`/
+  `contactSpeed` (options or `setContactTuning`), joint
+  `constraintHertz`/`constraintDampingRatio`, contact recycle distance, warm
+  starting and speculative contacts; `world.getCounters()` reports bodies,
+  contacts, islands, tree heights and bytes.
+
+Box2D's pre-solve, custom filter, friction and restitution callbacks are not
+exposed: they run inside `step()`, where scripts could destroy what the
+solver is working on. Use collision filters, filter joints and materials.
 
 ## Character mover
 
@@ -136,11 +175,16 @@ saturation. The same rules are available to C code as `athena_box2d_*` in
 `<athena/box2d.h>`.
 
 **Memory.** Box2D cannot recover from a failed allocation. Creating a world,
-body, shape, chain or joint throws a RangeError when Box2D would exceed
-`Box2D.setMemoryLimit(bytes)` (no limit by default) or leave less than
-256 KB of free RAM; `Box2D.getMemoryUsage()` reports what it holds. If an
-allocation still fails, the console stops on the crash screen with the size
-requested instead of crashing at random.
+body, shape, chain or joint, and `world.step()`, throw a RangeError when
+Box2D would exceed `Box2D.setMemoryLimit(bytes)` (no limit by default) or
+leave less than 256 KB of free RAM; a refused step leaves the world as it
+was. `Box2D.getMemoryUsage()` reports what Box2D holds. The check runs before
+each call, so a single step can still grow past the limit by what it
+allocates (new contacts and islands, usually a few KB); keep the limit below
+what you can afford. If an allocation still fails, the console stops on the
+crash screen with the size requested instead of crashing at random. The
+limit goes back to 0 when the VM restarts (`std.reload()`, or after an
+uncaught error).
 
 **Assertions** are compiled in debug builds (`make debug`) and stop on the
 crash screen with the failed condition and its source line; release builds

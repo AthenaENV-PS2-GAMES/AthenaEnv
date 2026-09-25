@@ -163,6 +163,8 @@ typedef enum AthenaBox2DJointParam {
     ATHENA_BOX2D_ANGLE,                /* revolute (read-only) */
     ATHENA_BOX2D_TRANSLATION,          /* prismatic (read-only) */
     ATHENA_BOX2D_SPEED,                /* prismatic (read-only) */
+    ATHENA_BOX2D_TARGET_ANGLE,         /* revolute (spring rest angle, radians) */
+    ATHENA_BOX2D_TARGET_TRANSLATION,   /* prismatic (spring rest translation) */
     ATHENA_BOX2D_JOINT_PARAM_COUNT
 } AthenaBox2DJointParam;
 

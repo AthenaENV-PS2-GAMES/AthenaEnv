@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <athena/js/box2d.h>
 
@@ -407,16 +408,67 @@ int b2js_query_filter(JSContext *ctx, int argc, JSValueConst *argv, int index, c
     return 0;
 }
 
+int b2js_name(JSContext *ctx, JSValueConst value, const char *where, char out[B2_NAME_LENGTH + 1]) {
+    size_t length, n;
+    const char *name;
+
+    if (!JS_IsString(value)) {
+        JS_ThrowTypeError(ctx, "%s: name must be a string", where);
+        return -1;
+    }
+    name = JS_ToCStringLen(ctx, &length, value);
+    if (!name)
+        return -1;
+    /* Box2D keeps B2_NAME_LENGTH bytes: cut at a UTF-8 character boundary. */
+    n = length < B2_NAME_LENGTH ? length : B2_NAME_LENGTH;
+    if (n < length) {
+        while (n > 0 && ((unsigned char)name[n] & 0xC0) == 0x80)
+            n--;
+    }
+    memcpy(out, name, n);
+    out[n] = '\0';
+    JS_FreeCString(ctx, name);
+    return 0;
+}
+
+int b2js_material(JSContext *ctx, JSValueConst options, const char *where, b2SurfaceMaterial *material) {
+    uint64_t color = material->customColor;
+
+    if (b2js_opt_float(ctx, options, "friction", where, B2JS_NONNEG, &material->friction) < 0 ||
+        b2js_opt_float(ctx, options, "restitution", where, B2JS_NONNEG, &material->restitution) < 0 ||
+        b2js_opt_float(ctx, options, "rollingResistance", where, B2JS_NONNEG, &material->rollingResistance) < 0 ||
+        b2js_opt_float(ctx, options, "tangentSpeed", where, B2JS_ANY, &material->tangentSpeed) < 0 ||
+        opt_bits(ctx, options, "userMaterialId", where, "userMaterialId", &material->userMaterialId) < 0 ||
+        opt_bits(ctx, options, "customColor", where, "customColor", &color) < 0)
+        return -1;
+    if (color > 0xFFFFFFFFu) {
+        JS_ThrowRangeError(ctx, "%s: customColor must be a 32-bit color (0xRRGGBB, 0 = default)", where);
+        return -1;
+    }
+    material->customColor = (uint32_t)color;
+    return 0;
+}
+
+JSValue b2js_new_material(JSContext *ctx, b2SurfaceMaterial material) {
+    JSValue object = JS_NewObject(ctx);
+
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "friction", JS_NewFloat32(ctx, material.friction));
+    JS_SetPropertyStr(ctx, object, "restitution", JS_NewFloat32(ctx, material.restitution));
+    JS_SetPropertyStr(ctx, object, "rollingResistance", JS_NewFloat32(ctx, material.rollingResistance));
+    JS_SetPropertyStr(ctx, object, "tangentSpeed", JS_NewFloat32(ctx, material.tangentSpeed));
+    JS_SetPropertyStr(ctx, object, "userMaterialId", b2js_new_bits(ctx, material.userMaterialId));
+    JS_SetPropertyStr(ctx, object, "customColor", JS_NewInt64(ctx, material.customColor));
+    return object;
+}
+
 int b2js_shape_def(JSContext *ctx, JSValueConst options, const char *where, b2ShapeDef *def) {
     JSValue filter;
     int ret = 0;
 
     if (b2js_opt_float(ctx, options, "density", where, B2JS_NONNEG, &def->density) < 0 ||
-        b2js_opt_float(ctx, options, "friction", where, B2JS_NONNEG, &def->material.friction) < 0 ||
-        b2js_opt_float(ctx, options, "restitution", where, B2JS_NONNEG, &def->material.restitution) < 0 ||
-        b2js_opt_float(ctx, options, "rollingResistance", where, B2JS_NONNEG,
-            &def->material.rollingResistance) < 0 ||
-        b2js_opt_float(ctx, options, "tangentSpeed", where, B2JS_ANY, &def->material.tangentSpeed) < 0 ||
+        b2js_material(ctx, options, where, &def->material) < 0 ||
         b2js_opt_bool(ctx, options, "isSensor", where, &def->isSensor) < 0 ||
         b2js_opt_bool(ctx, options, "enableSensorEvents", where, &def->enableSensorEvents) < 0 ||
         b2js_opt_bool(ctx, options, "enableContactEvents", where, &def->enableContactEvents) < 0 ||
@@ -438,20 +490,46 @@ int b2js_shape_def(JSContext *ctx, JSValueConst options, const char *where, b2Sh
 
 B2JSAtoms b2js_atoms;
 
+/*
+ * Atoms belong to a runtime, and the Box2D world table is process-wide: the
+ * module serves one runtime at a time (the VM, which std.reload() and error
+ * restarts recreate after cleaning up). A second runtime (e.g. an os.Worker
+ * build) gets an error instead of atoms of another runtime.
+ */
+static JSRuntime *atoms_runtime;
+
 static int atoms_init(JSContext *ctx) {
+    JSRuntime *rt = JS_GetRuntime(ctx);
+
+    if (atoms_runtime == rt)
+        return 0;
+    if (atoms_runtime) {
+        JS_ThrowInternalError(ctx, "Box2D: the module is already in use by another JS runtime");
+        return -1;
+    }
 #define B2JS_ATOM_NEW(name) \
-    if ((b2js_atoms.name = JS_NewAtom(ctx, #name)) == JS_ATOM_NULL) return -1;
+    if ((b2js_atoms.name = JS_NewAtom(ctx, #name)) == JS_ATOM_NULL) goto fail;
     B2JS_ATOM_LIST(B2JS_ATOM_NEW)
 #undef B2JS_ATOM_NEW
+    atoms_runtime = rt;
     return 0;
+
+fail:
+#define B2JS_ATOM_FREE(name) \
+    if (b2js_atoms.name != JS_ATOM_NULL) { JS_FreeAtom(ctx, b2js_atoms.name); b2js_atoms.name = JS_ATOM_NULL; }
+    B2JS_ATOM_LIST(B2JS_ATOM_FREE)
+    return -1;
 }
 
 /* Module cleanup (manifest quickjs.cleanup_func), before the context goes away. */
 void athena_box2d_cleanup(JSContext *ctx) {
-#define B2JS_ATOM_FREE(name) \
-    if (b2js_atoms.name != JS_ATOM_NULL) { JS_FreeAtom(ctx, b2js_atoms.name); b2js_atoms.name = JS_ATOM_NULL; }
+    if (atoms_runtime != JS_GetRuntime(ctx))
+        return;
     B2JS_ATOM_LIST(B2JS_ATOM_FREE)
 #undef B2JS_ATOM_FREE
+    atoms_runtime = NULL;
+    /* The next VM (std.reload(), restart after an error) starts without a limit. */
+    athena_box2d_set_memory_limit(0);
 }
 
 int b2js_check_memory(JSContext *ctx, const char *where) {
@@ -834,6 +912,10 @@ static int world_def(JSContext *ctx, JSValueConst options, b2WorldDef *def, JSVa
             &def->restitutionThreshold) < 0 ||
         b2js_opt_float(ctx, options, "hitEventThreshold", where, B2JS_NONNEG, &def->hitEventThreshold) < 0 ||
         b2js_opt_float(ctx, options, "maximumLinearSpeed", where, B2JS_POS, &def->maximumLinearSpeed) < 0 ||
+        b2js_opt_float(ctx, options, "contactHertz", where, B2JS_NONNEG, &def->contactHertz) < 0 ||
+        b2js_opt_float(ctx, options, "contactDampingRatio", where, B2JS_NONNEG, &def->contactDampingRatio) < 0 ||
+        b2js_opt_float(ctx, options, "contactSpeed", where, B2JS_NONNEG, &def->contactSpeed) < 0 ||
+        b2js_opt_bool(ctx, options, "enableContactSoftening", where, &def->enableContactSoftening) < 0 ||
         /* Validated for compatibility; the EE runs every world on one worker. */
         b2js_opt_int(ctx, options, "workerCount", where, 1, B2_MAX_WORKERS, &workers) < 0)
         return -1;
@@ -905,16 +987,26 @@ static JSValue world_step(JSContext *ctx, JSValueConst this_val, int argc, JSVal
         (b2js_has(argc, argv, 1) &&
             b2js_int(ctx, argv[1], where, "subStepCount", 1, B2JS_MAX_SUB_STEPS, &sub_steps) < 0))
         return JS_EXCEPTION;
+    /*
+     * A step allocates too (new contacts, islands, event arrays), and Box2D
+     * cannot recover from a failed allocation: refuse to step once the budget
+     * is spent, leaving the world as it is, instead of risking the crash screen.
+     */
+    if (b2js_check_memory(ctx, where) < 0)
+        return JS_EXCEPTION;
     b2World_Step(world->id, time_step, sub_steps);
     return JS_UNDEFINED;
 }
 
-static int body_def(JSContext *ctx, JSValueConst options, b2BodyDef *def, JSValue *user_data) {
+/* name: buffer for options.name, which def->name points to when given. */
+static int body_def(JSContext *ctx, JSValueConst options, b2BodyDef *def, JSValue *user_data,
+    char name[B2_NAME_LENGTH + 1]) {
     static const char where[] = "World.createBody options";
     int type = def->type;
     float angle = 0.0f;
     bool fixed_rotation = def->motionLocks.angularZ;
     int has_angle;
+    JSValue value;
 
     if (b2js_opt_int(ctx, options, "type", where, b2_staticBody, b2_dynamicBody, &type) < 0 ||
         b2js_opt_vec2(ctx, options, "position", where, &def->position) < 0 ||
@@ -930,8 +1022,21 @@ static int body_def(JSContext *ctx, JSValueConst options, b2BodyDef *def, JSValu
         b2js_opt_bool(ctx, options, "isBullet", where, &def->isBullet) < 0 ||
         b2js_opt_bool(ctx, options, "enableSleep", where, &def->enableSleep) < 0 ||
         b2js_opt_bool(ctx, options, "isAwake", where, &def->isAwake) < 0 ||
-        b2js_opt_bool(ctx, options, "isEnabled", where, &def->isEnabled) < 0)
+        b2js_opt_bool(ctx, options, "isEnabled", where, &def->isEnabled) < 0 ||
+        b2js_opt_bool(ctx, options, "allowFastRotation", where, &def->allowFastRotation) < 0 ||
+        b2js_opt_bool(ctx, options, "enableContactRecycling", where, &def->enableContactRecycling) < 0)
         return -1;
+
+    value = JS_GetPropertyStr(ctx, options, "name");
+    if (JS_IsException(value))
+        return -1;
+    if (!JS_IsUndefined(value)) {
+        int ret = b2js_name(ctx, value, where, name);
+        JS_FreeValue(ctx, value);
+        if (ret < 0)
+            return -1;
+        def->name = name;
+    }
 
     has_angle = b2js_opt_float(ctx, options, "angle", where, B2JS_ANY, &angle);
     if (has_angle == 0)
@@ -953,12 +1058,13 @@ static JSValue world_create_body(JSContext *ctx, JSValueConst this_val, int argc
     JSValue user_data = JS_UNDEFINED;
     JSValue body;
     b2BodyId id;
+    char name[B2_NAME_LENGTH + 1];
     int has_options;
 
     if (!world || b2js_argc(ctx, argc, 0, 1, where) < 0)
         return JS_EXCEPTION;
     has_options = b2js_options(ctx, argc, argv, 0, where);
-    if (has_options < 0 || (has_options && body_def(ctx, argv[0], &def, &user_data) < 0))
+    if (has_options < 0 || (has_options && body_def(ctx, argv[0], &def, &user_data, name) < 0))
         return JS_EXCEPTION;
     if (b2js_world_still_alive(ctx, world, where) < 0 || b2js_check_memory(ctx, where) < 0) {
         JS_FreeValue(ctx, user_data);
@@ -1026,6 +1132,9 @@ enum {
     WORLD_HIT_EVENT_THRESHOLD,
     WORLD_MAXIMUM_LINEAR_SPEED,
     WORLD_AWAKE_BODY_COUNT,
+    WORLD_WARM_STARTING,
+    WORLD_SPECULATIVE,
+    WORLD_CONTACT_RECYCLE_DISTANCE,
 };
 
 static const struct {
@@ -1035,6 +1144,11 @@ static const struct {
 } world_settings[] = {
     [WORLD_CONTINUOUS] = { "World.isContinuousEnabled", "World.enableContinuous", B2JS_ANY },
     [WORLD_SLEEPING] = { "World.isSleepingEnabled", "World.enableSleeping", B2JS_ANY },
+    [WORLD_WARM_STARTING] = { "World.isWarmStartingEnabled", "World.enableWarmStarting", B2JS_ANY },
+    /* Box2D has no getter for it. */
+    [WORLD_SPECULATIVE] = { NULL, "World.enableSpeculative", B2JS_ANY },
+    [WORLD_CONTACT_RECYCLE_DISTANCE] = { "World.getContactRecycleDistance", "World.setContactRecycleDistance",
+        B2JS_NONNEG },
     [WORLD_RESTITUTION_THRESHOLD] = { "World.getRestitutionThreshold", "World.setRestitutionThreshold", B2JS_NONNEG },
     [WORLD_HIT_EVENT_THRESHOLD] = { "World.getHitEventThreshold", "World.setHitEventThreshold", B2JS_NONNEG },
     [WORLD_MAXIMUM_LINEAR_SPEED] = { "World.getMaximumLinearSpeed", "World.setMaximumLinearSpeed", B2JS_POS },
@@ -1054,6 +1168,9 @@ static JSValue world_get(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         case WORLD_HIT_EVENT_THRESHOLD: return JS_NewFloat32(ctx, b2World_GetHitEventThreshold(world->id));
         case WORLD_MAXIMUM_LINEAR_SPEED: return JS_NewFloat32(ctx, b2World_GetMaximumLinearSpeed(world->id));
         case WORLD_AWAKE_BODY_COUNT: return JS_NewInt32(ctx, b2World_GetAwakeBodyCount(world->id));
+        case WORLD_WARM_STARTING: return JS_NewBool(ctx, b2World_IsWarmStartingEnabled(world->id));
+        case WORLD_CONTACT_RECYCLE_DISTANCE:
+            return JS_NewFloat32(ctx, b2World_GetContactRecycleDistance(world->id));
         default: return JS_UNDEFINED;
     }
 }
@@ -1066,13 +1183,16 @@ static JSValue world_set(JSContext *ctx, JSValueConst this_val, int argc, JSValu
 
     if (!world || b2js_argc(ctx, argc, 1, 1, where) < 0)
         return JS_EXCEPTION;
-    if (magic == WORLD_CONTINUOUS || magic == WORLD_SLEEPING) {
+    if (magic == WORLD_CONTINUOUS || magic == WORLD_SLEEPING || magic == WORLD_WARM_STARTING ||
+        magic == WORLD_SPECULATIVE) {
         if (b2js_bool(ctx, argv[0], where, "flag", &flag) < 0)
             return JS_EXCEPTION;
-        if (magic == WORLD_CONTINUOUS)
-            b2World_EnableContinuous(world->id, flag);
-        else
-            b2World_EnableSleeping(world->id, flag);
+        switch (magic) {
+            case WORLD_CONTINUOUS: b2World_EnableContinuous(world->id, flag); break;
+            case WORLD_SLEEPING: b2World_EnableSleeping(world->id, flag); break;
+            case WORLD_WARM_STARTING: b2World_EnableWarmStarting(world->id, flag); break;
+            default: b2World_EnableSpeculative(world->id, flag); break;
+        }
         return JS_UNDEFINED;
     }
     if (b2js_float(ctx, argv[0], where, "value", world_settings[magic].range, &value) < 0)
@@ -1081,6 +1201,7 @@ static JSValue world_set(JSContext *ctx, JSValueConst this_val, int argc, JSValu
         case WORLD_RESTITUTION_THRESHOLD: b2World_SetRestitutionThreshold(world->id, value); break;
         case WORLD_HIT_EVENT_THRESHOLD: b2World_SetHitEventThreshold(world->id, value); break;
         case WORLD_MAXIMUM_LINEAR_SPEED: b2World_SetMaximumLinearSpeed(world->id, value); break;
+        case WORLD_CONTACT_RECYCLE_DISTANCE: b2World_SetContactRecycleDistance(world->id, value); break;
     }
     return JS_UNDEFINED;
 }
@@ -1103,6 +1224,66 @@ static JSValue world_set_user_data(JSContext *ctx, JSValueConst this_val, int ar
     world->user_data = JS_DupValue(ctx, argv[0]);
     JS_FreeValue(ctx, previous);
     return JS_UNDEFINED;
+}
+
+/* World.setContactTuning(hertz, dampingRatio, pushSpeed): contact softness (advanced). */
+static JSValue world_set_contact_tuning(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "World.setContactTuning";
+    B2JSWorld *world = b2js_this_world(ctx, this_val, where);
+    float hertz, damping, push_speed;
+
+    if (!world || b2js_argc(ctx, argc, 3, 3, where) < 0 ||
+        b2js_float(ctx, argv[0], where, "hertz", B2JS_NONNEG, &hertz) < 0 ||
+        b2js_float(ctx, argv[1], where, "dampingRatio", B2JS_NONNEG, &damping) < 0 ||
+        b2js_float(ctx, argv[2], where, "pushSpeed", B2JS_NONNEG, &push_speed) < 0)
+        return JS_EXCEPTION;
+    b2World_SetContactTuning(world->id, hertz, damping, push_speed);
+    return JS_UNDEFINED;
+}
+
+/* World.rebuildStaticTree(): rebalances the tree of static shapes after many were created or moved. */
+static JSValue world_rebuild_static_tree(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "World.rebuildStaticTree";
+    B2JSWorld *world = b2js_this_world(ctx, this_val, where);
+
+    if (!world || b2js_argc(ctx, argc, 0, 0, where) < 0)
+        return JS_EXCEPTION;
+    b2World_RebuildStaticTree(world->id);
+    return JS_UNDEFINED;
+}
+
+/* World.getCounters(): sizes of the simulation. */
+static JSValue world_get_counters(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+#define COUNTER_FIELD(name) { #name, offsetof(b2Counters, name) }
+    static const struct { const char *name; size_t offset; } fields[] = {
+        COUNTER_FIELD(bodyCount), COUNTER_FIELD(shapeCount), COUNTER_FIELD(contactCount),
+        COUNTER_FIELD(jointCount), COUNTER_FIELD(islandCount), COUNTER_FIELD(stackUsed),
+        COUNTER_FIELD(staticTreeHeight), COUNTER_FIELD(treeHeight), COUNTER_FIELD(taskCount),
+        COUNTER_FIELD(awakeContactCount), COUNTER_FIELD(recycledContactCount),
+    };
+#undef COUNTER_FIELD
+    static const char where[] = "World.getCounters";
+    B2JSWorld *world = b2js_this_world(ctx, this_val, where);
+    b2Counters counters;
+    JSValue object, colors;
+
+    if (!world || b2js_argc(ctx, argc, 0, 0, where) < 0)
+        return JS_EXCEPTION;
+    counters = b2World_GetCounters(world->id);
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    for (size_t i = 0; i < countof(fields); i++) {
+        int value = *(const int *)((const char *)&counters + fields[i].offset);
+        JS_SetPropertyStr(ctx, object, fields[i].name, JS_NewInt32(ctx, value));
+    }
+    JS_SetPropertyStr(ctx, object, "byteCount", JS_NewInt64(ctx, counters.byteCount));
+    /* Constraints per graph color: how well the solver can batch them. */
+    colors = JS_NewArray(ctx);
+    for (int i = 0; i < (int)countof(counters.colorCounts) && !JS_IsException(colors); i++)
+        JS_SetPropertyUint32(ctx, colors, (uint32_t)i, JS_NewInt32(ctx, counters.colorCounts[i]));
+    JS_SetPropertyStr(ctx, object, "colorCounts", colors);
+    return object;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1305,6 +1486,7 @@ static JSValue world_snapshot(JSContext *ctx, JSValueConst this_val, int argc, J
     static const char where[] = "World.snapshot";
     B2JSWorld *world = b2js_this_world(ctx, this_val, where);
     uint8_t *image;
+    JSValue buffer;
     int size = 0;
 
     if (!world || b2js_argc(ctx, argc, 0, 0, where) < 0)
@@ -1312,7 +1494,11 @@ static JSValue world_snapshot(JSContext *ctx, JSValueConst this_val, int argc, J
     image = athena_box2d_snapshot(world->id, &size);
     if (!image)
         return JS_ThrowOutOfMemory(ctx);
-    return JS_NewArrayBuffer(ctx, image, (size_t)size, snapshot_free, NULL, false);
+    buffer = JS_NewArrayBuffer(ctx, image, (size_t)size, snapshot_free, NULL, false);
+    /* QuickJS does not call snapshot_free when the object cannot be created. */
+    if (JS_IsException(buffer))
+        free(image);
+    return buffer;
 }
 
 /* Bytes of an ArrayBuffer or typed array; NULL with a TypeError otherwise. */
@@ -1417,6 +1603,14 @@ static const JSCFunctionListEntry world_proto_funcs[] = {
     JS_CFUNC_MAGIC_DEF("getMaximumLinearSpeed", 0, world_get, WORLD_MAXIMUM_LINEAR_SPEED),
     JS_CFUNC_MAGIC_DEF("setMaximumLinearSpeed", 1, world_set, WORLD_MAXIMUM_LINEAR_SPEED),
     JS_CFUNC_MAGIC_DEF("getAwakeBodyCount", 0, world_get, WORLD_AWAKE_BODY_COUNT),
+    JS_CFUNC_MAGIC_DEF("isWarmStartingEnabled", 0, world_get, WORLD_WARM_STARTING),
+    JS_CFUNC_MAGIC_DEF("enableWarmStarting", 1, world_set, WORLD_WARM_STARTING),
+    JS_CFUNC_MAGIC_DEF("enableSpeculative", 1, world_set, WORLD_SPECULATIVE),
+    JS_CFUNC_MAGIC_DEF("getContactRecycleDistance", 0, world_get, WORLD_CONTACT_RECYCLE_DISTANCE),
+    JS_CFUNC_MAGIC_DEF("setContactRecycleDistance", 1, world_set, WORLD_CONTACT_RECYCLE_DISTANCE),
+    JS_CFUNC_DEF("setContactTuning", 3, world_set_contact_tuning),
+    JS_CFUNC_DEF("getCounters", 0, world_get_counters),
+    JS_CFUNC_DEF("rebuildStaticTree", 0, world_rebuild_static_tree),
     JS_CFUNC_DEF("getUserData", 0, world_get_user_data),
     JS_CFUNC_DEF("setUserData", 1, world_set_user_data),
     JS_CFUNC_DEF("destroy", 0, world_destroy_js),

@@ -705,12 +705,13 @@ static JSValue world_get_body_events(JSContext *ctx, JSValueConst this_val, int 
         const B2JSHandle *handle;
         JSValue body, item;
 
-        /* Bodies destroyed since the step are still listed, and their user
-         * data (the handle) may be freed: skip them before touching it. */
+        /* Bodies destroyed since the step are still listed: skip them. */
         if (!b2Body_IsValid(e->bodyId))
             continue;
-        /* The user data of every live body is its live handle. */
-        handle = e->userData;
+        /* The event's userData was recorded at the step and may be stale
+         * (e.g. after World.restore); the body's current user data is its
+         * live handle. */
+        handle = b2Body_GetUserData(e->bodyId);
         body = handle ? JS_DupValue(ctx, handle->object) : b2js_wrap_body(ctx, world, e->bodyId);
         item = JS_IsException(body) ? JS_EXCEPTION : JS_NewObject(ctx);
 

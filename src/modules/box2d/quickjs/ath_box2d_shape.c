@@ -321,6 +321,142 @@ static JSValue shape_get_sensor_overlaps(JSContext *ctx, JSValueConst this_val, 
 }
 
 /* ------------------------------------------------------------------------ */
+/* Geometry changes, material, mass, ray cast, wind                         */
+/* ------------------------------------------------------------------------ */
+
+enum {
+    GEOMETRY_CIRCLE = 0,
+    GEOMETRY_BOX,
+    GEOMETRY_POLYGON,
+    GEOMETRY_CAPSULE,
+    GEOMETRY_SEGMENT,
+};
+
+/*
+ * Shape.setCircle/setBox/setPolygon/setCapsule/setSegment(options): replaces
+ * the geometry (the shape type may change), with the options of the matching
+ * create*Shape. The body mass is kept: call body.applyMassFromShapes().
+ */
+static JSValue shape_set_geometry(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    static const char *const names[] = {
+        [GEOMETRY_CIRCLE] = "Shape.setCircle",
+        [GEOMETRY_BOX] = "Shape.setBox",
+        [GEOMETRY_POLYGON] = "Shape.setPolygon",
+        [GEOMETRY_CAPSULE] = "Shape.setCapsule",
+        [GEOMETRY_SEGMENT] = "Shape.setSegment",
+    };
+    const char *where = names[magic];
+    SHAPE_THIS(where, 1, 1);
+    union {
+        b2Circle circle;
+        b2Polygon polygon;
+        b2Capsule capsule;
+        b2Segment segment;
+    } geometry;
+    int ret;
+
+    if (!JS_IsObject(argv[0]) || JS_IsFunction(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx, "%s: expected an options object", where);
+    /* Box2D keeps a chain's segments in the chain: changing one would corrupt it. */
+    if (b2Shape_GetType(id) == b2_chainSegmentShape)
+        return JS_ThrowTypeError(ctx, "%s: chain segments keep their geometry; recreate the Chain", where);
+
+    switch (magic) {
+        case GEOMETRY_CIRCLE: ret = b2js_circle(ctx, argv[0], where, &geometry.circle); break;
+        case GEOMETRY_BOX: ret = b2js_box(ctx, argv[0], where, &geometry.polygon); break;
+        case GEOMETRY_POLYGON: ret = b2js_polygon(ctx, argv[0], where, &geometry.polygon); break;
+        case GEOMETRY_CAPSULE: ret = b2js_capsule(ctx, argv[0], where, &geometry.capsule); break;
+        default: ret = b2js_segment(ctx, argv[0], where, &geometry.segment); break;
+    }
+    if (ret < 0 || b2js_still_alive(ctx, handle, where) < 0)
+        return JS_EXCEPTION;
+
+    switch (magic) {
+        case GEOMETRY_CIRCLE: b2Shape_SetCircle(id, &geometry.circle); break;
+        case GEOMETRY_BOX:
+        case GEOMETRY_POLYGON: b2Shape_SetPolygon(id, &geometry.polygon); break;
+        case GEOMETRY_CAPSULE: b2Shape_SetCapsule(id, &geometry.capsule); break;
+        default: b2Shape_SetSegment(id, &geometry.segment); break;
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue shape_get_surface_material(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    SHAPE_THIS("Shape.getSurfaceMaterial", 0, 0);
+
+    return b2js_new_material(ctx, b2Shape_GetSurfaceMaterial(id));
+}
+
+/* Shape.setSurfaceMaterial(material): fields left out keep their value. */
+static JSValue shape_set_surface_material(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Shape.setSurfaceMaterial";
+    SHAPE_THIS(where, 1, 1);
+    b2SurfaceMaterial material = b2Shape_GetSurfaceMaterial(id);
+
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "%s: expected { friction?, restitution?, rollingResistance?, "
+            "tangentSpeed?, userMaterialId?, customColor? }", where);
+    if (b2js_material(ctx, argv[0], where, &material) < 0 || b2js_still_alive(ctx, handle, where) < 0)
+        return JS_EXCEPTION;
+    b2Shape_SetSurfaceMaterial(id, &material);
+    return JS_UNDEFINED;
+}
+
+/* Shape.computeMassData(): mass of this shape alone, from its density. */
+static JSValue shape_compute_mass_data(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    SHAPE_THIS("Shape.computeMassData", 0, 0);
+
+    return b2js_new_mass_data(ctx, b2Shape_ComputeMassData(id));
+}
+
+/* Shape.rayCast(originX, originY, translationX, translationY): this shape only; null when missed. */
+static JSValue shape_ray_cast(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Shape.rayCast";
+    static const char *const names[] = { "originX", "originY", "translationX", "translationY" };
+    SHAPE_THIS(where, 4, 4);
+    b2WorldCastOutput output;
+    JSValue object;
+    float v[4];
+
+    for (int i = 0; i < 4; i++) {
+        if (b2js_float(ctx, argv[i], where, names[i], B2JS_COORD, &v[i]) < 0)
+            return JS_EXCEPTION;
+    }
+    output = b2Shape_RayCast(id, (b2Pos){ v[0], v[1] }, (b2Vec2){ v[2], v[3] });
+    if (!output.hit)
+        return JS_NULL;
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    b2js_set(ctx, object, b2js_atoms.shape, JS_DupValue(ctx, this_val));
+    b2js_set(ctx, object, b2js_atoms.point, b2js_new_vec2(ctx, output.point));
+    b2js_set(ctx, object, b2js_atoms.normal, b2js_new_vec2(ctx, output.normal));
+    b2js_set(ctx, object, b2js_atoms.fraction, JS_NewFloat32(ctx, output.fraction));
+    return object;
+}
+
+/*
+ * Shape.applyWind(windX, windY, drag, lift, wake = true): air force on a
+ * circle, capsule or polygon of a dynamic body (other shapes are ignored).
+ */
+static JSValue shape_apply_wind(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Shape.applyWind";
+    SHAPE_THIS(where, 4, 5);
+    b2Vec2 wind;
+    float drag, lift;
+    bool wake = true;
+
+    if (b2js_float(ctx, argv[0], where, "windX", B2JS_COORD, &wind.x) < 0 ||
+        b2js_float(ctx, argv[1], where, "windY", B2JS_COORD, &wind.y) < 0 ||
+        b2js_float(ctx, argv[2], where, "drag", B2JS_NONNEG, &drag) < 0 ||
+        b2js_float(ctx, argv[3], where, "lift", B2JS_ANY, &lift) < 0 ||
+        (b2js_has(argc, argv, 4) && b2js_bool(ctx, argv[4], where, "wake", &wake) < 0))
+        return JS_EXCEPTION;
+    b2Shape_ApplyWind(id, wind, drag, lift, wake);
+    return JS_UNDEFINED;
+}
+
+/* ------------------------------------------------------------------------ */
 /* Shape lifetime and user data                                              */
 /* ------------------------------------------------------------------------ */
 
@@ -404,6 +540,16 @@ static const JSCFunctionListEntry shape_proto_funcs[] = {
     JS_CFUNC_DEF("getChainSegment", 0, shape_get_chain_segment),
     JS_CFUNC_DEF("getContacts", 0, shape_get_contacts),
     JS_CFUNC_DEF("getSensorOverlaps", 0, shape_get_sensor_overlaps),
+    JS_CFUNC_MAGIC_DEF("setCircle", 1, shape_set_geometry, GEOMETRY_CIRCLE),
+    JS_CFUNC_MAGIC_DEF("setBox", 1, shape_set_geometry, GEOMETRY_BOX),
+    JS_CFUNC_MAGIC_DEF("setPolygon", 1, shape_set_geometry, GEOMETRY_POLYGON),
+    JS_CFUNC_MAGIC_DEF("setCapsule", 1, shape_set_geometry, GEOMETRY_CAPSULE),
+    JS_CFUNC_MAGIC_DEF("setSegment", 1, shape_set_geometry, GEOMETRY_SEGMENT),
+    JS_CFUNC_DEF("getSurfaceMaterial", 0, shape_get_surface_material),
+    JS_CFUNC_DEF("setSurfaceMaterial", 1, shape_set_surface_material),
+    JS_CFUNC_DEF("computeMassData", 0, shape_compute_mass_data),
+    JS_CFUNC_DEF("rayCast", 4, shape_ray_cast),
+    JS_CFUNC_DEF("applyWind", 5, shape_apply_wind),
 };
 
 /* ------------------------------------------------------------------------ */

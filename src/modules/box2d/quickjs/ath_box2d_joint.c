@@ -37,7 +37,10 @@ static B2JSWorld *joint_begin(JSContext *ctx, JSValueConst this_val, int argc, J
     if (*has_options < 0 ||
         (*has_options && (b2js_opt_bool(ctx, argv[2], "collideConnected", where, &base->collideConnected) < 0 ||
             b2js_opt_float(ctx, argv[2], "forceThreshold", where, B2JS_NONNEG, &base->forceThreshold) < 0 ||
-            b2js_opt_float(ctx, argv[2], "torqueThreshold", where, B2JS_NONNEG, &base->torqueThreshold) < 0)))
+            b2js_opt_float(ctx, argv[2], "torqueThreshold", where, B2JS_NONNEG, &base->torqueThreshold) < 0 ||
+            b2js_opt_float(ctx, argv[2], "constraintHertz", where, B2JS_NONNEG, &base->constraintHertz) < 0 ||
+            b2js_opt_float(ctx, argv[2], "constraintDampingRatio", where, B2JS_NONNEG,
+                &base->constraintDampingRatio) < 0)))
         return NULL;
     return world;
 }
@@ -157,8 +160,13 @@ static JSValue world_create_distance_joint(JSContext *ctx, JSValueConst this_val
             b2js_opt_float(ctx, options, "maxLength", where, B2JS_NONNEG, &def.maxLength) < 0 ||
             b2js_opt_bool(ctx, options, "enableMotor", where, &def.enableMotor) < 0 ||
             b2js_opt_float(ctx, options, "maxMotorForce", where, B2JS_NONNEG, &def.maxMotorForce) < 0 ||
-            b2js_opt_float(ctx, options, "motorSpeed", where, B2JS_ANY, &def.motorSpeed) < 0)
+            b2js_opt_float(ctx, options, "motorSpeed", where, B2JS_ANY, &def.motorSpeed) < 0 ||
+            b2js_opt_float(ctx, options, "lowerSpringForce", where, B2JS_ANY, &def.lowerSpringForce) < 0 ||
+            b2js_opt_float(ctx, options, "upperSpringForce", where, B2JS_ANY, &def.upperSpringForce) < 0)
             return JS_EXCEPTION;
+        /* Asserted by Box2D. */
+        if (def.lowerSpringForce > def.upperSpringForce)
+            return JS_ThrowRangeError(ctx, "%s: lowerSpringForce must be <= upperSpringForce", where);
     }
     if (!has_length) {
         if (joint_bodies_alive(ctx, world, &def.base, where) < 0)
@@ -187,7 +195,8 @@ static JSValue world_create_revolute_joint(JSContext *ctx, JSValueConst this_val
             b2js_opt_float(ctx, options, "upperAngle", where, B2JS_ANY, &def.upperAngle) < 0 ||
             b2js_opt_bool(ctx, options, "enableMotor", where, &def.enableMotor) < 0 ||
             b2js_opt_float(ctx, options, "motorSpeed", where, B2JS_ANY, &def.motorSpeed) < 0 ||
-            b2js_opt_float(ctx, options, "maxMotorTorque", where, B2JS_NONNEG, &def.maxMotorTorque) < 0)
+            b2js_opt_float(ctx, options, "maxMotorTorque", where, B2JS_NONNEG, &def.maxMotorTorque) < 0 ||
+            b2js_opt_float(ctx, options, "targetAngle", where, B2JS_ANY, &def.targetAngle) < 0)
             return JS_EXCEPTION;
     }
     /* Checked by Box2D even with the limit disabled. */
@@ -212,7 +221,8 @@ static JSValue world_create_prismatic_joint(JSContext *ctx, JSValueConst this_va
                 &def.upperTranslation) < 0 ||
             b2js_opt_bool(ctx, options, "enableMotor", where, &def.enableMotor) < 0 ||
             b2js_opt_float(ctx, options, "motorSpeed", where, B2JS_ANY, &def.motorSpeed) < 0 ||
-            b2js_opt_float(ctx, options, "maxMotorForce", where, B2JS_NONNEG, &def.maxMotorForce) < 0)
+            b2js_opt_float(ctx, options, "maxMotorForce", where, B2JS_NONNEG, &def.maxMotorForce) < 0 ||
+            b2js_opt_float(ctx, options, "targetTranslation", where, B2JS_COORD, &def.targetTranslation) < 0)
             return JS_EXCEPTION;
     }
     JOINT_RESULT(b2CreatePrismaticJoint(world->id, &def));
@@ -365,6 +375,9 @@ static const struct {
     [ATHENA_BOX2D_ANGLE] = { "Joint.getAngle", NULL, false, B2JS_ANY, "revolute" },
     [ATHENA_BOX2D_TRANSLATION] = { "Joint.getTranslation", NULL, false, B2JS_ANY, "prismatic" },
     [ATHENA_BOX2D_SPEED] = { "Joint.getSpeed", NULL, false, B2JS_ANY, "prismatic" },
+    [ATHENA_BOX2D_TARGET_ANGLE] = { "Joint.getTargetAngle", "Joint.setTargetAngle", false, B2JS_ANY, "revolute" },
+    [ATHENA_BOX2D_TARGET_TRANSLATION] = { "Joint.getTargetTranslation", "Joint.setTargetTranslation",
+        false, B2JS_COORD, "prismatic" },
 };
 
 static JSValue joint_not_applicable(JSContext *ctx, b2JointId id, const char *where, const char *types) {
@@ -556,6 +569,119 @@ static JSValue joint_get_constraint_torque(JSContext *ctx, JSValueConst this_val
     return JS_NewFloat32(ctx, b2Joint_GetConstraintTorque(id));
 }
 
+/* Joint.getSpringForceRange() -> { lower, upper } (distance). */
+static JSValue joint_get_spring_force_range(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Joint.getSpringForceRange";
+    JOINT_THIS(where, 0, 0);
+    float lower, upper;
+    JSValue object;
+
+    if (b2Joint_GetType(id) != b2_distanceJoint)
+        return joint_not_applicable(ctx, id, where, "distance");
+    b2DistanceJoint_GetSpringForceRange(id, &lower, &upper);
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "lower", JS_NewFloat32(ctx, lower));
+    JS_SetPropertyStr(ctx, object, "upper", JS_NewFloat32(ctx, upper));
+    return object;
+}
+
+/* Joint.setSpringForceRange(lower, upper): force the spring may apply (distance; lower <= upper). */
+static JSValue joint_set_spring_force_range(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Joint.setSpringForceRange";
+    JOINT_THIS(where, 2, 2);
+    float lower, upper;
+
+    if (b2Joint_GetType(id) != b2_distanceJoint)
+        return joint_not_applicable(ctx, id, where, "distance");
+    if (b2js_float(ctx, argv[0], where, "lower", B2JS_ANY, &lower) < 0 ||
+        b2js_float(ctx, argv[1], where, "upper", B2JS_ANY, &upper) < 0)
+        return JS_EXCEPTION;
+    if (lower > upper)
+        return JS_ThrowRangeError(ctx, "%s: lower must be <= upper", where);
+    b2DistanceJoint_SetSpringForceRange(id, lower, upper);
+    return JS_UNDEFINED;
+}
+
+enum {
+    JOINT_FRAME_A = 0,
+    JOINT_FRAME_B,
+};
+
+/* Joint.getLocalFrameA/B() -> { x, y, angle }: the joint frame in the body's local space. */
+static JSValue joint_get_local_frame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    JOINT_THIS(magic == JOINT_FRAME_A ? "Joint.getLocalFrameA" : "Joint.getLocalFrameB", 0, 0);
+    b2Transform frame = magic == JOINT_FRAME_A ? b2Joint_GetLocalFrameA(id) : b2Joint_GetLocalFrameB(id);
+    JSValue object = JS_NewObject(ctx);
+
+    if (JS_IsException(object))
+        return object;
+    b2js_set(ctx, object, b2js_atoms.x, JS_NewFloat32(ctx, frame.p.x));
+    b2js_set(ctx, object, b2js_atoms.y, JS_NewFloat32(ctx, frame.p.y));
+    b2js_set(ctx, object, b2js_atoms.angle, JS_NewFloat32(ctx, b2Rot_GetAngle(frame.q)));
+    return object;
+}
+
+/* Joint.setLocalFrameA/B(x, y, angle): moves the joint anchor/axis on one body (local space). */
+static JSValue joint_set_local_frame(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    const char *where = magic == JOINT_FRAME_A ? "Joint.setLocalFrameA" : "Joint.setLocalFrameB";
+    JOINT_THIS(where, 3, 3);
+    b2Transform frame;
+    float angle;
+
+    if (b2js_float(ctx, argv[0], where, "x", B2JS_COORD, &frame.p.x) < 0 ||
+        b2js_float(ctx, argv[1], where, "y", B2JS_COORD, &frame.p.y) < 0 ||
+        b2js_float(ctx, argv[2], where, "angle", B2JS_ANY, &angle) < 0)
+        return JS_EXCEPTION;
+    frame.q = athena_box2d_make_rot(angle);
+    if (magic == JOINT_FRAME_A)
+        b2Joint_SetLocalFrameA(id, frame);
+    else
+        b2Joint_SetLocalFrameB(id, frame);
+    return JS_UNDEFINED;
+}
+
+enum {
+    JOINT_LINEAR_SEPARATION = 0,
+    JOINT_ANGULAR_SEPARATION,
+};
+
+/* Constraint error (meters / radians): how far the solver is from satisfying the joint. */
+static JSValue joint_get_separation(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    JOINT_THIS(magic == JOINT_LINEAR_SEPARATION ? "Joint.getLinearSeparation" : "Joint.getAngularSeparation", 0, 0);
+
+    return JS_NewFloat32(ctx, magic == JOINT_LINEAR_SEPARATION ?
+        b2Joint_GetLinearSeparation(id) : b2Joint_GetAngularSeparation(id));
+}
+
+static JSValue joint_get_constraint_tuning(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JOINT_THIS("Joint.getConstraintTuning", 0, 0);
+    float hertz, damping;
+    JSValue object;
+
+    b2Joint_GetConstraintTuning(id, &hertz, &damping);
+    object = JS_NewObject(ctx);
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "hertz", JS_NewFloat32(ctx, hertz));
+    JS_SetPropertyStr(ctx, object, "dampingRatio", JS_NewFloat32(ctx, damping));
+    return object;
+}
+
+/* Joint.setConstraintTuning(hertz, dampingRatio): stiffness of the joint constraint (advanced). */
+static JSValue joint_set_constraint_tuning(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Joint.setConstraintTuning";
+    JOINT_THIS(where, 2, 2);
+    float hertz, damping;
+
+    if (b2js_float(ctx, argv[0], where, "hertz", B2JS_NONNEG, &hertz) < 0 ||
+        b2js_float(ctx, argv[1], where, "dampingRatio", B2JS_NONNEG, &damping) < 0)
+        return JS_EXCEPTION;
+    b2Joint_SetConstraintTuning(id, hertz, damping);
+    return JS_UNDEFINED;
+}
+
 static JSValue joint_destroy(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     static const char where[] = "Joint.destroy";
     B2JSHandle *handle = b2js_handle_any(this_val, B2JS_JOINT);
@@ -651,6 +777,20 @@ static const JSCFunctionListEntry joint_proto_funcs[] = {
     PARAM_GET("getMaxSpringForce", ATHENA_BOX2D_MAX_SPRING_FORCE),
     PARAM_SET("setMaxSpringTorque", ATHENA_BOX2D_MAX_SPRING_TORQUE),
     PARAM_GET("getMaxSpringTorque", ATHENA_BOX2D_MAX_SPRING_TORQUE),
+    PARAM_SET("setTargetAngle", ATHENA_BOX2D_TARGET_ANGLE),
+    PARAM_GET("getTargetAngle", ATHENA_BOX2D_TARGET_ANGLE),
+    PARAM_SET("setTargetTranslation", ATHENA_BOX2D_TARGET_TRANSLATION),
+    PARAM_GET("getTargetTranslation", ATHENA_BOX2D_TARGET_TRANSLATION),
+    JS_CFUNC_DEF("setSpringForceRange", 2, joint_set_spring_force_range),
+    JS_CFUNC_DEF("getSpringForceRange", 0, joint_get_spring_force_range),
+    JS_CFUNC_MAGIC_DEF("getLocalFrameA", 0, joint_get_local_frame, JOINT_FRAME_A),
+    JS_CFUNC_MAGIC_DEF("getLocalFrameB", 0, joint_get_local_frame, JOINT_FRAME_B),
+    JS_CFUNC_MAGIC_DEF("setLocalFrameA", 3, joint_set_local_frame, JOINT_FRAME_A),
+    JS_CFUNC_MAGIC_DEF("setLocalFrameB", 3, joint_set_local_frame, JOINT_FRAME_B),
+    JS_CFUNC_MAGIC_DEF("getLinearSeparation", 0, joint_get_separation, JOINT_LINEAR_SEPARATION),
+    JS_CFUNC_MAGIC_DEF("getAngularSeparation", 0, joint_get_separation, JOINT_ANGULAR_SEPARATION),
+    JS_CFUNC_DEF("getConstraintTuning", 0, joint_get_constraint_tuning),
+    JS_CFUNC_DEF("setConstraintTuning", 2, joint_set_constraint_tuning),
 };
 
 int b2js_joint_init(JSContext *ctx) {

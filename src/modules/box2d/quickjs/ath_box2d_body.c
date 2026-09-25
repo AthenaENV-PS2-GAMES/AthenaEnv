@@ -26,6 +26,12 @@ enum {
     BODY_ENABLED,
     BODY_FIXED_ROTATION,
     BODY_BULLET,
+    BODY_ROTATIONAL_INERTIA,
+    BODY_SLEEP_ENABLED,
+    BODY_SLEEP_THRESHOLD,
+    BODY_CONTACT_RECYCLING,
+    BODY_CONTACT_EVENTS,
+    BODY_HIT_EVENTS,
 };
 
 static const struct {
@@ -44,6 +50,13 @@ static const struct {
     [BODY_ENABLED] = { "Body.isEnabled", "Body.setEnabled", B2JS_ANY },
     [BODY_FIXED_ROTATION] = { "Body.isFixedRotation", "Body.setFixedRotation", B2JS_ANY },
     [BODY_BULLET] = { "Body.isBullet", "Body.setBullet", B2JS_ANY },
+    [BODY_ROTATIONAL_INERTIA] = { "Body.getRotationalInertia", NULL, B2JS_ANY },
+    [BODY_SLEEP_ENABLED] = { "Body.isSleepEnabled", "Body.enableSleep", B2JS_ANY },
+    [BODY_SLEEP_THRESHOLD] = { "Body.getSleepThreshold", "Body.setSleepThreshold", B2JS_NONNEG },
+    [BODY_CONTACT_RECYCLING] = { "Body.isContactRecyclingEnabled", "Body.enableContactRecycling", B2JS_ANY },
+    /* Box2D has no getters for these two: they set the flag on every shape of the body. */
+    [BODY_CONTACT_EVENTS] = { NULL, "Body.enableContactEvents", B2JS_ANY },
+    [BODY_HIT_EVENTS] = { NULL, "Body.enableHitEvents", B2JS_ANY },
 };
 
 static JSValue body_get(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
@@ -61,6 +74,10 @@ static JSValue body_get(JSContext *ctx, JSValueConst this_val, int argc, JSValue
         case BODY_ENABLED: return JS_NewBool(ctx, b2Body_IsEnabled(id));
         case BODY_FIXED_ROTATION: return JS_NewBool(ctx, b2Body_GetMotionLocks(id).angularZ);
         case BODY_BULLET: return JS_NewBool(ctx, b2Body_IsBullet(id));
+        case BODY_ROTATIONAL_INERTIA: return JS_NewFloat32(ctx, b2Body_GetRotationalInertia(id));
+        case BODY_SLEEP_ENABLED: return JS_NewBool(ctx, b2Body_IsSleepEnabled(id));
+        case BODY_SLEEP_THRESHOLD: return JS_NewFloat32(ctx, b2Body_GetSleepThreshold(id));
+        case BODY_CONTACT_RECYCLING: return JS_NewBool(ctx, b2Body_IsContactRecyclingEnabled(id));
         default: return JS_UNDEFINED;
     }
 }
@@ -82,21 +99,33 @@ static JSValue body_set(JSContext *ctx, JSValueConst this_val, int argc, JSValue
     case BODY_ENABLED:
     case BODY_FIXED_ROTATION:
     case BODY_BULLET:
+    case BODY_SLEEP_ENABLED:
+    case BODY_CONTACT_RECYCLING:
+    case BODY_CONTACT_EVENTS:
+    case BODY_HIT_EVENTS:
         if (b2js_bool(ctx, argv[0], where, "flag", &flag) < 0)
             return JS_EXCEPTION;
-        if (magic == BODY_AWAKE) {
+        switch (magic) {
+        case BODY_AWAKE:
             b2Body_SetAwake(id, flag);
-        } else if (magic == BODY_ENABLED) {
+            break;
+        case BODY_ENABLED:
             if (flag)
                 b2Body_Enable(id);
             else
                 b2Body_Disable(id);
-        } else if (magic == BODY_FIXED_ROTATION) {
+            break;
+        case BODY_FIXED_ROTATION: {
             b2MotionLocks locks = b2Body_GetMotionLocks(id);
             locks.angularZ = flag;
             b2Body_SetMotionLocks(id, locks);
-        } else {
-            b2Body_SetBullet(id, flag);
+            break;
+        }
+        case BODY_BULLET: b2Body_SetBullet(id, flag); break;
+        case BODY_SLEEP_ENABLED: b2Body_EnableSleep(id, flag); break;
+        case BODY_CONTACT_RECYCLING: b2Body_EnableContactRecycling(id, flag); break;
+        case BODY_CONTACT_EVENTS: b2Body_EnableContactEvents(id, flag); break;
+        default: b2Body_EnableHitEvents(id, flag); break;
         }
         return JS_UNDEFINED;
     default:
@@ -107,6 +136,7 @@ static JSValue body_set(JSContext *ctx, JSValueConst this_val, int argc, JSValue
             case BODY_LINEAR_DAMPING: b2Body_SetLinearDamping(id, value); break;
             case BODY_ANGULAR_DAMPING: b2Body_SetAngularDamping(id, value); break;
             case BODY_GRAVITY_SCALE: b2Body_SetGravityScale(id, value); break;
+            case BODY_SLEEP_THRESHOLD: b2Body_SetSleepThreshold(id, value); break;
         }
         return JS_UNDEFINED;
     }
@@ -120,16 +150,20 @@ enum {
     BODY_POSITION = 0,
     BODY_LINEAR_VELOCITY,
     BODY_WORLD_CENTER,
+    BODY_LOCAL_CENTER,
 };
 
 static JSValue body_get_vec2(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
-    static const char *const names[] = { "Body.getPosition", "Body.getLinearVelocity", "Body.getWorldCenter" };
+    static const char *const names[] = {
+        "Body.getPosition", "Body.getLinearVelocity", "Body.getWorldCenter", "Body.getLocalCenter",
+    };
     BODY_THIS(names[magic], 0, 0);
 
     switch (magic) {
         case BODY_POSITION: return b2js_new_vec2(ctx, b2Body_GetPosition(id));
         case BODY_LINEAR_VELOCITY: return b2js_new_vec2(ctx, b2Body_GetLinearVelocity(id));
-        default: return b2js_new_vec2(ctx, b2Body_GetWorldCenter(id));
+        case BODY_WORLD_CENTER: return b2js_new_vec2(ctx, b2Body_GetWorldCenter(id));
+        default: return b2js_new_vec2(ctx, b2Body_GetLocalCenter(id));
     }
 }
 
@@ -208,19 +242,37 @@ static JSValue body_set_linear_velocity(JSContext *ctx, JSValueConst this_val, i
 enum {
     BODY_WORLD_POINT = 0,
     BODY_LOCAL_POINT,
+    BODY_WORLD_VECTOR,
+    BODY_LOCAL_VECTOR,
+    BODY_WORLD_POINT_VELOCITY,
+    BODY_LOCAL_POINT_VELOCITY,
 };
 
+/* (x, y) -> { x, y }: point and vector conversions, velocity of a point. */
 static JSValue body_transform_point(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
     int magic) {
-    const char *where = magic == BODY_WORLD_POINT ? "Body.getWorldPoint" : "Body.getLocalPoint";
+    static const char *const names[] = {
+        [BODY_WORLD_POINT] = "Body.getWorldPoint",
+        [BODY_LOCAL_POINT] = "Body.getLocalPoint",
+        [BODY_WORLD_VECTOR] = "Body.getWorldVector",
+        [BODY_LOCAL_VECTOR] = "Body.getLocalVector",
+        [BODY_WORLD_POINT_VELOCITY] = "Body.getWorldPointVelocity",
+        [BODY_LOCAL_POINT_VELOCITY] = "Body.getLocalPointVelocity",
+    };
+    const char *where = names[magic];
     BODY_THIS(where, 2, 2);
-    b2Vec2 point;
+    b2Vec2 v;
 
-    if (xy_args(ctx, argv, 0, where, "x", "y", &point) < 0)
+    if (xy_args(ctx, argv, 0, where, "x", "y", &v) < 0)
         return JS_EXCEPTION;
-    if (magic == BODY_WORLD_POINT)
-        return b2js_new_vec2(ctx, b2Body_GetWorldPoint(id, point));
-    return b2js_new_vec2(ctx, b2Body_GetLocalPoint(id, point));
+    switch (magic) {
+        case BODY_WORLD_POINT: return b2js_new_vec2(ctx, b2Body_GetWorldPoint(id, v));
+        case BODY_LOCAL_POINT: return b2js_new_vec2(ctx, b2Body_GetLocalPoint(id, v));
+        case BODY_WORLD_VECTOR: return b2js_new_vec2(ctx, b2Body_GetWorldVector(id, v));
+        case BODY_LOCAL_VECTOR: return b2js_new_vec2(ctx, b2Body_GetLocalVector(id, v));
+        case BODY_WORLD_POINT_VELOCITY: return b2js_new_vec2(ctx, b2Body_GetWorldPointVelocity(id, v));
+        default: return b2js_new_vec2(ctx, b2Body_GetLocalPointVelocity(id, v));
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -291,6 +343,78 @@ static JSValue body_compute_aabb(JSContext *ctx, JSValueConst this_val, int argc
     return b2js_new_aabb(ctx, b2Body_ComputeAABB(id));
 }
 
+JSValue b2js_new_mass_data(JSContext *ctx, b2MassData data) {
+    JSValue object = JS_NewObject(ctx);
+
+    if (JS_IsException(object))
+        return object;
+    JS_SetPropertyStr(ctx, object, "mass", JS_NewFloat32(ctx, data.mass));
+    JS_SetPropertyStr(ctx, object, "center", b2js_new_vec2(ctx, data.center));
+    JS_SetPropertyStr(ctx, object, "rotationalInertia", JS_NewFloat32(ctx, data.rotationalInertia));
+    return object;
+}
+
+static JSValue body_get_mass_data(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    BODY_THIS("Body.getMassData", 0, 0);
+
+    return b2js_new_mass_data(ctx, b2Body_GetMassData(id));
+}
+
+/*
+ * Body.setMassData({ mass?, center?, rotationalInertia? }): overrides the mass
+ * computed from the shapes (fields left out keep their value) until the
+ * shapes change or applyMassFromShapes() is called. center is local, the
+ * inertia is about the center of mass.
+ */
+static JSValue body_set_mass_data(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Body.setMassData";
+    BODY_THIS(where, 1, 1);
+    b2MassData data = b2Body_GetMassData(id);
+
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "%s: expected { mass?, center?, rotationalInertia? }", where);
+    if (b2js_opt_float(ctx, argv[0], "mass", where, B2JS_NONNEG, &data.mass) < 0 ||
+        b2js_opt_vec2(ctx, argv[0], "center", where, &data.center) < 0 ||
+        b2js_opt_float(ctx, argv[0], "rotationalInertia", where, B2JS_NONNEG, &data.rotationalInertia) < 0 ||
+        b2js_still_alive(ctx, handle, where) < 0)
+        return JS_EXCEPTION;
+    b2Body_SetMassData(id, data);
+    return JS_UNDEFINED;
+}
+
+enum {
+    BODY_CLEAR_FORCES = 0,
+    BODY_WAKE_TOUCHING,
+};
+
+static JSValue body_action(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
+    BODY_THIS(magic == BODY_CLEAR_FORCES ? "Body.clearForces" : "Body.wakeTouching", 0, 0);
+
+    if (magic == BODY_CLEAR_FORCES)
+        b2Body_ClearForces(id);
+    else
+        b2Body_WakeTouching(id);
+    return JS_UNDEFINED;
+}
+
+static JSValue body_get_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    BODY_THIS("Body.getName", 0, 0);
+    const char *name = b2Body_GetName(id);
+
+    return JS_NewString(ctx, name ? name : "");
+}
+
+static JSValue body_set_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    static const char where[] = "Body.setName";
+    BODY_THIS(where, 1, 1);
+    char name[B2_NAME_LENGTH + 1];
+
+    if (b2js_name(ctx, argv[0], where, name) < 0)
+        return JS_EXCEPTION;
+    b2Body_SetName(id, name);
+    return JS_UNDEFINED;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Shapes and chains                                                         */
 /* ------------------------------------------------------------------------ */
@@ -352,15 +476,92 @@ static int required_vec2(JSContext *ctx, JSValueConst options, const char *key, 
     return ret > 0 ? 0 : -1;
 }
 
+/* ------------------------------------------------------------------------ */
+/* Geometry from options, shared by create*Shape and Shape.set*              */
+/* ------------------------------------------------------------------------ */
+
+int b2js_circle(JSContext *ctx, JSValueConst options, const char *where, b2Circle *circle) {
+    circle->center = b2Vec2_zero;
+    if (required_float(ctx, options, "radius", where, B2JS_POS, &circle->radius) < 0 ||
+        b2js_opt_vec2(ctx, options, "center", where, &circle->center) < 0)
+        return -1;
+    return 0;
+}
+
+int b2js_box(JSContext *ctx, JSValueConst options, const char *where, b2Polygon *box) {
+    b2Vec2 center = b2Vec2_zero;
+    float hw, hh, angle = 0.0f;
+
+    if (required_float(ctx, options, "halfWidth", where, B2JS_POS, &hw) < 0 ||
+        required_float(ctx, options, "halfHeight", where, B2JS_POS, &hh) < 0 ||
+        b2js_opt_vec2(ctx, options, "center", where, &center) < 0 ||
+        b2js_opt_float(ctx, options, "angle", where, B2JS_ANY, &angle) < 0)
+        return -1;
+    if (!athena_box2d_make_box(hw, hh, center, angle, box)) {
+        JS_ThrowRangeError(ctx, "%s: the box is too small (halfWidth * halfHeight must exceed %g)",
+            where, (double)FLT_EPSILON);
+        return -1;
+    }
+    return 0;
+}
+
+int b2js_polygon(JSContext *ctx, JSValueConst options, const char *where, b2Polygon *polygon) {
+    b2Vec2 points[B2_MAX_POLYGON_VERTICES];
+    float radius = 0.0f;
+    JSValue vertices;
+    int count, ret;
+
+    if (b2js_opt_float(ctx, options, "radius", where, B2JS_NONNEG, &radius) < 0)
+        return -1;
+    vertices = JS_GetPropertyStr(ctx, options, "vertices");
+    if (JS_IsException(vertices))
+        return -1;
+    ret = b2js_points(ctx, vertices, where, "vertices", 3, B2_MAX_POLYGON_VERTICES, points, &count);
+    JS_FreeValue(ctx, vertices);
+    if (ret < 0)
+        return -1;
+    if (!athena_box2d_make_polygon(points, count, radius, polygon)) {
+        JS_ThrowRangeError(ctx, "%s: the vertices do not form a convex polygon "
+            "(collinear, or points closer than %g)", where, (double)athena_box2d_linear_slop());
+        return -1;
+    }
+    return 0;
+}
+
+int b2js_capsule(JSContext *ctx, JSValueConst options, const char *where, b2Capsule *capsule) {
+    if (required_vec2(ctx, options, "point1", where, &capsule->center1) < 0 ||
+        required_vec2(ctx, options, "point2", where, &capsule->center2) < 0 ||
+        required_float(ctx, options, "radius", where, B2JS_POS, &capsule->radius) < 0)
+        return -1;
+    /* Box2D ignores (or refuses to create) a capsule shorter than the linear slop. */
+    if (!athena_box2d_segment_valid(capsule->center1, capsule->center2)) {
+        JS_ThrowRangeError(ctx, "%s: point1 and point2 must be more than %g apart (use a circle)",
+            where, (double)athena_box2d_linear_slop());
+        return -1;
+    }
+    return 0;
+}
+
+int b2js_segment(JSContext *ctx, JSValueConst options, const char *where, b2Segment *segment) {
+    if (required_vec2(ctx, options, "point1", where, &segment->point1) < 0 ||
+        required_vec2(ctx, options, "point2", where, &segment->point2) < 0)
+        return -1;
+    if (!athena_box2d_segment_valid(segment->point1, segment->point2)) {
+        JS_ThrowRangeError(ctx, "%s: point1 and point2 must be more than %g apart",
+            where, (double)athena_box2d_linear_slop());
+        return -1;
+    }
+    return 0;
+}
+
 static JSValue body_create_circle(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     static const char where[] = "Body.createCircleShape";
     B2JSHandle *handle = b2js_handle(ctx, this_val, B2JS_BODY, where);
-    b2Circle circle = { { 0.0f, 0.0f }, 0.0f };
+    b2Circle circle;
     b2ShapeDef def;
 
     if (!handle || shape_options(ctx, argc, argv, where, "{ radius, center?, ... }", &def) < 0 ||
-        required_float(ctx, argv[0], "radius", where, B2JS_POS, &circle.radius) < 0 ||
-        b2js_opt_vec2(ctx, argv[0], "center", where, &circle.center) < 0)
+        b2js_circle(ctx, argv[0], where, &circle) < 0)
         return JS_EXCEPTION;
     SHAPE_RESULT(b2CreateCircleShape(handle->id.body, &def, &circle));
 }
@@ -368,47 +569,24 @@ static JSValue body_create_circle(JSContext *ctx, JSValueConst this_val, int arg
 static JSValue body_create_box(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     static const char where[] = "Body.createBoxShape";
     B2JSHandle *handle = b2js_handle(ctx, this_val, B2JS_BODY, where);
-    b2Vec2 center = b2Vec2_zero;
-    float hw, hh, angle = 0.0f;
     b2Polygon box;
     b2ShapeDef def;
 
     if (!handle || shape_options(ctx, argc, argv, where, "{ halfWidth, halfHeight, center?, angle?, ... }", &def) < 0 ||
-        required_float(ctx, argv[0], "halfWidth", where, B2JS_POS, &hw) < 0 ||
-        required_float(ctx, argv[0], "halfHeight", where, B2JS_POS, &hh) < 0 ||
-        b2js_opt_vec2(ctx, argv[0], "center", where, &center) < 0 ||
-        b2js_opt_float(ctx, argv[0], "angle", where, B2JS_ANY, &angle) < 0)
+        b2js_box(ctx, argv[0], where, &box) < 0)
         return JS_EXCEPTION;
-    if (!athena_box2d_make_box(hw, hh, center, angle, &box))
-        return JS_ThrowRangeError(ctx, "%s: the box is too small (halfWidth * halfHeight must exceed %g)",
-            where, (double)FLT_EPSILON);
     SHAPE_RESULT(b2CreatePolygonShape(handle->id.body, &def, &box));
 }
 
 static JSValue body_create_polygon(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     static const char where[] = "Body.createPolygonShape";
     B2JSHandle *handle = b2js_handle(ctx, this_val, B2JS_BODY, where);
-    b2Vec2 points[B2_MAX_POLYGON_VERTICES];
-    float radius = 0.0f;
     b2Polygon polygon;
     b2ShapeDef def;
-    JSValue vertices;
-    int count, ret;
 
     if (!handle || shape_options(ctx, argc, argv, where, "{ vertices, radius?, ... }", &def) < 0 ||
-        b2js_opt_float(ctx, argv[0], "radius", where, B2JS_NONNEG, &radius) < 0)
+        b2js_polygon(ctx, argv[0], where, &polygon) < 0)
         return JS_EXCEPTION;
-
-    vertices = JS_GetPropertyStr(ctx, argv[0], "vertices");
-    if (JS_IsException(vertices))
-        return JS_EXCEPTION;
-    ret = b2js_points(ctx, vertices, where, "vertices", 3, B2_MAX_POLYGON_VERTICES, points, &count);
-    JS_FreeValue(ctx, vertices);
-    if (ret < 0)
-        return JS_EXCEPTION;
-    if (!athena_box2d_make_polygon(points, count, radius, &polygon))
-        return JS_ThrowRangeError(ctx, "%s: the vertices do not form a convex polygon "
-            "(collinear, or points closer than %g)", where, (double)athena_box2d_linear_slop());
     SHAPE_RESULT(b2CreatePolygonShape(handle->id.body, &def, &polygon));
 }
 
@@ -419,14 +597,8 @@ static JSValue body_create_capsule(JSContext *ctx, JSValueConst this_val, int ar
     b2ShapeDef def;
 
     if (!handle || shape_options(ctx, argc, argv, where, "{ point1, point2, radius, ... }", &def) < 0 ||
-        required_vec2(ctx, argv[0], "point1", where, &capsule.center1) < 0 ||
-        required_vec2(ctx, argv[0], "point2", where, &capsule.center2) < 0 ||
-        required_float(ctx, argv[0], "radius", where, B2JS_POS, &capsule.radius) < 0)
+        b2js_capsule(ctx, argv[0], where, &capsule) < 0)
         return JS_EXCEPTION;
-    /* Box2D returns no shape for a capsule shorter than the linear slop. */
-    if (!athena_box2d_segment_valid(capsule.center1, capsule.center2))
-        return JS_ThrowRangeError(ctx, "%s: point1 and point2 must be more than %g apart (use a circle)",
-            where, (double)athena_box2d_linear_slop());
     SHAPE_RESULT(b2CreateCapsuleShape(handle->id.body, &def, &capsule));
 }
 
@@ -437,12 +609,8 @@ static JSValue body_create_segment(JSContext *ctx, JSValueConst this_val, int ar
     b2ShapeDef def;
 
     if (!handle || shape_options(ctx, argc, argv, where, "{ point1, point2, ... }", &def) < 0 ||
-        required_vec2(ctx, argv[0], "point1", where, &segment.point1) < 0 ||
-        required_vec2(ctx, argv[0], "point2", where, &segment.point2) < 0)
+        b2js_segment(ctx, argv[0], where, &segment) < 0)
         return JS_EXCEPTION;
-    if (!athena_box2d_segment_valid(segment.point1, segment.point2))
-        return JS_ThrowRangeError(ctx, "%s: point1 and point2 must be more than %g apart",
-            where, (double)athena_box2d_linear_slop());
     SHAPE_RESULT(b2CreateSegmentShape(handle->id.body, &def, &segment));
 }
 
@@ -453,10 +621,7 @@ static int chain_def(JSContext *ctx, JSValueConst options, const char *where, b2
 
     if (b2js_opt_bool(ctx, options, "isLoop", where, &def->isLoop) < 0 ||
         b2js_opt_bool(ctx, options, "enableSensorEvents", where, &def->enableSensorEvents) < 0 ||
-        b2js_opt_float(ctx, options, "friction", where, B2JS_NONNEG, &material->friction) < 0 ||
-        b2js_opt_float(ctx, options, "restitution", where, B2JS_NONNEG, &material->restitution) < 0 ||
-        b2js_opt_float(ctx, options, "rollingResistance", where, B2JS_NONNEG, &material->rollingResistance) < 0 ||
-        b2js_opt_float(ctx, options, "tangentSpeed", where, B2JS_ANY, &material->tangentSpeed) < 0)
+        b2js_material(ctx, options, where, material) < 0)
         return -1;
 
     filter = JS_GetPropertyStr(ctx, options, "filter");
@@ -751,6 +916,26 @@ static const JSCFunctionListEntry body_proto_funcs[] = {
     JS_CFUNC_MAGIC_DEF("getWorldPoint", 2, body_transform_point, BODY_WORLD_POINT),
     JS_CFUNC_MAGIC_DEF("getLocalPoint", 2, body_transform_point, BODY_LOCAL_POINT),
     JS_CFUNC_MAGIC_DEF("getWorldCenter", 0, body_get_vec2, BODY_WORLD_CENTER),
+    JS_CFUNC_MAGIC_DEF("getLocalCenter", 0, body_get_vec2, BODY_LOCAL_CENTER),
+    JS_CFUNC_MAGIC_DEF("getWorldVector", 2, body_transform_point, BODY_WORLD_VECTOR),
+    JS_CFUNC_MAGIC_DEF("getLocalVector", 2, body_transform_point, BODY_LOCAL_VECTOR),
+    JS_CFUNC_MAGIC_DEF("getWorldPointVelocity", 2, body_transform_point, BODY_WORLD_POINT_VELOCITY),
+    JS_CFUNC_MAGIC_DEF("getLocalPointVelocity", 2, body_transform_point, BODY_LOCAL_POINT_VELOCITY),
+    JS_CFUNC_MAGIC_DEF("getRotationalInertia", 0, body_get, BODY_ROTATIONAL_INERTIA),
+    JS_CFUNC_DEF("getMassData", 0, body_get_mass_data),
+    JS_CFUNC_DEF("setMassData", 1, body_set_mass_data),
+    JS_CFUNC_MAGIC_DEF("clearForces", 0, body_action, BODY_CLEAR_FORCES),
+    JS_CFUNC_MAGIC_DEF("wakeTouching", 0, body_action, BODY_WAKE_TOUCHING),
+    JS_CFUNC_MAGIC_DEF("isSleepEnabled", 0, body_get, BODY_SLEEP_ENABLED),
+    JS_CFUNC_MAGIC_DEF("enableSleep", 1, body_set, BODY_SLEEP_ENABLED),
+    JS_CFUNC_MAGIC_DEF("getSleepThreshold", 0, body_get, BODY_SLEEP_THRESHOLD),
+    JS_CFUNC_MAGIC_DEF("setSleepThreshold", 1, body_set, BODY_SLEEP_THRESHOLD),
+    JS_CFUNC_MAGIC_DEF("isContactRecyclingEnabled", 0, body_get, BODY_CONTACT_RECYCLING),
+    JS_CFUNC_MAGIC_DEF("enableContactRecycling", 1, body_set, BODY_CONTACT_RECYCLING),
+    JS_CFUNC_MAGIC_DEF("enableContactEvents", 1, body_set, BODY_CONTACT_EVENTS),
+    JS_CFUNC_MAGIC_DEF("enableHitEvents", 1, body_set, BODY_HIT_EVENTS),
+    JS_CFUNC_DEF("getName", 0, body_get_name),
+    JS_CFUNC_DEF("setName", 1, body_set_name),
     JS_CFUNC_DEF("applyMassFromShapes", 0, body_apply_mass_from_shapes),
     JS_CFUNC_DEF("computeAABB", 0, body_compute_aabb),
     JS_CFUNC_DEF("createCircleShape", 1, body_create_circle),
