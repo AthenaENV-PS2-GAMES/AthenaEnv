@@ -2644,7 +2644,7 @@ declare namespace Screen {
  *
  * @example
  * ```js
- * const music = Sound.Stream("music/theme.ogg");
+ * const music = new Sound.Stream("music/theme.ogg");
  * music.loop = true;
  * music.onLoop = () => console.log("theme looped");
  * music.play({ fade: 1000 });
@@ -2653,13 +2653,13 @@ declare namespace Screen {
  * jump.volume = 80;
  * jump.pan = -30;
  *
- * while (true) {
- *     pad.update();
- *     if (pad.justPressed(Pads.CROSS)) jump.play();
- *     if (pad.justPressed(Pads.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
+ * const pad = Gamepad.player(0);
+ * Loop.run(() => {
+ *     Gamepad.update();
+ *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
+ *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
  *     Sound.process();
- *     Screen.flip();
- * }
+ * });
  * ```
  */
 declare namespace Sound {
