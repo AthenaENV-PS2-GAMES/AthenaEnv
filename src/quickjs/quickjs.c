@@ -34,7 +34,7 @@
 #include <math.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(PS2)
 #include <malloc.h>
 #elif defined(__FreeBSD__)
 #include <malloc_np.h>
@@ -324,6 +324,11 @@ typedef struct JSRuntimeInternalThreadState {
     JSValue current_exception;
     struct JSStackFrame *current_stack_frame;
 } JSRuntimeInternalThreadState;
+
+_Static_assert(sizeof(JSRuntimeInternalThreadState) <= sizeof(JSRuntimeThreadState),
+               "JSRuntimeThreadState is too small");
+_Static_assert(_Alignof(JSRuntimeInternalThreadState) <= _Alignof(JSRuntimeThreadState),
+               "JSRuntimeThreadState is under-aligned");
 
 struct JSClass {
     uint32_t class_id; /* 0 means free entry */
@@ -1696,8 +1701,10 @@ void JS_SetRuntimeOpaque(JSRuntime *rt, void *opaque)
     rt->user_opaque = opaque;
 }
 
+/* Not the chunk header word: it also holds the allocator's flag bits, which
+   change when a neighbour block is freed, so malloc_size would drift. */
 size_t ps2_malloc_usable_size(void *ptr) {
-    return ((size_t*)ptr)[-1];
+    return malloc_usable_size(ptr);
 }
 
 /* default memory allocation functions with memory limitation */

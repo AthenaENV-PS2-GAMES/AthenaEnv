@@ -280,7 +280,8 @@ cacheList.load("host:/cache-missing.png");
 cacheList.process();
 check(cacheList.stats().cached === 1,
     "ImageList cached a failed image");
-const cachedOther = cacheList.load("host:/tests/my_image.png");
+// A second valid image; host: exists only on PCSX2, not on a real console.
+const cachedOther = cacheList.load("tests/texture.png");
 cacheList.process();
 const evicted = cacheList.load("tests/my_image.png");
 check(evicted !== cachedFirst && evicted.status() === "queued" &&
@@ -401,14 +402,14 @@ uploadList.process();
 check(boundStatus === "ready" && bound.ready() && !bound.locked(),
     "ImageList upload \"bind\" did not make the image resident");
 let lockedStatus;
-const locked = uploadList.load("host:/tests/my_image.png", {
+const locked = uploadList.load("tests/texture.png", {
     upload: "lock",
     onLoad: (result) => {
         lockedStatus = result.status();
     },
 });
 // A weaker duplicate must not downgrade the requested upload mode.
-uploadList.load("host:/tests/my_image.png", { upload: "draw" });
+uploadList.load("tests/texture.png", { upload: "draw" });
 uploadList.process();
 check(lockedStatus === "ready" && locked.locked(),
     "ImageList upload \"lock\" did not lock the image");

@@ -300,6 +300,7 @@ static JSValue athena_archive_open_js(JSContext *ctx, JSValueConst this_val, int
 
 static JSValue athena_archive_close_js(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     ArchiveHandle *handle;
+    char detail[128];
     int ret;
 
     if (!archive_argc(ctx, argc, 1, 1, "Archive.close")) return JS_EXCEPTION;
@@ -307,9 +308,9 @@ static JSValue athena_archive_close_js(JSContext *ctx, JSValueConst this_val, in
     if (!handle) return JS_EXCEPTION;
 
     JS_SetOpaque((JSValue)argv[0], NULL);
-    ret = athena_archive_close(handle->archive);
+    ret = athena_archive_close_detail(handle->archive, detail, sizeof(detail));
     free(handle);
-    if (ret < 0) return archive_throw_result(ctx, "Archive.close", ret, NULL);
+    if (ret < 0) return archive_throw_result(ctx, "Archive.close", ret, detail);
     return JS_UNDEFINED;
 }
 

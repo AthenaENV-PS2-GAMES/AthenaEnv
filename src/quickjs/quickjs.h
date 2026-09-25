@@ -356,8 +356,14 @@ typedef JSValue JSCFunction(JSContext *ctx, JSValueConst this_val, int argc, JSV
 typedef JSValue JSCFunctionMagic(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic);
 typedef JSValue JSCFunctionData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic, JSValue *func_data);
 
-typedef struct JSRuntimeThreadState {
+/* Opaque storage for JS_Suspend()/JS_Resume(). The union keeps it aligned
+   for the 64-bit values stored in it wherever it is embedded: the EE raises
+   an address error on misaligned stores. */
+typedef union JSRuntimeThreadState {
     char data[64];
+    uint64_t align_u64;
+    double align_f64;
+    void *align_ptr;
 } JSRuntimeThreadState;
 
 typedef struct JSMallocState {

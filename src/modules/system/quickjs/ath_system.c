@@ -379,6 +379,19 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
     JS_SetPropertyStr(ctx, info, "nativeStack", JS_NewUint32(ctx, (uint32_t)get_stack_size()));
     JS_SetPropertyStr(ctx, info, "allocs", JS_NewUint32(ctx, (uint32_t)get_allocs_size()));
     JS_SetPropertyStr(ctx, info, "used", JS_NewUint32(ctx, (uint32_t)get_used_memory()));
+    {
+        JSMemoryUsage usage;
+        JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &usage);
+        /*
+         * QuickJS adds an estimated 8-byte header (MALLOC_OVERHEAD) to each
+         * live block; drop it so jsHeap is measured like allocs and the two
+         * can be subtracted.
+         */
+        JS_SetPropertyStr(ctx, info, "jsHeap",
+            JS_NewInt64(ctx, usage.malloc_size - 8 * usage.malloc_count));
+        JS_SetPropertyStr(ctx, info, "jsLimit", JS_NewInt64(ctx, usage.malloc_limit));
+        JS_SetPropertyStr(ctx, info, "jsObjects", JS_NewInt64(ctx, usage.obj_count));
+    }
     return info;
 }
 

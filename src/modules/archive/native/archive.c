@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -750,19 +751,42 @@ bool athena_archive_is_compressed(const AthenaArchive *archive)
     return archive->compressed;
 }
 
-int athena_archive_close(AthenaArchive *archive)
+int athena_archive_close_detail(AthenaArchive *archive, char *detail, size_t size)
 {
     int ret = ATHENA_ARCHIVE_OK;
+    int rc;
 
+    if (detail && size)
+        detail[0] = '\0';
     if (!archive)
         return ATHENA_ARCHIVE_OK;
-    if (archive->zip && unzClose(archive->zip) != UNZ_OK)
-        ret = ATHENA_ARCHIVE_ERR_IO;
-    if (archive->gz && gzclose(archive->gz) != Z_OK)
-        ret = ATHENA_ARCHIVE_ERR_IO;
+    if (archive->zip) {
+        errno = 0;
+        if ((rc = unzClose(archive->zip)) != UNZ_OK) {
+            if (detail && size)
+                snprintf(detail, size, "unzClose returned %d, errno %d", rc, errno);
+            ret = ATHENA_ARCHIVE_ERR_IO;
+        }
+    }
+    if (archive->gz) {
+        errno = 0;
+        if ((rc = gzclose(archive->gz)) != Z_OK) {
+            if (detail && size)
+                snprintf(detail, size, "gzclose returned %d, errno %d (%s)", rc, errno,
+                    archive->type == ATHENA_ARCHIVE_TAR ? "tar" : "gz");
+            ret = ATHENA_ARCHIVE_ERR_IO;
+        }
+    }
+    if (ret < 0 && detail && size)
+        dbgprintf("[Archive] close failed: %s\n", detail);
     archive_clear_entries(archive);
     free(archive);
     return ret;
+}
+
+int athena_archive_close(AthenaArchive *archive)
+{
+    return athena_archive_close_detail(archive, NULL, 0);
 }
 
 int athena_archive_entries(AthenaArchive *archive, const AthenaArchiveEntry **out_entries,

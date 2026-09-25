@@ -78,6 +78,8 @@ AthenaArchiveType athena_archive_type(const AthenaArchive *archive);
 /* True for .tar.gz and gzip. */
 bool athena_archive_is_compressed(const AthenaArchive *archive);
 int athena_archive_close(AthenaArchive *archive);
+/* As athena_archive_close(), writing what failed into `detail` (empty on success). */
+int athena_archive_close_detail(AthenaArchive *archive, char *detail, size_t size);
 
 /*
  * Entries stay valid until the archive is closed. The first call on a

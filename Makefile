@@ -99,7 +99,7 @@ endif
 
 CORE = core/boot.o core/memory.o core/ee_tools.o core/iop_manager.o core/iop_registry.o \
        core/module_registry.o core/strUtils.o core/excepHandler.o core/exceptions.o \
-       core/sioprintf.o core/athena_math.o
+       core/sioprintf.o core/athena_math.o core/posix.o
 
 INI_READER = readini/src/readini.o
 

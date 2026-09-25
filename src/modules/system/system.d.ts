@@ -35,6 +35,12 @@ declare namespace System {
         allocs: number;
         /** Total reported usage in bytes. */
         used: number;
+        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
+        jsHeap: number;
+        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
+        jsLimit: number;
+        /** Live JavaScript objects. */
+        jsObjects: number;
     }
 
     /** EE CPU information returned by `getCPUInfo()`. */
