@@ -195,8 +195,15 @@ module_entry *iopman_get_modules(uint32_t *top) {
     return module_registry;
 }
 
+static uint32_t reset_count;
+
+uint32_t iopman_reset_count(void) {
+    return reset_count;
+}
+
 void iopman_reset() {
     incompatible_module = NULL;
+    reset_count++;
     for (uint32_t i = 0; i < registry_entries; i++) {
         if (module_registry[i].started) {
             if (module_registry[i].end) {

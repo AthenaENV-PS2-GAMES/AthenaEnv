@@ -8,6 +8,7 @@
   "default": true,
   "sources": [
     "native/sound_iop.c",
+    "native/sound_path.c",
     "native/sound_sfx.c",
     "native/sound_stream.c"
   ],

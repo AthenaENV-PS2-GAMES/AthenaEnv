@@ -23,7 +23,7 @@
  * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
  *
  * Sound effects:
- * - `.adp` files with an APCM header, made with `node tools/wav2adp.js`
+ * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
  *   (or `adpenc`; `-L` for a looping sample). Files that would make the
  *   SPU2 play past their end are refused (`CORRUPT`);
  * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see

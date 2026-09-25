@@ -89,6 +89,12 @@ int iopman_load_module(module_entry *module, int arglen, char *args);
 
 void iopman_reset();
 
+/*
+ * Number of iopman_reset() calls so far. A reset closes every file opened
+ * through the IOP: code that keeps a descriptor compares this to reopen.
+ */
+uint32_t iopman_reset_count(void);
+
 void iopman_modules_apply(iopman_func func);
 
 #endif

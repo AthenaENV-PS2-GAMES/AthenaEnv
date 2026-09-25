@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <kernel.h>
 #include <delaythread.h>
@@ -8,6 +10,7 @@
 #include <vorbis/vorbisfile.h>
 
 #include <athena/debug.h>
+#include <athena/iop_manager.h>
 #include <athena/mutex.h>
 #include <athena/sound.h>
 #include <athena/thread.h>
@@ -51,8 +54,6 @@
 #define SEGMENT_COUNT 64
 /* Source bytes decoded ahead by the converter. */
 #define STREAM_SOURCE_CHUNK 2048
-/* Bigger stdio buffer: fewer, larger reads through fileXio. */
-#define STREAM_FILE_BUFFER (16 * 1024)
 #define STREAM_STACK_SIZE (32 * 1024)
 /* Above the script thread, which may never block, so audio does not starve. */
 #define STREAM_PRIORITY (ATHENA_THREAD_DEFAULT_PRIORITY - 4)
@@ -73,7 +74,10 @@ typedef enum {
 
 struct AthenaSoundStream {
     AthenaSoundStreamType type;
-    FILE *file;
+    /* Descriptor of `path`, valid while no IOP reset happened since `io_reset`. */
+    int fd;
+    char *path;
+    uint32_t io_reset;
     OggVorbis_File *ogg;
     /* Format of the file. */
     struct audsrv_fmt_t fmt;
@@ -341,9 +345,64 @@ static int stream_setup(AthenaSoundStream *stream) {
     return ATHENA_SOUND_OK;
 }
 
+/*
+ * Files are read through raw descriptors. An IOP reset closes them all, and
+ * the reloaded fileXio numbers new files from the start again, so a stale
+ * descriptor could name another file: it is never used or closed again,
+ * only replaced by reopening the path (see stream_reopen()).
+ */
+static bool stream_file_stale(const AthenaSoundStream *stream) {
+    return stream->io_reset != iopman_reset_count();
+}
+
+/* read() until `bytes` or the end of the file; -1 on error. */
+static long file_read(int fd, void *out, size_t bytes) {
+    size_t done = 0;
+
+    while (done < bytes) {
+        long got = (long)read(fd, (char *)out + done, bytes - done);
+        if (got < 0)
+            return done > 0 ? (long)done : -1;
+        if (got == 0)
+            break;
+        done += (size_t)got;
+    }
+    return (long)done;
+}
+
+/* libvorbisfile reads through the stream's descriptor too. */
+static size_t ogg_read(void *out, size_t size, size_t count, void *source) {
+    AthenaSoundStream *stream = source;
+    long got;
+
+    if (size == 0 || count == 0)
+        return 0;
+    got = file_read(stream->fd, out, size * count);
+    return got > 0 ? (size_t)got / size : 0;
+}
+
+static int ogg_seek(void *source, ogg_int64_t offset, int whence) {
+    AthenaSoundStream *stream = source;
+    return lseek(stream->fd, (off_t)offset, whence) < 0 ? -1 : 0;
+}
+
+/* The stream closes its descriptor itself (never a stale one). */
+static int ogg_close(void *source) {
+    (void)source;
+    return 0;
+}
+
+static long ogg_tell(void *source) {
+    AthenaSoundStream *stream = source;
+    return (long)lseek(stream->fd, 0, SEEK_CUR);
+}
+
+static const ov_callbacks ogg_callbacks = { ogg_read, ogg_seek, ogg_close, ogg_tell };
+
 /* Walks the RIFF chunks: "fmt " may be longer than 16 bytes and other chunks
  * (LIST, fact, ...) may come before "data". */
-static int stream_open_wav(AthenaSoundStream *stream, FILE *file) {
+static int stream_open_wav(AthenaSoundStream *stream) {
+    int fd = stream->fd;
     uint8_t header[12];
     uint8_t chunk[8];
     /* Up to WAVE_FORMAT_EXTENSIBLE's sub-format GUID. */
@@ -354,42 +413,41 @@ static int stream_open_wav(AthenaSoundStream *stream, FILE *file) {
     uint16_t tag;
     int status;
 
-    if (fseek(file, 0, SEEK_END) != 0 || (file_size = ftell(file)) < 0 ||
-        fseek(file, 0, SEEK_SET) != 0)
+    if ((file_size = (long)lseek(fd, 0, SEEK_END)) < 0 || lseek(fd, 0, SEEK_SET) != 0)
         return ATHENA_SOUND_ERR_READ;
-    if (fread(header, 1, sizeof(header), file) != sizeof(header) ||
+    if (file_read(fd, header, sizeof(header)) != (long)sizeof(header) ||
         memcmp(header, "RIFF", 4) != 0 || memcmp(header + 8, "WAVE", 4) != 0)
         return ATHENA_SOUND_ERR_FORMAT;
 
     for (;;) {
         uint32_t size, pad;
-        long next;
+        long here, next;
 
-        if (fread(chunk, 1, sizeof(chunk), file) != sizeof(chunk)) {
+        if (file_read(fd, chunk, sizeof(chunk)) != (long)sizeof(chunk)) {
             sound_set_detail("no \"data\" chunk");
             return ATHENA_SOUND_ERR_FORMAT;
         }
         size = read_le32(chunk + 4);
         /* Chunks are padded to an even size. */
         pad = size & 1;
+        here = (long)lseek(fd, 0, SEEK_CUR);
+        if (here < 0)
+            return ATHENA_SOUND_ERR_READ;
         if (memcmp(chunk, "data", 4) == 0) {
-            stream->data_offset = ftell(file);
-            if (stream->data_offset < 0)
-                return ATHENA_SOUND_ERR_READ;
+            stream->data_offset = here;
             data_size = size;
             /* Streamed writers leave 0 or 0xFFFFFFFF: the data runs to EOF. */
             if (data_size == 0 || data_size > (uint32_t)(file_size - stream->data_offset))
                 data_size = (uint32_t)(file_size - stream->data_offset);
             break;
         }
+        next = here + (long)size + (long)pad;
         if (memcmp(chunk, "fmt ", 4) == 0) {
             format_size = size < sizeof(format) ? size : sizeof(format);
-            if (format_size < 16 || fread(format, 1, format_size, file) != format_size)
+            if (format_size < 16 || file_read(fd, format, format_size) != (long)format_size)
                 return ATHENA_SOUND_ERR_FORMAT;
-            size -= format_size;
         }
-        next = ftell(file) + (long)size + (long)pad;
-        if (next < 0 || next > file_size || fseek(file, next, SEEK_SET) != 0) {
+        if (next > file_size || lseek(fd, next, SEEK_SET) != next) {
             sound_set_detail("no \"data\" chunk");
             return ATHENA_SOUND_ERR_FORMAT;
         }
@@ -418,16 +476,15 @@ static int stream_open_wav(AthenaSoundStream *stream, FILE *file) {
     }
 
     stream->type = ATHENA_SOUND_STREAM_WAV;
-    stream->file = file;
     status = stream_setup(stream);
     if (status < 0)
         return status;
     stream->total_frames = data_size / stream->frame_bytes;
-    return fseek(file, stream->data_offset, SEEK_SET) == 0 ?
+    return lseek(fd, stream->data_offset, SEEK_SET) == stream->data_offset ?
         ATHENA_SOUND_OK : ATHENA_SOUND_ERR_READ;
 }
 
-static int stream_open_ogg(AthenaSoundStream *stream, FILE *file) {
+static int stream_open_ogg(AthenaSoundStream *stream) {
     vorbis_info *info;
     ogg_int64_t total;
     int status;
@@ -435,14 +492,13 @@ static int stream_open_ogg(AthenaSoundStream *stream, FILE *file) {
     stream->ogg = calloc(1, sizeof(*stream->ogg));
     if (!stream->ogg)
         return ATHENA_SOUND_ERR_MEMORY;
-    if (fseek(file, 0, SEEK_SET) != 0 ||
-        ov_open_callbacks(file, stream->ogg, NULL, 0, OV_CALLBACKS_DEFAULT) < 0) {
+    if (lseek(stream->fd, 0, SEEK_SET) != 0 ||
+        ov_open_callbacks(stream, stream->ogg, NULL, 0, ogg_callbacks) < 0) {
         free(stream->ogg);
         stream->ogg = NULL;
         sound_set_detail("not an Ogg Vorbis stream");
         return ATHENA_SOUND_ERR_FORMAT;
     }
-    /* From here ov_clear() closes the file. */
     stream->type = ATHENA_SOUND_STREAM_OGG;
     info = ov_info(stream->ogg, -1);
     if (!info)
@@ -459,22 +515,46 @@ static int stream_open_ogg(AthenaSoundStream *stream, FILE *file) {
     return ATHENA_SOUND_OK;
 }
 
-static void stream_close(AthenaSoundStream *stream) {
-    if (stream->ogg) {
+static void stream_close_file(AthenaSoundStream *stream) {
+    if (stream->ogg)
         ov_clear(stream->ogg);
-        free(stream->ogg);
-        stream->ogg = NULL;
-    } else if (stream->file) {
-        fclose(stream->file);
-    }
-    stream->file = NULL;
+    if (stream->fd >= 0 && !stream_file_stale(stream))
+        close(stream->fd);
+    stream->fd = -1;
+}
+
+static void stream_close(AthenaSoundStream *stream) {
+    stream_close_file(stream);
+    free(stream->ogg);
+    stream->ogg = NULL;
     free(stream->source);
     stream->source = NULL;
+    free(stream->path);
+    stream->path = NULL;
+}
+
+/*
+ * After an IOP reset: opens the file again (the decoder is then at its
+ * start). Reader thread, or before the stream ever played.
+ */
+static bool stream_reopen(AthenaSoundStream *stream) {
+    stream_close_file(stream);
+    stream->io_reset = iopman_reset_count();
+    stream->fd = open(stream->path, O_RDONLY);
+    if (stream->fd < 0)
+        return false;
+    if (stream->type == ATHENA_SOUND_STREAM_OGG &&
+        ov_open_callbacks(stream, stream->ogg, NULL, 0, ogg_callbacks) < 0) {
+        close(stream->fd);
+        stream->fd = -1;
+        return false;
+    }
+    stream->frame = 0;
+    return true;
 }
 
 AthenaSoundStream *athena_sound_stream_open(const char *path, int *result) {
     AthenaSoundStream *stream;
-    FILE *file;
     uint8_t magic[4];
     int status;
 
@@ -488,24 +568,27 @@ AthenaSoundStream *athena_sound_stream_open(const char *path, int *result) {
         status = ATHENA_SOUND_ERR_MEMORY;
         goto fail;
     }
-    file = fopen(path, "rb");
-    if (!file) {
+    stream->fd = -1;
+    stream->path = sound_absolute_path(path);
+    if (!stream->path) {
+        free(stream);
+        status = ATHENA_SOUND_ERR_MEMORY;
+        goto fail;
+    }
+    stream->io_reset = iopman_reset_count();
+    stream->fd = open(stream->path, O_RDONLY);
+    if (stream->fd < 0) {
+        stream_close(stream);
         free(stream);
         status = ATHENA_SOUND_ERR_OPEN;
         goto fail;
     }
-    setvbuf(file, NULL, _IOFBF, STREAM_FILE_BUFFER);
-    if (fread(magic, 1, sizeof(magic), file) != sizeof(magic)) {
-        fclose(file);
-        free(stream);
+    if (file_read(stream->fd, magic, sizeof(magic)) != (long)sizeof(magic)) {
         status = ATHENA_SOUND_ERR_FORMAT;
-        goto fail;
-    }
-    stream->file = file;
-    if (memcmp(magic, "OggS", 4) == 0) {
-        status = stream_open_ogg(stream, file);
+    } else if (memcmp(magic, "OggS", 4) == 0) {
+        status = stream_open_ogg(stream);
     } else if (memcmp(magic, "RIFF", 4) == 0) {
-        status = stream_open_wav(stream, file);
+        status = stream_open_wav(stream);
     } else {
         status = ATHENA_SOUND_ERR_FORMAT;
     }
@@ -540,7 +623,7 @@ static void stream_seek_decoder(AthenaSoundStream *stream, uint32_t frame) {
             frame = (uint32_t)ov_pcm_tell(stream->ogg);
         }
     } else {
-        fseek(stream->file, stream->data_offset + (long)frame * (long)stream->frame_bytes,
+        lseek(stream->fd, stream->data_offset + (off_t)frame * (off_t)stream->frame_bytes,
             SEEK_SET);
     }
     stream->frame = frame;
@@ -563,11 +646,14 @@ static uint32_t stream_decode(AthenaSoundStream *stream, char *out, uint32_t byt
     *end = false;
     if (stream->type == ATHENA_SOUND_STREAM_WAV) {
         uint32_t left = (stream->total_frames - stream->frame) * stream->frame_bytes;
-        size_t got;
+        long read_bytes;
+        uint32_t got;
 
         if (bytes > left)
             bytes = left;
-        got = fread(out, 1, bytes, stream->file);
+        /* An error ends the stream like the end of the file would. */
+        read_bytes = file_read(stream->fd, out, bytes);
+        got = read_bytes > 0 ? (uint32_t)read_bytes : 0;
         got -= got % stream->frame_bytes;
         stream->frame += (uint32_t)got / stream->frame_bytes;
         *end = got < bytes || stream->frame >= stream->total_frames;
@@ -1217,6 +1303,7 @@ static void stream_reader(void *arg) {
         Block *block;
         uint32_t gen, seek_to, len, first;
         bool seek, ended = false, wrap_at_start = false, wrapped_after = false;
+        bool reopen_failed = false;
 
         player_lock();
         if (player.halting || athena_thread_core_stop_requested() ||
@@ -1240,10 +1327,23 @@ static void stream_reader(void *arg) {
         player.decoding = stream;
         player_unlock();
 
-        if (seek)
+        if (stream_file_stale(stream)) {
+            /* An IOP reset closed the file: reopen it, then go back to where playback resumes. */
+            if (!stream_reopen(stream)) {
+                dbgprintf("[Sound] cannot reopen %s after an IOP reset\n", stream->path);
+                reopen_failed = true;
+            }
+            seek = true;
+        }
+        if (seek && !reopen_failed)
             stream_seek(stream, seek_to);
         len = BLOCK_BYTES - BLOCK_BYTES % stream->out_frame_bytes;
-        if (stream->convert) {
+        if (reopen_failed) {
+            /* It ends as if the file ended here. */
+            len = 0;
+            ended = true;
+            first = seek_to;
+        } else if (stream->convert) {
             len = stream_convert(stream, block->data, len, &ended, &wrap_at_start, &first);
         } else {
             first = stream->frame;
@@ -1336,6 +1436,8 @@ void sound_stream_halt(void) {
     if (!player.lock)
         return;
     player_lock();
+    /* audsrv still runs here (IOP reset, shutdown): remember what was heard. */
+    player_keep_heard_position();
     player.halting = true;
     feeder = player.feeder;
     reader = player.reader;

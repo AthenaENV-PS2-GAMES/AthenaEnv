@@ -34,6 +34,7 @@ MODULE_SRCS = \
 	src/modules/poweroff/native/poweroff.c \
 	src/modules/screen/native/screen.c \
 	src/modules/sound/native/sound_iop.c \
+	src/modules/sound/native/sound_path.c \
 	src/modules/sound/native/sound_sfx.c \
 	src/modules/sound/native/sound_stream.c \
 	src/modules/system/native/system.c \

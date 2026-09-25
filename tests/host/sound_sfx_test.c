@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "sound_sfx.c"
+#include "sound_path.c"
 #include "host_runtime.h"
 
 /* --- Stubs: the rest of the Sound module ------------------------------- */
@@ -112,7 +113,7 @@ static void iop_reset(void) {
     iop_count = 0;
     memset(voices, 0, sizeof(voices));
     generation++;
-    sound_sfx_audsrv_started();
+    sound_sfx_forget_session();
 }
 
 /* --- Helpers ------------------------------------------------------------- */

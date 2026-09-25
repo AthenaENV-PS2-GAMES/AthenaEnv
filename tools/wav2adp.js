@@ -15,6 +15,10 @@
  *
  *   -L, --loop   the sample loops forever (Sfx.loop is true)
  *
+ * tools/wav2adp/wav2adp.c is the same encoder in C, for `make adp` where
+ * Node is missing; tests/host/run.sh checks both write the same bytes
+ * (regenerate its references with tests/host/wav2adp/make_refs.mjs).
+ *
  * Zero dependencies; also works with Bun. Import `encodeWav` or `encodeAdpcm`
  * to use it from a build script.
  */

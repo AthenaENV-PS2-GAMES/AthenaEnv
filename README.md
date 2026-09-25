@@ -1361,7 +1361,7 @@ audsrv is loaded on the IOP the first time a sound is used. Errors throw with a 
   • onEnd / onLoop - Callbacks run by Sound.process().  
   • rate, channels, format, converted - File information, read-only.  
 
-* const shoot_sfx = Sound.Sfx(path) - Loads a sound effect (.adp). Convert WAV files with `node tools/wav2adp.js [-L] input.wav [output.adp]` or a whole folder with `--dir`.  
+* const shoot_sfx = Sound.Sfx(path) - Loads a sound effect (.adp). Convert WAV files with `make adp ADP_DIR=<folder>` (every `.wav` whose `.adp` is missing or older; `name.loop.wav` loops; in Docker: `docker compose run --rm shell -c "make adp ADP_DIR=bin/sfx"`), or without a toolchain with `node tools/wav2adp.js [-L] input.wav [output.adp]` / `--dir <folder>`.  
 **Methods:**  
   • play(*channel*) - Play the sound effect on `channel`, or on a free one if omitted. Returns the channel used, or -1 if busy.  
   • free() - Free the SPU2 memory.  

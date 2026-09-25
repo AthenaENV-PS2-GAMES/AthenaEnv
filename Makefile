@@ -140,7 +140,7 @@ MODULE_EMBED_BUILD_DIRS = $(strip $(foreach e,$(MODULE_EMBED),$(MODULE_EMBED_BUI
 # Targets
 # ---------------------------------------------------------------------------
 
-.PHONY: all debug lib sdk clean rebuild
+.PHONY: all debug lib sdk adp clean rebuild
 
 comma := ,
 
@@ -208,9 +208,34 @@ endif
 	tar -czf dist/athena-sdk.tar.gz -C dist athena-sdk
 	echo "Built dist/athena-sdk.tar.gz [modules: $(MODULE_IDS)]"
 
+# Sound effects: converts every .wav under ADP_DIR into the .adp Sound.Sfx
+# loads, when the .adp is missing or older than the .wav; `name.loop.wav`
+# makes a looping `name.loop.adp`. The converter is built with the host
+# compiler (tools/wav2adp.js does the same where Node is available):
+#   make adp ADP_DIR=bin/sfx
+HOST_CC ?= gcc
+WAV2ADP = tools/wav2adp/wav2adp
+ADP_WAVS = $(if $(ADP_DIR),$(shell find $(ADP_DIR) -type f -name '*.wav'))
+
+$(WAV2ADP): tools/wav2adp/wav2adp.c
+	@echo HOSTCC - $<
+	$(HOST_CC) -std=c99 -O2 -Wall -o $@ $< -lm
+
+%.loop.adp: %.loop.wav | $(WAV2ADP)
+	./$(WAV2ADP) -L $< $@
+
+%.adp: %.wav | $(WAV2ADP)
+	./$(WAV2ADP) $< $@
+
+adp: $(WAV2ADP) $(ADP_WAVS:.wav=.adp)
+ifeq ($(ADP_DIR),)
+	$(error make adp needs ADP_DIR=<folder with .wav files>)
+endif
+	echo "Sound effects up to date in $(ADP_DIR) ($(words $(ADP_WAVS)) .wav files)"
+
 clean:
 	echo Cleaning executables...
-	rm -f $(EE_BIN_DIR)*.elf
+	rm -f $(EE_BIN_DIR)*.elf $(WAV2ADP)
 	rm -rf $(EE_OBJ_DIR:$(BUILD_TAG)/=) $(EE_EMBED_DIR) lib dist
 	rm -f $(EE_SRC_DIR)exports.c
 	$(foreach dir,$(MODULE_EMBED_BUILD_DIRS),$(MAKE) -C $(dir) clean;)

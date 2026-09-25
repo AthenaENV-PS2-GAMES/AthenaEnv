@@ -24,3 +24,5 @@ lib/
 
 .build-cache/
 dist/
+
+tools/wav2adp/wav2adp

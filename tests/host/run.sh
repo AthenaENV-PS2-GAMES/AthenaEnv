@@ -22,3 +22,38 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"
+
+# wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js
+# (references from tests/host/wav2adp/make_refs.mjs) and, for 16-bit mono,
+# as the PS2SDK's adpenc.
+$CC -std=c99 -O2 -Wall -Werror -o "$OUT/wav2adp" tools/wav2adp/wav2adp.c -lm
+refs=tests/host/wav2adp
+wav2adp_checks=0
+wav2adp_failures=0
+compare() {
+    wav2adp_checks=$((wav2adp_checks + 1))
+    if ! cmp -s "$1" "$2"; then
+        echo "  FAIL wav2adp: $1 differs from $2"
+        wav2adp_failures=$((wav2adp_failures + 1))
+    fi
+}
+for name in short rate16k stereo8 float pcm24 pcm32; do
+    input=bin/tests/sound/$name.wav
+    [ -f "$input" ] || input=$refs/$name.wav
+    "$OUT/wav2adp" "$input" "$OUT/$name.adp" > /dev/null
+    "$OUT/wav2adp" -L "$input" "$OUT/$name.loop.adp" > /dev/null
+    compare "$OUT/$name.adp" "$refs/$name.adp"
+    compare "$OUT/$name.loop.adp" "$refs/$name.loop.adp"
+done
+adpenc=$(command -v adpenc || true)
+[ -n "$adpenc" ] || [ ! -x "${PS2SDK:-/nonexistent}/bin/adpenc" ] || adpenc=$PS2SDK/bin/adpenc
+if [ -n "$adpenc" ]; then
+    "$adpenc" bin/tests/sound/rate16k.wav "$OUT/rate16k.sdk.adp" > /dev/null
+    "$adpenc" -L bin/tests/sound/rate16k.wav "$OUT/rate16k.sdk.loop.adp" > /dev/null
+    compare "$OUT/rate16k.adp" "$OUT/rate16k.sdk.adp"
+    compare "$OUT/rate16k.loop.adp" "$OUT/rate16k.sdk.loop.adp"
+else
+    echo "  (adpenc not found: comparison with the PS2SDK skipped)"
+fi
+echo "wav2adp: $wav2adp_checks checks, $wav2adp_failures failures"
+[ "$wav2adp_failures" -eq 0 ]

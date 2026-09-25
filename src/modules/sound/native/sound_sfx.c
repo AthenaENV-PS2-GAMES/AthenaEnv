@@ -124,7 +124,7 @@ static void sfx_unlink(AthenaSfx *sfx) {
     resident_count--;
 }
 
-void sound_sfx_audsrv_started(void) {
+void sound_sfx_forget_session(void) {
     /* The new audsrv session starts with empty SPU2 sample memory. */
     while (resident_head)
         sfx_unlink(resident_head);
@@ -311,31 +311,12 @@ static int sfx_upload(AthenaSfx *sfx) {
     return sfx_upload_buffer(sfx, buffer, size, &header);
 }
 
-/*
- * `path` made absolute with the current directory, so the reload after an
- * IOP reset still finds the file if the script changed directory since.
- */
-static char *sfx_absolute_path(const char *path) {
-    char cwd[256];
-    size_t cwd_length;
-    char *absolute;
-
-    if (strchr(path, ':') || path[0] == '/' || !getcwd(cwd, sizeof(cwd)))
-        return strdup(path);
-    cwd_length = strlen(cwd);
-    absolute = malloc(cwd_length + strlen(path) + 2);
-    if (absolute)
-        sprintf(absolute, "%s%s%s", cwd,
-            cwd_length && cwd[cwd_length - 1] == '/' ? "" : "/", path);
-    return absolute;
-}
-
 static AthenaSfx *sfx_new(const char *path) {
     AthenaSfx *sfx = calloc(1, sizeof(*sfx));
 
     if (!sfx)
         return NULL;
-    sfx->path = sfx_absolute_path(path);
+    sfx->path = sound_absolute_path(path);
     if (!sfx->path) {
         free(sfx);
         return NULL;
@@ -448,7 +429,7 @@ AthenaSfxJob *athena_sfx_load_async(const char *path, int *result) {
     if (!job)
         goto fail;
     job->state = ATHENA_SFX_JOB_RUNNING;
-    job->path = sfx_absolute_path(path);
+    job->path = sound_absolute_path(path);
     job->mutex = job->path ? athena_mutex_core_create() : NULL;
     if (!job->mutex) {
         sfx_job_free(job);

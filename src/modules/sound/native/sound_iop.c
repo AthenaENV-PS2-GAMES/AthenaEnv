@@ -43,7 +43,7 @@ static int sound_audsrv_started(void *module) {
     audsrv_ready = true;
     audsrv_generation++;
     /* The driver's _start already ran audsrv_adpcm_init(): voices are off. */
-    sound_sfx_audsrv_started();
+    sound_sfx_forget_session();
     sound_stream_audsrv_started();
     dbgprintf("[Sound] audsrv ready\n");
     return 0;
@@ -57,6 +57,8 @@ static int sound_audsrv_stopping(void *module) {
     sound_stream_halt();
     audsrv_ready = false;
     audsrv_quit();
+    /* getMemoryStats() reports nothing loaded until samples are uploaded again. */
+    sound_sfx_forget_session();
     return 0;
 }
 

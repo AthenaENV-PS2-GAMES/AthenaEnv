@@ -19,22 +19,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 /* File reads go through this hook, so a test can stall the reader thread. */
 static volatile int stall_next_read_ms;
-static size_t hooked_fread(void *ptr, size_t size, size_t count, FILE *file) {
+static ssize_t hooked_read(int fd, void *buffer, size_t bytes) {
     int ms = __atomic_exchange_n(&stall_next_read_ms, 0, __ATOMIC_SEQ_CST);
     if (ms > 0)
         usleep((useconds_t)ms * 1000);
-    return fread(ptr, size, count, file);
+    return read(fd, buffer, bytes);
 }
-#define fread hooked_fread
+#define read hooked_read
 #include "sound_stream.c"
-#undef fread
+#undef read
+#include "sound_path.c"
 #include "host_runtime.h"
 
 /* --- Stubs: the rest of the Sound module ------------------------------- */
+/* IOP.reset(): the tests bump it after closing the descriptors themselves. */
+static uint32_t host_reset_count;
+uint32_t iopman_reset_count(void) { return host_reset_count; }
 static char detail[160];
 void sound_set_detail(const char *fmt, ...) {
     va_list args;
@@ -567,6 +572,51 @@ static void test_playback(void) {
     athena_sound_stream_play(d, 0);
     CHECK(wait_until(is_ended, d, 1500), "d plays to its end after an early switch");
     athena_sound_stream_destroy(d);
+
+    printf("playback: IOP reset while playing: the file is reopened\n");
+    {
+        int old_fd, intruder;
+        uint32_t before;
+        char byte;
+
+        uint32_t start = athena_sound_stream_get_position(s);
+        athena_sound_stream_play(s, 0);
+        sleep_ms(500);
+        old_fd = s->fd;
+        /* What audsrv's end hook does in iopman_reset(), then the reset itself. */
+        sound_stream_halt();
+        before = athena_sound_stream_get_position(s);
+        CHECK(before > start + 300 && before < start + 600, "position kept at the reset: %u (from %u)",
+            before, start);
+        close(old_fd);
+        host_reset_count++;
+        /* The reloaded fileXio hands the old number to the next file opened. */
+        intruder = open("/tmp/square_b.wav", O_RDONLY);
+        CHECK(intruder == old_fd, "descriptor number reused (%d, was %d)", intruder, old_fd);
+        CHECK(athena_sound_stream_play(s, 0) == 0, "play after the reset");
+        sleep_ms(500);
+        pos = athena_sound_stream_get_position(s);
+        CHECK(athena_sound_stream_is_playing(s) && pos > before + 250 && pos < before + 500,
+            "resumed from %u: %u", before, pos);
+        CHECK(s->fd >= 0 && s->fd != old_fd && s->io_reset == host_reset_count, "reopened (fd %d)", s->fd);
+        athena_sound_stream_destroy(s);
+        CHECK(pread(intruder, &byte, 1, 0) == 1, "the file that took the old number is still open");
+        close(intruder);
+
+        /* The file is gone after the reset: the stream ends instead of failing. */
+        write_square("/tmp/square_c.wav", 44100, 3000);
+        s = open_path("/tmp/square_c.wav");
+        athena_sound_stream_play(s, 0);
+        sleep_ms(300);
+        sound_stream_halt();
+        close(s->fd);
+        host_reset_count++;
+        unlink("/tmp/square_c.wav");
+        athena_sound_stream_play(s, 0);
+        CHECK(wait_until(is_ended, s, 1500), "a stream whose file vanished ends");
+        athena_sound_stream_destroy(s);
+        s = open_path("/tmp/square_a.wav");
+    }
 
     printf("playback: format switch, destroy while playing\n");
     AthenaSoundStream *c = open_fixture("short.wav");

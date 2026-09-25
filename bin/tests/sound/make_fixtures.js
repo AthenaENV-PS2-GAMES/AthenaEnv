@@ -96,6 +96,12 @@ const wavBytes = (rate, ms) => {
     header.writeUInt32LE(riff.length, 4);
     return Buffer.concat([header, riff]);
 };
+// ~1.9 s, mono: 23744 bytes of SPU2 memory (1483 blocks + the end block), so
+// 100 loads (the free() and GC tests) need ~2.3 MiB: more than SPU2 RAM.
+const OVER_FRAMES = 1483 * 28;
+const overAdpcm = encodeWav(wavBytes(22050, OVER_FRAMES * 1000 / 22050));
+if (overAdpcm.length - 16 !== 23744) throw new Error("over.adp: " + (overAdpcm.length - 16) + " bytes");
+fs.writeFileSync(path.join(dir, "over.adp"), overAdpcm);
 // 200 ms that loop forever.
 const loopAdpcm = encodeWav(wavBytes(22050, 200), { loop: true });
 fs.writeFileSync(path.join(dir, "loop.adp"), loopAdpcm);

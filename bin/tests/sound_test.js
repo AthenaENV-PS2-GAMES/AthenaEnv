@@ -4,7 +4,7 @@
  * Run with bin/ as the working directory (default_script=tests/sound_test.js
  * in athena.ini, without `audsrv = true` so the lazy IOP load is checked).
  * Fixtures live in tests/sound/ and are regenerated with
- * tests/sound/make_fixtures.js (bg.wav, pop.adp, over.adp and music.ogg are
+ * tests/sound/make_fixtures.js (bg.wav, pop.adp and music.ogg are
  * not generated).
  *
  * Timing checks use wide margins: under PCSX2 the audio clock follows the
