@@ -48,6 +48,9 @@
 #include <athena/module.h>
 
 #include <ath_env.h>
+#ifdef _EE
+#include <timer.h>
+#endif
 
 #include "cutils.h"
 #include "list.h"
@@ -114,6 +117,9 @@ typedef struct JSThreadState {
     int eval_script_recurse; /* only used in the main thread */
     /* not used in the main thread */
     JSWorkerMessagePipe *recv_pipe, *send_pipe;
+    /* called once per js_std_loop() iteration while set */
+    JSStdFrameFunc *frame_func;
+    void *frame_opaque;
 } JSThreadState;
 
 static uint64_t os_pending_signals;
@@ -1806,13 +1812,19 @@ static int64_t get_time_ms(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
 }
+#elif defined(_EE)
+/* monotonic milliseconds from the EE's 64-bit bus-clock counter */
+static int64_t get_time_ms(void)
+{
+    return (int64_t)(GetTimerSystemTime() / (kBUSCLK / 1000));
+}
 #else
 /* more portable, but does not work if the date is updated */
 static int64_t get_time_ms(void)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000000);
+    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
 }
 #endif
 
@@ -2110,6 +2122,57 @@ static int handle_posted_message(JSRuntime *rt, JSContext *ctx,
 #define JS_POLL_EMPTY 1
 #define JS_POLL_EXCEPTION -1
 
+/* Runs an expired timer; the timer list may change during the call. */
+static int fire_timer(JSContext *ctx, JSOSTimer *th, int64_t cur_time)
+{
+    int call_res;
+    JSValue func = th->func;
+
+    if (th->interval != -1) {
+        th->timeout = cur_time + th->interval;
+        call_res = call_handler(ctx, func);
+    } else {
+        th->func = JS_UNDEFINED;
+        unlink_timer(JS_GetRuntime(ctx), th);
+        if (!th->has_object)
+            free_timer(JS_GetRuntime(ctx), th);
+        call_res = call_handler(ctx, func);
+        JS_FreeValue(ctx, func);
+    }
+    return call_res;
+}
+
+/*
+ * Runs the timers expired at entry, rescanning after each call since a
+ * handler may add or remove timers. The budget stops intervals of zero ms
+ * and timers created by handlers from holding the frame.
+ */
+static int run_expired_timers(JSContext *ctx, JSThreadState *ts)
+{
+    struct list_head *el;
+    int64_t cur_time = get_time_ms();
+    int budget = 0;
+
+    list_for_each(el, &ts->os_timers)
+        budget++;
+
+    while (budget-- > 0) {
+        JSOSTimer *expired = NULL;
+        list_for_each(el, &ts->os_timers) {
+            JSOSTimer *th = list_entry(el, JSOSTimer, link);
+            if (th->timeout <= cur_time) {
+                expired = th;
+                break;
+            }
+        }
+        if (!expired)
+            break;
+        if (fire_timer(ctx, expired, cur_time) < 0)
+            return JS_POLL_EXCEPTION;
+    }
+    return JS_POLL_OK;
+}
+
 static int js_os_poll(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -2142,6 +2205,11 @@ static int js_os_poll(JSContext *ctx)
         list_empty(&ts->port_list))
         return JS_POLL_EMPTY; /* no more events */
     
+    /* with a frame handler, every expired timer runs once per frame and the
+       handler paces the loop (VSync), so never sleep here */
+    if (ts->frame_func)
+        return run_expired_timers(ctx, ts);
+
     if (!list_empty(&ts->os_timers)) {
         cur_time = get_time_ms();
         min_delay = 10000;
@@ -2149,22 +2217,7 @@ static int js_os_poll(JSContext *ctx)
             JSOSTimer *th = list_entry(el, JSOSTimer, link);
             delay = th->timeout - cur_time;
             if (delay <= 0) {
-                int call_res = 0;
-                JSValue func;
-                /* the timer expired */
-                func = th->func;
-                if (th->interval != -1) {
-                    th->timeout = cur_time + th->interval;
-                    call_res = call_handler(ctx, func);
-                } else {
-                    th->func = JS_UNDEFINED;
-                    unlink_timer(JS_GetRuntime(ctx), th);
-                    if (!th->has_object)
-                        free_timer(JS_GetRuntime(ctx), th);
-                    call_res = call_handler(ctx, func);
-                    JS_FreeValue(ctx, func);
-                }
-                return call_res;
+                return fire_timer(ctx, th, cur_time);
             } else if (delay < min_delay) {
                 min_delay = delay;
             }
@@ -3620,8 +3673,17 @@ void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
     }
 }
 
+void js_std_set_frame_handler(JSRuntime *rt, JSStdFrameFunc *func,
+                              void *opaque)
+{
+    JSThreadState *ts = JS_GetRuntimeOpaque(rt);
+    ts->frame_func = func;
+    ts->frame_opaque = func ? opaque : NULL;
+}
+
 int js_std_loop(JSContext *ctx)
 {
+    JSThreadState *ts = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
     JSContext *ctx1;
     int err;
     int poll_result;
@@ -3644,12 +3706,19 @@ int js_std_loop(JSContext *ctx)
             return err;
         }
 
+        if (ts->frame_func) {
+            if (ts->frame_func(ctx, ts->frame_opaque) < 0)
+                return -1;
+            athena_js_gil_unlock();
+            athena_js_gil_lock();
+        }
+
         poll_result = js_os_poll(ctx);
         if (poll_result == JS_POLL_EXCEPTION) {
             return -1;
         }
 
-        if (poll_result == JS_POLL_EMPTY) {
+        if (poll_result == JS_POLL_EMPTY && !ts->frame_func) {
             break;
         }
     }

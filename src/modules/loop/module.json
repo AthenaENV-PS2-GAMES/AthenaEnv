@@ -1,0 +1,29 @@
+{
+  "id": "loop",
+  "name": "Loop",
+  "description": "Game loop driven by the runtime: clears the screen, calls a per-frame callback with the native delta time and flips.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/loop.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "cleanup_func": "athena_loop_cleanup",
+    "sources": [
+      "quickjs/ath_loop.c"
+    ],
+    "module_name": "Loop",
+    "global_alias": "Loop",
+    "init_func": "athena_loop_init"
+  },
+  "types": "loop.d.ts"
+}

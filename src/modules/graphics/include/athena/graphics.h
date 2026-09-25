@@ -374,7 +374,12 @@ extern void (*flipScreen)();
 
 void graphicWaitVblankStart();
 
+/* Vertical blanks counted since the graphics service started; wraps around. */
+uint32_t graphicVblankCount(void);
+
 void setVSync(bool vsync_flag);
+
+bool getVSync(void);
 
 void toggleFrameCounter(bool enable);
 

@@ -12,6 +12,8 @@ mkdir -p "$OUT"
 CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -Wno-sign-compare -Werror -fsanitize=undefined -fsanitize-undefined-trap-on-error"
 
+$CC $CFLAGS -Itests/host/stubs -Isrc/modules/loop/include -Isrc/modules/loop/native \
+    -o "$OUT/loop_test" tests/host/loop_test.c -lm
 $CC $CFLAGS -Isrc/readini/include -o "$OUT/readini_test" \
     tests/host/readini_test.c src/readini/src/readini.c
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
@@ -31,6 +33,7 @@ done
 $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/native/box2d.c" \
     "$OUT"/box2d/*.o -lpthread -lm
 
+"$OUT/loop_test"
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"

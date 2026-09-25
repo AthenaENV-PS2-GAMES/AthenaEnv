@@ -48,6 +48,7 @@ static bool vsync = true;
 static bool perf = false;
 static int vsync_sema_id = -1;
 static int vsync_handler_id = -1;
+static volatile uint32_t vblank_count = 0;
 static clock_t curtime = 0;
 static float fps = 0.0f;
 
@@ -785,15 +786,24 @@ static void switchFlipScreenFunction();
 static int vsync_handler(int cause)
 {
    (void)cause;
+   vblank_count++;
    iSignalSema(vsync_sema_id);
 
    ExitHandler();
    return 0;
 }
 
-void setVSync(bool vsync_flag){ 
+uint32_t graphicVblankCount(void) {
+	return vblank_count;
+}
+
+void setVSync(bool vsync_flag){
 	vsync = vsync_flag;
 	switchFlipScreenFunction();
+}
+
+bool getVSync(void) {
+	return vsync;
 }
 
 

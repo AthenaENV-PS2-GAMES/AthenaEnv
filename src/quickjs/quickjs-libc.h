@@ -36,6 +36,11 @@ JSModuleDef *js_init_module_std(JSContext *ctx, const char *module_name);
 JSModuleDef *js_init_module_os(JSContext *ctx, const char *module_name);
 void js_std_add_helpers(JSContext *ctx, int argc, char **argv);
 int js_std_loop(JSContext *ctx);
+/* Per-frame hook of js_std_loop(): while set, the loop keeps running and
+   calls it once per iteration. A negative return means a pending exception. */
+typedef int JSStdFrameFunc(JSContext *ctx, void *opaque);
+void js_std_set_frame_handler(JSRuntime *rt, JSStdFrameFunc *func,
+                              void *opaque);
 void js_std_set_interrupt_handler(JSRuntime *rt);
 void js_std_init_handlers(JSRuntime *rt);
 void js_std_free_handlers(JSRuntime *rt);
