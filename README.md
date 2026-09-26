@@ -274,6 +274,28 @@ Loop.run(() => {
 });
 ```
 
+### Animation
+
+Not in the default build: `node tools/modules.js configure --modules=ease,tween,...`
+
+| Module | Global | Description |
+|---|---|---|
+| [`ease`](src/modules/ease/ease.d.ts) | `Ease` | Easing curves (Penner families, steps, cubic-bezier) and interpolation helpers: lerp, remap, smoothstep and frame-rate independent damping. Written in JavaScript. |
+| [`tween`](src/modules/tween/tween.d.ts) | `Tween` | Tweens: animate numeric and color properties of any object with easing, delays, repeats and yoyo; awaitable, driven by the Loop. Written in JavaScript. |
+
+```js
+const logo = { x: 0, y: -50 };
+
+// Animate properties with easing, awaitable with Promises
+await Tween.to(logo, { y: 150 }, 0.8, { ease: "outBounce" });
+
+// Repeating or yoyo animations, color interpolation
+Tween.to(logo, { x: 200 }, 1.0, { ease: "inOutQuad", yoyo: true, repeat: Infinity });
+
+// Frame-rate independent follow/damping inside Loop.run(dt => { ... })
+camera.x = Ease.damp(camera.x, target.x, 8, dt);
+```
+
 ### Physics
 
 Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
@@ -483,6 +505,11 @@ removal, so it is off by default.
 |---|---|
 | `docker compose run --rm host-tests` | C tests of the runtime and modules on the build machine (`tests/host/`). |
 | `docker compose run --rm js-tests` | Module test scripts under AddressSanitizer (`tests/js/`). |
+
+JavaScript modules (`src/modules/<name>/js/`) are loaded directly from their
+source by the test runner (`tests/js/runner.c`), using a JavaScript stub for
+`Loop` (`tests/js/stub/Loop.js`) because the real `Loop` requires GS
+initialization.
 
 `bin/tests/` holds test scripts and examples to run on PCSX2 or a PS2: set
 `default_script=tests/<name>.js` in `athena.ini`. Test on real hardware

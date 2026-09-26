@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-26T01:26:54.777Z",
+  "generatedAt": "2026-09-26T02:13:45.585Z",
   "modules": [
     {
       "id": "archive",
@@ -132,6 +132,25 @@
       "global_alias": "Draw",
       "api": {
         "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "ease",
+      "name": "Ease",
+      "description": "Easing curves (Penner families, steps, cubic-bezier) and interpolation helpers: lerp, remap, smoothstep and frame-rate independent damping. Written in JavaScript.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Ease",
+      "api": {
+        "native": false,
         "quickjs": true
       }
     },
@@ -534,6 +553,28 @@
       "global_alias": "Timer",
       "api": {
         "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "tween",
+      "name": "Tween",
+      "description": "Tweens: animate numeric and color properties of any object with easing, delays, repeats and yoyo; awaitable, driven by the Loop. Written in JavaScript.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "ease",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Tween",
+      "api": {
+        "native": false,
         "quickjs": true
       }
     },

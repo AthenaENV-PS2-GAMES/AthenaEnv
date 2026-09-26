@@ -42,7 +42,11 @@ for test in tests/box2d_test.js; do
     echo "== $test"
     "$OUT/runner" "$test"
 done
-# The summary comes from a promise callback: check the printed result too.
+# The summaries come from promise callbacks: check the printed result too.
+# Ease and Tween are JavaScript modules, loaded from their sources.
+echo "== tests/tween_test.js"
+"$OUT/runner" tests/tween_test.js | tee "$OUT/tween.log"
+grep -q "Tween module test passed" "$OUT/tween.log"
 echo "== tests/memcard_test.js"
 "$OUT/runner" tests/memcard_test.js | tee "$OUT/memcard.log"
 grep -q "Result: .* 0 failed" "$OUT/memcard.log"

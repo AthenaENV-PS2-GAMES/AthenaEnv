@@ -107,6 +107,44 @@ static void run_jobs(JSContext *ctx) {
             print_exception(job_ctx);
 }
 
+/*
+ * JavaScript modules (module.json "js") by module name, compiled from their
+ * sources as the runtime's loader compiles the embedded copies. Loop is a
+ * JavaScript stand-in, since the real one needs the GS. Paths from bin/.
+ */
+static const struct {
+    const char *name;
+    const char *path;
+} js_modules[] = {
+    { "Ease", "../src/modules/ease/js/ease.js" },
+    { "Tween", "../src/modules/tween/js/tween.js" },
+    { "Loop", "../tests/js/stub/Loop.js" },
+};
+
+static JSModuleDef *load_module(JSContext *ctx, const char *name, void *opaque) {
+    const char *path = NULL;
+    JSValue func;
+    JSModuleDef *module;
+    size_t length;
+    char *code;
+
+    for (size_t i = 0; i < sizeof(js_modules) / sizeof(js_modules[0]); i++)
+        if (strcmp(js_modules[i].name, name) == 0)
+            path = js_modules[i].path;
+    code = path ? read_file(path, &length) : NULL;
+    if (!code) {
+        JS_ThrowReferenceError(ctx, "could not load module '%s'", name);
+        return NULL;
+    }
+    func = JS_Eval(ctx, code, length, name, JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(code);
+    if (JS_IsException(func))
+        return NULL;
+    module = JS_VALUE_GET_PTR(func);
+    JS_FreeValue(ctx, func);
+    return module;
+}
+
 static int eval_module(JSContext *ctx, const char *code, size_t length, const char *name) {
     JSValue value = JS_Eval(ctx, code, length, name, JS_EVAL_TYPE_MODULE);
 
@@ -184,7 +222,9 @@ static int run_timers(JSContext *ctx) {
 int main(int argc, char **argv) {
     /* As generated in src/generated/js_registry.c. */
     static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;"
-        "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;";
+        "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;"
+        "import * as Ease from 'Ease'; globalThis.Ease = Ease;"
+        "import * as Tween from 'Tween'; globalThis.Tween = Tween;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -198,6 +238,7 @@ int main(int argc, char **argv) {
     }
     rt = JS_NewRuntime();
     ctx = JS_NewContext(rt);
+    JS_SetModuleLoaderFunc(rt, NULL, load_module, NULL);
     global = JS_GetGlobalObject(ctx);
     console = JS_NewObject(ctx);
     std = JS_NewObject(ctx);

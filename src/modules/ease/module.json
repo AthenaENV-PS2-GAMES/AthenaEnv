@@ -1,0 +1,20 @@
+{
+  "id": "ease",
+  "name": "Ease",
+  "description": "Easing curves (Penner families, steps, cubic-bezier) and interpolation helpers: lerp, remap, smoothstep and frame-rate independent damping. Written in JavaScript.",
+  "category": "Animation",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/ease.js",
+    "module_name": "Ease",
+    "global_alias": "Ease"
+  },
+  "types": "ease.d.ts"
+}
