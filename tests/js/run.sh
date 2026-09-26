@@ -14,7 +14,8 @@ mkdir -p "$OUT/obj"
 BASE="-O1 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DCONFIG_BIGNUM -DCONFIG_VERSION=\"host\""
 ASAN="-fsanitize=address"
 UBSAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
-INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include"
+INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include \
+    -Isrc/modules/random/include -Isrc/modules/noise/include"
 # The EE has no SIMD for Box2D: build the same scalar path.
 B2FLAGS="-DBOX2D_DISABLE_SIMD -DB2_ENABLE_ASSERT"
 
@@ -36,7 +37,11 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     -o "$OUT/runner" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
     tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
     src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
-    src/modules/memcard/quickjs/ath_memcard.c "$OUT"/obj/*.o -lm -lpthread
+    src/modules/memcard/quickjs/ath_memcard.c \
+    src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
+    src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
+    src/modules/noise/quickjs/ath_noise.c \
+    "$OUT"/obj/*.o -lm -lpthread
 
 cd bin
 for test in tests/box2d_test.js; do
@@ -48,6 +53,9 @@ done
 echo "== tests/tween_test.js"
 "$OUT/runner" tests/tween_test.js | tee "$OUT/tween.log"
 grep -q "Tween module test passed" "$OUT/tween.log"
+echo "== tests/random_noise_test.js"
+"$OUT/runner" tests/random_noise_test.js | tee "$OUT/random_noise.log"
+grep -q "Random and Noise module test passed" "$OUT/random_noise.log"
 echo "== tests/memcard_test.js"
 "$OUT/runner" tests/memcard_test.js | tee "$OUT/memcard.log"
 grep -q "Result: .* 0 failed" "$OUT/memcard.log"

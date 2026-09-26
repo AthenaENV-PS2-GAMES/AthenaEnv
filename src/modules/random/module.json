@@ -1,0 +1,26 @@
+{
+  "id": "random",
+  "name": "Random",
+  "description": "Seedable random generators (xoshiro128**): integers, floats, booleans, gaussian, pick, shuffle, weighted choice and savable state.",
+  "category": "Math",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/random.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_random.c"
+    ],
+    "module_name": "Random",
+    "global_alias": "Random",
+    "init_func": "athena_random_init"
+  },
+  "types": "random.d.ts"
+}

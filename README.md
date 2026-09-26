@@ -387,6 +387,30 @@ Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
 |---|---|---|
 | [`vector`](src/modules/vector/vector.d.ts) | `Vector` | `Vector2`, `Vector3` and `Vector4` with PS2 alignment. |
 | [`matrix4`](src/modules/matrix4/matrix4.d.ts) | `Matrix4` | 4×4 transformation matrices. |
+| [`random`](src/modules/random/random.d.ts) | `Random` | Seedable generators (xoshiro128**): integers, floats, booleans, gaussian, pick, shuffle, weighted choice and a state you can save. |
+| [`noise`](src/modules/noise/noise.d.ts) | `Noise` | Perlin and simplex (2D/3D), Worley and fBm in C, with batch fills of `Float32Array` grids and classification into tile ids. |
+
+```js
+const rng = new Random.Generator("run-42");   // same seed, same run
+const loot = rng.pick(["sword", "shield", "potion"]);
+const rarity = rng.weighted([70, 25, 5]);      // index 0, 1 or 2
+
+// A 64x64 island map in two native calls, no per-cell loop in JavaScript.
+const height = new Noise.Generator("island-" + rng.int(0, 1e6));
+const heights = height.fill(new Float32Array(64 * 64), 64, 64,
+    { scale: 0.05, mode: "ridged", warp: 0.5 });
+const tiles = Noise.toTiles(new Uint16Array(64 * 64), heights,
+    [0.3, 0.5, 0.8], [WATER, SAND, GRASS, ROCK]);
+map.setTiles(0, tiles);                        // a TileMap.Instance
+```
+
+`rng.state()` returns four numbers that survive `JSON.stringify()`, so a
+save file can resume the sequence with `rng.setState()`. For particles,
+`rng.fill(array, min, max)` and `rng.fillGaussian(array, mean, stddev)`
+fill a typed array in one call. Large maps can be generated without
+stalling the frame: `fillAsync()` returns a `Job` (await it, `poll()` its
+`rowsDone`, or `cancel()` it) computed on the worker pool.
+`bin/tests/noise_example.js` draws a generated island and switches modes live.
 
 ### System and storage
 

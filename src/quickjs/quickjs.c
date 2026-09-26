@@ -52153,7 +52153,29 @@ JSValue JS_GetTypedArrayBuffer(JSContext *ctx, JSValueConst obj,
     }
     return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, ta->buffer));
 }
-                               
+
+int JS_GetTypedArrayType(JSValueConst obj)
+{
+    if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
+        return -1;
+    switch (JS_VALUE_GET_OBJ(obj)->class_id) {
+    case JS_CLASS_UINT8C_ARRAY: return JS_TYPED_ARRAY_UINT8C;
+    case JS_CLASS_INT8_ARRAY: return JS_TYPED_ARRAY_INT8;
+    case JS_CLASS_UINT8_ARRAY: return JS_TYPED_ARRAY_UINT8;
+    case JS_CLASS_INT16_ARRAY: return JS_TYPED_ARRAY_INT16;
+    case JS_CLASS_UINT16_ARRAY: return JS_TYPED_ARRAY_UINT16;
+    case JS_CLASS_INT32_ARRAY: return JS_TYPED_ARRAY_INT32;
+    case JS_CLASS_UINT32_ARRAY: return JS_TYPED_ARRAY_UINT32;
+#ifdef CONFIG_BIGNUM
+    case JS_CLASS_BIG_INT64_ARRAY: return JS_TYPED_ARRAY_BIG_INT64;
+    case JS_CLASS_BIG_UINT64_ARRAY: return JS_TYPED_ARRAY_BIG_UINT64;
+#endif
+    case JS_CLASS_FLOAT32_ARRAY: return JS_TYPED_ARRAY_FLOAT32;
+    case JS_CLASS_FLOAT64_ARRAY: return JS_TYPED_ARRAY_FLOAT64;
+    default: return -1;
+    }
+}
+
 static JSValue js_typed_array_get_toStringTag(JSContext *ctx,
                                               JSValueConst this_val)
 {

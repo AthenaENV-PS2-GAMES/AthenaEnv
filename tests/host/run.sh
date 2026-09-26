@@ -31,6 +31,9 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
     -o "$OUT/video_test" tests/host/video_test.c -lpthread
+$CC $CFLAGS -Isrc/modules/random/include -Isrc/modules/noise/include \
+    -o "$OUT/random_noise_test" tests/host/random_noise_test.c \
+    src/modules/random/native/random.c src/modules/noise/native/noise.c -lm
 # Box2D: the vendored library keeps upstream warnings (-w), the AthenaEnv
 # helpers and the test use the flags above. Both run under UBSan.
 B2=src/modules/box2d
@@ -51,6 +54,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"
 "$OUT/video_test"
+"$OUT/random_noise_test"
 "$OUT/box2d_test"
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js

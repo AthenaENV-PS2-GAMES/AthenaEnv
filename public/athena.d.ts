@@ -3179,6 +3179,317 @@ declare namespace MemoryCard {
 }
 
 
+/* === Module: Random (random) === */
+/**
+ * Seedable pseudo-random numbers (xoshiro128**, computed in C).
+ *
+ * Unlike `Math.random()`, a generator created with a seed always produces the
+ * same sequence: a generated map, a roguelike run or a bug can be
+ * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
+ * bit-exact on every platform; floats with bounds and gaussians may differ in
+ * the last bits between the PS2 and a PC.
+ *
+ * The module functions (`Random.int()`, `Random.float()`...) use a generator
+ * of the script (each script and worker has its own) seeded from the clock;
+ * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
+ * (NaN, Infinity) throw a RangeError.
+ *
+ * Example:
+ * ```js
+ * const rng = new Random.Generator(1234);    // or a string: "level-3"
+ * const die = rng.int(1, 6);
+ * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
+ * const team = rng.sample(players, 3);
+ * rng.shuffle(deck);
+ *
+ * // Particles: one call instead of a loop of 500.
+ * rng.fill(speeds, 40, 90);
+ * rng.fillGaussian(spread, 0, 0.3);
+ *
+ * const saved = rng.state();                 // JSON-friendly: save it
+ * rng.setState(saved);                       // and continue later
+ * ```
+ */
+declare namespace Random {
+    /** Seed: a number (integers map one-to-one) or a string (hashed). */
+    type Seed = number | string;
+
+    /** The four 32-bit words of a generator state, as returned by `state()`. */
+    type State = [number, number, number, number];
+
+    /** Typed arrays of numbers. */
+    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
+        Int16Array | Uint16Array | Int32Array | Uint32Array |
+        Float32Array | Float64Array;
+
+    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
+    type List<T> = T[] | NumberArray;
+
+    interface Source {
+        /** Restarts the sequence from `seed`; without one, from the clock. */
+        seed(seed?: Seed): void;
+        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
+        int(min: number, max: number): number;
+        /** Float in [0, 1). */
+        float(): number;
+        /** Float in [0, max). */
+        float(max: number): number;
+        /** Float in [min, max). */
+        float(min: number, max: number): number;
+        /** True with probability `p` (default 0.5). */
+        bool(p?: number): boolean;
+        /** Normally distributed number (default mean 0, standard deviation 1). */
+        gaussian(mean?: number, stddev?: number): number;
+        /** Angle in radians, in [0, 2 pi). */
+        angle(): number;
+        /**
+         * Random element, or `undefined` for an empty array. With `weights`
+         * (one per item), drawn with probability proportional to its weight.
+         */
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        /** `count` different elements in random order, as a new array. */
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        /** Shuffles in place (Fisher-Yates) and returns the same array. */
+        shuffle<A extends List<any>>(items: A): A;
+        /**
+         * Index drawn with probability proportional to its weight. Weights
+         * must be finite and non-negative, with at least one above zero.
+         */
+        weighted(weights: number[] | Float32Array): number;
+        /**
+         * Fills a typed array in one call and returns it. Float arrays get
+         * floats in [min, max) (default [0, 1); one bound is the max); integer
+         * arrays get integers in [min, max], by default the whole range of
+         * the type (random bytes for a Uint8Array).
+         */
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        /** Fills a float array with normally distributed numbers and returns it. */
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        /** Copy of the current state, for saving. */
+        state(): State;
+        /** Restores a state returned by `state()`. */
+        setState(state: State): void;
+    }
+
+    /** Independent generator. */
+    class Generator implements Source {
+        /** Seeded with `seed`, or from the clock without one. */
+        constructor(seed?: Seed);
+        seed(seed?: Seed): void;
+        int(min: number, max: number): number;
+        float(): number;
+        float(max: number): number;
+        float(min: number, max: number): number;
+        bool(p?: number): boolean;
+        gaussian(mean?: number, stddev?: number): number;
+        angle(): number;
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        shuffle<A extends List<any>>(items: A): A;
+        weighted(weights: number[] | Float32Array): number;
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        state(): State;
+        setState(state: State): void;
+        /** New generator at the same point of the sequence. */
+        clone(): Generator;
+    }
+
+    /** The script's generator: see `Source`. */
+    function seed(seed?: Seed): void;
+    function int(min: number, max: number): number;
+    function float(): number;
+    function float(max: number): number;
+    function float(min: number, max: number): number;
+    function bool(p?: number): boolean;
+    function gaussian(mean?: number, stddev?: number): number;
+    function angle(): number;
+    function pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+    function pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+    function sample<T>(items: T[], count: number): T[];
+    function sample(items: NumberArray, count: number): number[];
+    function shuffle<A extends List<any>>(items: A): A;
+    function weighted(weights: number[] | Float32Array): number;
+    function fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+    function fillGaussian<A extends Float32Array | Float64Array>(array: A,
+        mean?: number, stddev?: number): A;
+    function state(): State;
+    function setState(state: State): void;
+}
+
+
+/* === Module: Noise (noise) === */
+/**
+ * Procedural noise computed in C, in single precision: Perlin and simplex in
+ * 2D and 3D, Worley (cellular), and fractal sums of them (fBm, ridged,
+ * billow), optionally domain-warped.
+ *
+ * The module functions use the script's noise (each script and worker has
+ * its own), seed 0 until `Noise.seed()` changes it, so the same coordinates
+ * always give the same value. A `Noise.Generator` is an independent noise
+ * with the same methods: one per layer (height, moisture...) without
+ * reseeding. For whole maps, `fill()` samples a grid into a `Float32Array`
+ * in one call and `Noise.toTiles()` turns it into tile ids for
+ * `TileMap.Instance.setTiles()`, without a per-cell loop in JavaScript.
+ *
+ * Determinism: the same seed gives the same noise on the same platform, but
+ * not bit for bit between a PC and the PS2 (the EE rounds floats toward
+ * zero), so a cell right on a `toTiles()` threshold can differ. Generate
+ * maps on the console, or store them, when they must match exactly.
+ *
+ * Example:
+ * ```js
+ * const W = 64, H = 64;
+ * const height = new Noise.Generator("island-7");
+ * const heights = height.fill(new Float32Array(W * H), W, H, { scale: 0.05 });
+ *
+ * const tiles = new Uint16Array(W * H);
+ * Noise.toTiles(tiles, heights, [0.3, 0.5, 0.8], [WATER, SAND, GRASS, ROCK]);
+ * map.setTiles(0, tiles);
+ *
+ * const wind = Noise.perlin2(time * 0.5, 0);  // smooth value in about [-1, 1]
+ * const peaks = Noise.fbm2(x, y, { mode: "ridged", warp: 0.5 });
+ * ```
+ */
+declare namespace Noise {
+    /** Seed: a number (integers map one-to-one) or a string (hashed). */
+    type Seed = number | string;
+
+    type Type = "perlin" | "simplex" | "worley";
+
+    /**
+     * How each octave is shaped: "fbm" is the noise itself, "ridged" makes
+     * sharp crests (mountains), "billow" rounded bumps (clouds, dunes).
+     * Ridged and billow need "perlin" or "simplex".
+     */
+    type Mode = "fbm" | "ridged" | "billow";
+
+    interface FractalOptions {
+        /** Base noise (default "simplex"). */
+        type?: Type;
+        /** Octave shape (default "fbm"). */
+        mode?: Mode;
+        /** Number of layers, 1 to 16 (default 4). */
+        octaves?: number;
+        /** Frequency multiplier per octave (default 2). */
+        lacunarity?: number;
+        /** Amplitude multiplier per octave (default 0.5). */
+        gain?: number;
+        /**
+         * Domain warp in noise units (default 0, off): moves each point by
+         * simplex noise first, twisting straight features into organic ones
+         * (coasts, rivers, marble). Costs two or three extra samples.
+         */
+        warp?: number;
+    }
+
+    interface FillOptions extends FractalOptions {
+        /** Noise units per cell (default 1/16): smaller is smoother. */
+        scale?: number;
+        /**
+         * Offset in cells. A chunk filled with `x: chunkX * width` continues
+         * the one on its left seamlessly.
+         */
+        x?: number;
+        y?: number;
+        /** Samples a slice of the 3D noise at this depth, in cells (scaled like x and y). */
+        z?: number;
+        /** Seed for this fill only; the generator's tables by default. */
+        seed?: Seed;
+        /** Output range (default 0 to 1); values are clamped to it. */
+        min?: number;
+        max?: number;
+        /**
+         * Stretches the values actually produced onto [min, max], instead of
+         * the nominal range of the noise (Perlin rarely reaches its ends).
+         * Separately filled chunks then no longer match at the seams.
+         */
+        normalize?: boolean;
+    }
+
+    /** Sampling functions shared by the module and every Generator. */
+    interface Source {
+        /** Rebuilds the tables for `seed`; without one, from the clock. */
+        seed(seed?: Seed): void;
+
+        /** Perlin noise, about [-1, 1]; 0 at integer coordinates. */
+        perlin2(x: number, y: number): number;
+        perlin3(x: number, y: number, z: number): number;
+
+        /** Simplex noise, about [-1, 1]; fewer grid artifacts than Perlin. */
+        simplex2(x: number, y: number): number;
+        simplex3(x: number, y: number, z: number): number;
+
+        /**
+         * Worley (cellular) noise: distance to the nearest of one random
+         * point per cell, from 0 up to about 1.2. Stones, cells, caves.
+         */
+        worley2(x: number, y: number): number;
+        worley3(x: number, y: number, z: number): number;
+
+        /**
+         * Fractal sum of octaves of `type`, normalized to its range (about
+         * [-1, 1], or [0, 1.2] for Worley).
+         */
+        fbm2(x: number, y: number, options?: FractalOptions): number;
+        fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
+
+        /**
+         * Samples `width * height` cells row by row into `out` and returns
+         * it. Cell (col, row) is at ((col + x) * scale, (row + y) * scale).
+         * The noise range is mapped onto [min, max]. Blocks the frame: a
+         * 128x128 grid of 4 octaves takes about 60 ms on the PS2.
+         */
+        fill(out: Float32Array, width: number, height: number,
+            options?: FillOptions): Float32Array;
+    }
+
+    /** Independent noise with the tables of its own seed. */
+    class Generator implements Source {
+        /** Tables of `seed`, or from the clock without one. */
+        constructor(seed?: Seed);
+        seed(seed?: Seed): void;
+        perlin2(x: number, y: number): number;
+        perlin3(x: number, y: number, z: number): number;
+        simplex2(x: number, y: number): number;
+        simplex3(x: number, y: number, z: number): number;
+        worley2(x: number, y: number): number;
+        worley3(x: number, y: number, z: number): number;
+        fbm2(x: number, y: number, options?: FractalOptions): number;
+        fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
+        fill(out: Float32Array, width: number, height: number,
+            options?: FillOptions): Float32Array;
+    }
+
+    /** The script's noise (seed 0 at start): see `Source`. */
+    function seed(seed?: Seed): void;
+    function perlin2(x: number, y: number): number;
+    function perlin3(x: number, y: number, z: number): number;
+    function simplex2(x: number, y: number): number;
+    function simplex3(x: number, y: number, z: number): number;
+    function worley2(x: number, y: number): number;
+    function worley3(x: number, y: number, z: number): number;
+    function fbm2(x: number, y: number, options?: FractalOptions): number;
+    function fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
+    function fill(out: Float32Array, width: number, height: number,
+        options?: FillOptions): Float32Array;
+
+    /**
+     * Classifies `values` into tile ids and returns `out`: each value gets
+     * `tiles[k]`, where k is how many of the ascending `thresholds` are
+     * <= the value. `tiles` has one entry more than `thresholds`.
+     */
+    function toTiles(out: Uint16Array, values: Float32Array,
+        thresholds: number[] | Float32Array, tiles: number[] | Uint16Array): Uint16Array;
+}
+
+
 /* === Module: Screen (screen) === */
 /**
  * Display, frame synchronization, VRAM statistics and GS state controls.

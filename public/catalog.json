@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-26T19:31:32.911Z",
+  "generatedAt": "2026-09-26T22:23:32.250Z",
   "modules": [
     {
       "id": "archive",
@@ -479,6 +479,28 @@
       }
     },
     {
+      "id": "noise",
+      "name": "Noise",
+      "description": "Procedural noise in C: Perlin and simplex (2D/3D), Worley, fBm/ridged/billow with domain warp, and batch fills of Float32Array grids (also in the background) classified into TileMap tile ids.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "random",
+          "thread"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Noise",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "poweroff",
       "name": "Power Off",
       "description": "IOP poweroff driver, started from athena.ini or IOP.loadModule().",
@@ -497,6 +519,25 @@
       "api": {
         "native": true,
         "quickjs": false
+      }
+    },
+    {
+      "id": "random",
+      "name": "Random",
+      "description": "Seedable random generators (xoshiro128**): integers, floats, booleans, gaussian, pick, shuffle, weighted choice and savable state.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Random",
+      "api": {
+        "native": true,
+        "quickjs": true
       }
     },
     {

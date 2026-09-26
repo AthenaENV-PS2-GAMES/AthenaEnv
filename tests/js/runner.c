@@ -6,8 +6,8 @@
  * object was released. Run with tests/js/run.sh.
  *
  * Only modules without hardware dependencies can be linked here: Box2D,
- * and MemoryCard against the fake card of tests/host/fake_libmc.h. The
- * JavaScript modules (Ease, Tween) load from their sources, with a
+ * Random, Noise, and MemoryCard against the fake card of
+ * tests/host/fake_libmc.h. The JavaScript modules (Ease, Tween) load from their sources, with a
  * JavaScript stand-in for Loop. A minimal setTimeout runs after the script,
  * for awaited MemoryCard jobs and the Loop stand-in's frames.
  */
@@ -23,6 +23,8 @@
 JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
 JSModuleDef *athena_memcard_init(JSContext *ctx);
+JSModuleDef *athena_random_init(JSContext *ctx);
+JSModuleDef *athena_noise_init(JSContext *ctx);
 void athena_js_job_class_init(JSContext *ctx);
 void memcard_host_init(void);
 
@@ -226,6 +228,8 @@ int main(int argc, char **argv) {
     /* As generated in src/generated/js_registry.c. */
     static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;"
         "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;"
+        "import * as Random from 'Random'; globalThis.Random = Random;"
+        "import * as Noise from 'Noise'; globalThis.Noise = Noise;"
         "import * as Ease from 'Ease'; globalThis.Ease = Ease;"
         "import * as Tween from 'Tween'; globalThis.Tween = Tween;";
     JSRuntime *rt;
@@ -256,6 +260,8 @@ int main(int argc, char **argv) {
     memcard_host_init();
     athena_js_job_class_init(ctx);   /* as the Thread module does */
     athena_memcard_init(ctx);
+    athena_random_init(ctx);
+    athena_noise_init(ctx);
     if (eval_module(ctx, bootstrap, strlen(bootstrap), "<bootstrap>") < 0)
         return 2;
     code = read_file(argv[1], &length);
