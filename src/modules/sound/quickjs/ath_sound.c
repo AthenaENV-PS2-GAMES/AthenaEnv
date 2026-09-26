@@ -6,6 +6,7 @@
 
 #include <ath_env.h>
 #include <athena/sound.h>
+#include <athena/js/job.h>
 
 #include "ath_sound.h"
 
@@ -718,54 +719,68 @@ static const JSCFunctionListEntry sfx_proto[] = {
 
 /* --- Loading sound effects on a worker ---------------------------------- */
 
-static JSClassID sfx_job_class_id;
-
-/* A Sound.loadSfxAsync() job; keeps its outcome so every poll returns it. */
+/*
+ * A Sound.loadSfxAsync() job, on the shared Job layer (athena/js/job.h). The
+ * layer follows the read on the pool; settling uploads the sample on the
+ * script thread through athena_sfx_job_poll().
+ */
 typedef struct {
     AthenaSfxJob *job;
     char *path;
-    JSValue result;
-    JSValue error;
-} JSSfxJob;
+} SfxJobInfo;
 
-static void sfx_job_finalizer(JSRuntime *rt, JSValue value) {
-    JSSfxJob *entry = JS_GetOpaque(value, sfx_job_class_id);
+static int sfx_job_settle(JSContext *ctx, AthenaJob *read, AthenaJobState state, int unused,
+    void *user, JSValue *outcome, bool *failed) {
+    SfxJobInfo *info = user;
+    AthenaSfxJobState sfx_state;
+    AthenaSfx *sfx;
+    int result;
 
-    if (!entry)
-        return;
-    athena_sfx_job_destroy(entry->job);
-    JS_FreeValueRT(rt, entry->result);
-    JS_FreeValueRT(rt, entry->error);
-    free(entry->path);
-    free(entry);
-}
-
-static void sfx_job_gc_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func) {
-    JSSfxJob *entry = JS_GetOpaque(value, sfx_job_class_id);
-
-    if (entry) {
-        JS_MarkValue(rt, entry->result, mark_func);
-        JS_MarkValue(rt, entry->error, mark_func);
+    sfx_state = athena_sfx_job_poll(info->job, &sfx, &result);
+    if (sfx) {
+        *outcome = sound_new_object(ctx, JS_UNDEFINED, sfx_class_id);
+        if (JS_IsException(*outcome)) {
+            athena_sfx_destroy(sfx);
+            *outcome = JS_UNDEFINED;
+            return -1;
+        }
+        JS_SetOpaque(*outcome, sfx);
+        return 0;
     }
+    *failed = true;
+    if (sfx_state == ATHENA_SFX_JOB_CANCELLED)
+        sound_raise(ctx, SOUND_INTERNAL_ERROR, "CANCELLED", "Sound.loadSfxAsync: cancelled: %s",
+            info->path ? info->path : "");
+    else
+        sound_throw(ctx, "Sound.loadSfxAsync", result, info->path, true);
+    *outcome = JS_GetException(ctx);
+    return 0;
 }
 
-static JSClassDef sfx_job_class = {
-    "SfxJob",
-    .finalizer = sfx_job_finalizer,
-    .gc_mark = sfx_job_gc_mark,
+static void sfx_job_free_info(JSRuntime *rt, void *user) {
+    SfxJobInfo *info = user;
+
+    athena_sfx_job_destroy(info->job);   /* releases the read job too */
+    free(info->path);
+    free(info);
+}
+
+/* The read job belongs to the AthenaSfxJob, released by sfx_job_free_info. */
+static void sfx_job_release_none(AthenaJob *read) {
+    (void)read;
+}
+
+/* Through the AthenaSfxJob, so a read already done is not uploaded either. */
+static void sfx_job_cancel(AthenaJob *read, void *user) {
+    athena_sfx_job_cancel(((SfxJobInfo *)user)->job);
+}
+
+static const AthenaJsJobKind sfx_job_kind = {
+    "Sound", sfx_job_settle, NULL, sfx_job_free_info, sfx_job_release_none, sfx_job_cancel,
 };
 
-static JSSfxJob *sfx_job_arg(JSContext *ctx, JSValueConst value, const char *name) {
-    JSSfxJob *entry = JS_GetOpaque(value, sfx_job_class_id);
-
-    if (!entry)
-        sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT",
-            "%s: not a job from Sound.loadSfxAsync()", name);
-    return entry;
-}
-
 static JSValue js_sound_load_sfx_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSSfxJob *entry;
+    SfxJobInfo *info;
     AthenaSfxJob *job;
     const char *path;
     JSValue object;
@@ -776,101 +791,54 @@ static JSValue js_sound_load_sfx_async(JSContext *ctx, JSValueConst this_val, in
     path = sound_path(ctx, argv[0], "Sound.loadSfxAsync");
     if (!path)
         return JS_EXCEPTION;
-    entry = calloc(1, sizeof(*entry));
-    job = entry ? athena_sfx_load_async(path, &result) : NULL;
+    info = calloc(1, sizeof(*info));
+    job = info ? athena_sfx_load_async(path, &result) : NULL;
     if (!job) {
-        object = entry ? sound_throw(ctx, "Sound.loadSfxAsync", result, path, false) :
+        object = info ? sound_throw(ctx, "Sound.loadSfxAsync", result, path, false) :
             JS_ThrowOutOfMemory(ctx);
-        free(entry);
+        free(info);
         JS_FreeCString(ctx, path);
         return object;
     }
-    entry->job = job;
-    entry->path = strdup(path);
-    entry->result = JS_UNDEFINED;
-    entry->error = JS_UNDEFINED;
+    info->job = job;
+    info->path = strdup(path);
     JS_FreeCString(ctx, path);
-
-    object = JS_NewObjectClass(ctx, (int)sfx_job_class_id);
-    if (JS_IsException(object)) {
-        athena_sfx_job_destroy(job);
-        free(entry->path);
-        free(entry);
-        return object;
-    }
-    JS_SetOpaque(object, entry);
-    return object;
+    return athena_js_job_new(ctx, &sfx_job_kind, athena_sfx_job_core(job), info, "Sound.loadSfxAsync");
 }
 
-/* { state, result?, error? }; the upload happens in the first poll after the read. */
-static JSValue sfx_job_status(JSContext *ctx, JSSfxJob *entry) {
-    static const char *const states[] = { "running", "done", "failed", "cancelled" };
-    AthenaSfxJobState state;
-    AthenaSfx *sfx;
-    JSValue status;
-    int result;
-
-    state = athena_sfx_job_poll(entry->job, &sfx, &result);
-    if (sfx) {
-        JSValue object = sound_new_object(ctx, JS_UNDEFINED, sfx_class_id);
-        if (JS_IsException(object)) {
-            athena_sfx_destroy(sfx);
-            return object;
-        }
-        JS_SetOpaque(object, sfx);
-        entry->result = object;
+/* Module functions: the same as the job's own poll(), wait() and cancel(). */
+static int sfx_job_arg(JSContext *ctx, int argc, JSValueConst *argv, int max, const char *name) {
+    if (!sound_argc(ctx, argc, 1, max, name))
+        return -1;
+    if (!athena_js_job_is(argv[0], &sfx_job_kind)) {
+        sound_raise(ctx, SOUND_TYPE_ERROR, "INVALID_ARGUMENT",
+            "%s: not a job from Sound.loadSfxAsync()", name);
+        return -1;
     }
-    if (state == ATHENA_SFX_JOB_FAILED && JS_IsUndefined(entry->error)) {
-        sound_throw(ctx, "Sound.loadSfxAsync", result, entry->path, true);
-        entry->error = JS_GetException(ctx);
-    } else if (state == ATHENA_SFX_JOB_CANCELLED && JS_IsUndefined(entry->error)) {
-        sound_raise(ctx, SOUND_INTERNAL_ERROR, "CANCELLED", "Sound.loadSfxAsync: cancelled: %s",
-            entry->path ? entry->path : "");
-        entry->error = JS_GetException(ctx);
-    }
-
-    status = JS_NewObject(ctx);
-    if (JS_IsException(status))
-        return status;
-    JS_SetPropertyStr(ctx, status, "state", JS_NewString(ctx, states[state]));
-    if (state == ATHENA_SFX_JOB_DONE)
-        JS_SetPropertyStr(ctx, status, "result", JS_DupValue(ctx, entry->result));
-    if (!JS_IsUndefined(entry->error))
-        JS_SetPropertyStr(ctx, status, "error", JS_DupValue(ctx, entry->error));
-    return status;
+    return 0;
 }
 
 static JSValue js_sound_poll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSSfxJob *entry;
-
-    if (!sound_argc(ctx, argc, 1, 1, "Sound.poll") ||
-        !(entry = sfx_job_arg(ctx, argv[0], "Sound.poll")))
+    if (sfx_job_arg(ctx, argc, argv, 1, "Sound.poll") < 0)
         return JS_EXCEPTION;
-    return sfx_job_status(ctx, entry);
+    return athena_js_job_poll(ctx, argv[0], &sfx_job_kind, "Sound.poll");
 }
 
 static JSValue js_sound_wait(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSSfxJob *entry;
     int timeout = -1;
 
-    if (!sound_argc(ctx, argc, 1, 2, "Sound.wait") ||
-        !(entry = sfx_job_arg(ctx, argv[0], "Sound.wait")))
+    if (sfx_job_arg(ctx, argc, argv, 2, "Sound.wait") < 0)
         return JS_EXCEPTION;
     if (argc > 1 && !JS_IsUndefined(argv[1]) &&
         !sound_int(ctx, argv[1], 0, INT32_MAX, "Sound.wait timeoutMs", &timeout))
         return JS_EXCEPTION;
-    athena_sfx_job_wait(entry->job, timeout);
-    return sfx_job_status(ctx, entry);
+    return athena_js_job_wait(ctx, argv[0], argc - 1, argv + 1, &sfx_job_kind, "Sound.wait");
 }
 
 static JSValue js_sound_cancel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSSfxJob *entry;
-
-    if (!sound_argc(ctx, argc, 1, 1, "Sound.cancel") ||
-        !(entry = sfx_job_arg(ctx, argv[0], "Sound.cancel")))
+    if (sfx_job_arg(ctx, argc, argv, 1, "Sound.cancel") < 0)
         return JS_EXCEPTION;
-    athena_sfx_job_cancel(entry->job);
-    return JS_UNDEFINED;
+    return athena_js_job_cancel(ctx, argv[0], &sfx_job_kind, "Sound.cancel");
 }
 
 /* --- Module ------------------------------------------------------------- */
@@ -913,8 +881,7 @@ static int sound_define_class(JSContext *ctx, JSModuleDef *m, JSClassID *class_i
 }
 
 static int sound_module_init(JSContext *ctx, JSModuleDef *m) {
-    if (athena_register_class(ctx, &sfx_job_class_id, &sfx_job_class) < 0 ||
-        sound_define_class(ctx, m, &stream_class_id, &stream_class, js_stream_ctor, "Stream",
+    if (sound_define_class(ctx, m, &stream_class_id, &stream_class, js_stream_ctor, "Stream",
             stream_proto, countof(stream_proto)) < 0 ||
         sound_define_class(ctx, m, &sfx_class_id, &sfx_class, js_sfx_ctor, "Sfx",
             sfx_proto, countof(sfx_proto)) < 0)

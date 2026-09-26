@@ -4,6 +4,7 @@
 
 #include <ath_env.h>
 #include <ath_gil.h>
+#include <athena/js/job.h>
 #include <athena/thread.h>
 
 static JSClassID athena_thread_class_id;
@@ -15,7 +16,15 @@ typedef struct {
     /* Strong reference held while the worker runs, so the handle cannot be
      * finalized (with the gate held by the main thread) under an active worker. */
     JSValue self;
+    /* JavaScript stack budget of the worker (ath_gil.h). */
+    size_t stack_budget;
 } AthenaThreadJsObject;
+
+/* JavaScript threads: default and minimum stacks, and what is kept for the C
+ * code they call; QuickJS gets the rest (athena_js_gil_set_stack_budget). */
+#define JS_THREAD_DEFAULT_STACK (32 * 1024)
+#define JS_THREAD_MIN_STACK (16 * 1024)
+#define JS_THREAD_STACK_RESERVE (8 * 1024)
 
 static void athena_thread_invalidate_owner(void *owner) {
     AthenaThreadJsObject *obj = (AthenaThreadJsObject *)owner;
@@ -31,6 +40,7 @@ static void athena_thread_worker(void *arg) {
         return;
     }
 
+    athena_js_gil_set_stack_budget(obj->stack_budget);
     athena_js_gil_lock();
 
     /* Releasing self may finalize obj on this thread, so cache what is
@@ -124,15 +134,16 @@ static JSValue athena_thread_new(JSContext *ctx, JSValueConst this_val, int argc
         }
     }
 
-    uint32_t stack_size = ATHENA_THREAD_DEFAULT_STACK_SIZE;
+    uint32_t stack_size = JS_THREAD_DEFAULT_STACK;
     if (argc >= 3 && !JS_IsUndefined(argv[2])) {
         if (JS_ToUint32(ctx, &stack_size, argv[2]) < 0) {
             if (allocated_name) JS_FreeCString(ctx, allocated_name);
             return JS_EXCEPTION;
         }
-        if (stack_size < 2048) {
+        if (stack_size < JS_THREAD_MIN_STACK) {
             if (allocated_name) JS_FreeCString(ctx, allocated_name);
-            return JS_ThrowRangeError(ctx, "Thread stack size must be at least 2048 bytes");
+            return JS_ThrowRangeError(ctx, "Thread stack size must be at least %d bytes",
+                JS_THREAD_MIN_STACK);
         }
     }
 
@@ -157,6 +168,7 @@ static JSValue athena_thread_new(JSContext *ctx, JSValueConst this_val, int argc
     obj->ctx = ctx;
     obj->func = JS_DupValue(ctx, argv[0]);
     obj->self = JS_UNDEFINED;
+    obj->stack_budget = stack_size - JS_THREAD_STACK_RESERVE;
 
     obj->thread = athena_thread_core_create(name_str, athena_thread_worker, obj, stack_size, priority);
     if (allocated_name) {
@@ -413,6 +425,8 @@ static int athena_thread_module_init(JSContext *ctx, JSModuleDef *m) {
 }
 
 JSModuleDef *athena_thread_init(JSContext *ctx) {
+    /* The Job class of every module's background jobs (athena/js/job.h). */
+    athena_js_job_class_init(ctx);
     return athena_push_module(ctx, athena_thread_module_init,
         thread_module_funcs, countof(thread_module_funcs), "Thread");
 }

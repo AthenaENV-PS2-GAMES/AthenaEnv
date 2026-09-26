@@ -264,7 +264,7 @@ declare namespace MemoryCard {
      * the result or rejects with the `MemoryCard.Error`. Dropping the handle
      * cancels the job.
      */
-    interface Job<T> extends PromiseLike<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'MemoryCardJob';
     }
 

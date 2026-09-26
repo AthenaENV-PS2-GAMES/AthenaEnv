@@ -19,7 +19,8 @@
   "dependencies": {
     "modules": [
       "graphics",
-      "color"
+      "color",
+      "thread"
     ],
     "iop": [],
     "ee_libs": [

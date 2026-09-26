@@ -136,7 +136,7 @@ declare namespace Mutex {
  * ```js
  * const worker = Thread.new(() => {
  *     System.delay();
- * }, 'worker', 16384, 16);
+ * }, 'worker', 32768, 16);
  * Thread.start(worker);
  * console.log(Thread.getStatus(worker));
  * Thread.destroy(worker);
@@ -164,7 +164,9 @@ declare namespace Thread {
      * Creates a native EE thread.
      * @param callback Function executed by the new thread.
      * @param name Optional name, limited to 63 characters.
-     * @param stackSize Stack size in bytes; defaults to 16384.
+     * @param stackSize Stack size in bytes, at least 16384; defaults to 32768.
+     *   JavaScript may use it all but 8 KB: deeper recursion throws a
+     *   catchable "stack overflow" instead of overrunning the stack.
      * @param priority EE priority from 1 to 127; defaults to 16.
      */
     function new(
@@ -200,6 +202,41 @@ declare namespace Thread {
 
     /** Force-terminates a native thread by ID. */
     function kill(id: number): number;
+}
+
+/**
+ * A background job, as returned by `MemoryCard.readFileAsync()`,
+ * `Archive.extractAsync()`, `Sound.loadSfxAsync()`, `Font.loadAsync()`...
+ * Jobs run on a small shared pool of worker threads while frames keep
+ * coming. Every job can be awaited, polled, waited for and cancelled; the
+ * module functions (`MemoryCard.poll(job)`, ...) do the same.
+ *
+ * @example
+ * ```js
+ * const font = await Font.loadAsync("fonts/title.ttf", { size: 40 });
+ *
+ * const job = Archive.extractAsync("dlc.zip", "mass:/GAME/dlc");
+ * Loop.run(() => {
+ *     const status = job.poll();          // { state, result | error, ...progress }
+ *     if (status.state === "running") drawProgress(status.bytesDone, status.bytesTotal);
+ * });
+ * ```
+ */
+interface AthenaJob<T, Status extends AthenaJobStatus<T> = AthenaJobStatus<T>> extends PromiseLike<T> {
+    /** State without blocking; the result or error is converted once and kept. */
+    poll(): Status;
+    /** Blocks until the job settles or `timeoutMs` passes, then polls. */
+    wait(timeoutMs?: number): Status;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    cancel(): void;
+}
+
+interface AthenaJobStatus<T> {
+    state: 'running' | 'done' | 'failed' | 'cancelled';
+    /** When `state` is `'done'`. The same value on every later poll. */
+    result?: T;
+    /** When `state` is `'failed'` or `'cancelled'`. */
+    error?: Error;
 }
 
 
@@ -358,14 +395,13 @@ declare namespace Archive {
     /* --- Background jobs ------------------------------------------------ */
 
     /**
-     * Opaque handle for work running on a worker thread. The worker opens its
-     * own copy of the archive and never runs script code; the script calls
-     * `poll()` (e.g. once per frame) to follow it. Dropping the handle cancels
-     * the job.
+     * Work running on the shared job pool (see `AthenaJob`). The worker opens
+     * its own copy of the archive and never runs script code; the script
+     * awaits the job, or calls `poll()` (e.g. once per frame) to follow it.
+     * Dropping the handle cancels the job.
      */
-    interface Job<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'ArchiveJob';
-        readonly __result?: T;
     }
 
     type JobState = 'running' | 'done' | 'failed' | 'cancelled';
@@ -1615,9 +1651,46 @@ declare namespace Ease {
  * bitmap font (`.bmp`, `.png` or `.jpg`, optionally with a `.dat` width file).
  * With no path, the embedded Quicksand Regular font is used. Text is queued
  * into the current graphics command stream.
+ *
+ * TrueType glyphs are rasterized once at `size` pixels and cached; `scale`
+ * stretches them, so prefer a matching `size` for large text. The same file
+ * at the same size is loaded once and shared, and at most 16 different
+ * TrueType fonts are loaded at a time: call `free()` on fonts no longer used.
+ * Glyphs keep their proportions on NTSC, PAL, 480p and 16:9 modes, and follow
+ * `Screen.setMode()`.
+ *
+ * @example
+ * ```js
+ * const title = new Font("fonts/title.ttf", { size: 48 });
+ * title.outlineColor = Color.new(0, 0, 0);
+ * title.outline = 2;
+ * title.print(320, 40, "Game Over\nPress START");   // \n starts a new line
+ * ```
  */
 declare class Font {
-    constructor(path?: string);
+    /** Loads `path`, or the embedded font when omitted, undefined or null. */
+    constructor(path?: string | null, options?: Font.Options);
+    constructor(options: Font.Options);
+
+    /**
+     * Loads a TrueType font without stalling the frame loop: the file is read
+     * on the shared job pool, then the Font is created on the script thread
+     * when the job is awaited or polled. Bitmap fonts load with `new Font()`.
+     *
+     * @example
+     * ```js
+     * async function start() {
+     *     const title = await Font.loadAsync("fonts/title.ttf", { size: 48 });
+     *     Loop.run(() => title.print(40, 40, "Ready"));
+     * }
+     * start();
+     * ```
+     */
+    static loadAsync(path?: string | null, options?: Font.Options): Font.Job;
+    /** Same as `job.poll()`, `job.wait()` and `job.cancel()`. */
+    static poll(job: Font.Job): AthenaJobStatus<Font>;
+    static wait(job: Font.Job, timeoutMs?: number): AthenaJobStatus<Font>;
+    static cancel(job: Font.Job): void;
 
     static readonly ALIGN_TOP: number;
     static readonly ALIGN_BOTTOM: number;
@@ -1630,15 +1703,44 @@ declare class Font {
 
     scale: number;
     color: Color.Value;
+    /** Horizontal alignment applies to each line. */
     align: number;
     outline: number;
-    outline_color: Color.Value;
+    outlineColor: Color.Value;
     dropshadow: number;
+    dropshadowColor: Color.Value;
+    /** @deprecated Use `outlineColor`. */
+    outline_color: Color.Value;
+    /** @deprecated Use `dropshadowColor`. */
     dropshadow_color: Color.Value;
+    /** TrueType rasterization size in pixels (0 for bitmap fonts). */
+    readonly size: number;
+    /** Distance between two lines at the current `scale`, in pixels. */
+    readonly lineHeight: number;
 
+    /** Queues `text`; `\n` starts a new line. */
     print(x: number, y: number, text: string): void;
+    /** Width of the widest line and height of all lines, in pixels. */
     getTextSize(text: string): { width: number; height: number };
+    /** Keeps `text` ready to print repeatedly. */
     render(text: string): FontRender;
+    /**
+     * Releases the font now instead of when the collector finds the object.
+     * Using it afterwards throws; FontRender objects made from it throw too.
+     */
+    free(): void;
+}
+
+declare namespace Font {
+    /** A `Font.loadAsync()` job. */
+    interface Job extends AthenaJob<Font> {
+        readonly __brand: 'FontJob';
+    }
+
+    interface Options {
+        /** TrueType rasterization size in pixels, 6 to 128; defaults to 26. */
+        size?: number;
+    }
 }
 
 declare class FontRender {
@@ -1980,6 +2082,17 @@ type ImageDrawOptions = {
     color?: number;
 };
 
+/** Options of `drawList()`. */
+type ImageDrawListOptions = {
+    /** Offset added to every sprite; defaults to 0. */
+    x?: number;
+    y?: number;
+    /** First record to draw; defaults to 0. */
+    first?: number;
+    /** Records to draw; defaults to the rest of the buffer. */
+    count?: number;
+};
+
 /** Options controlling image creation and texture upload behavior. */
 type ImageOptions = {
     /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
@@ -2040,6 +2153,25 @@ declare class Image {
     error(): ImageLoadError | undefined;
     /** Queues a textured sprite at `(x, y)` for the current frame. */
     draw(x: number, y: number, options?: ImageDrawOptions): void;
+    /**
+     * Queues many sprites of this image at once: the texture state is sent
+     * once per 128 sprites instead of once per sprite, which makes it several
+     * times cheaper than as many `draw()` calls. `sprites` uses the record
+     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
+     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
+     * buffer serves both; the TileMap module is not required. Records with a
+     * zero width or height are skipped.
+     *
+     * @example
+     * ```js
+     * const sprites = new Float32Array(16 * count);        // 64-byte records
+     * const colors = new Uint32Array(sprites.buffer);
+     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
+     * //           colors[16*i + 8..11] = r, g, b, a
+     * image.drawList(sprites, { x: cameraX, y: cameraY });
+     * ```
+     */
+    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
     /** Uploads the image synchronously and pins its VRAM allocation. */
     lock(): boolean;
     /** Allows the texture manager to evict the image from VRAM. */
@@ -2939,7 +3071,7 @@ declare namespace MemoryCard {
      * the result or rejects with the `MemoryCard.Error`. Dropping the handle
      * cancels the job.
      */
-    interface Job<T> extends PromiseLike<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'MemoryCardJob';
     }
 
@@ -3292,12 +3424,11 @@ declare namespace Sound {
     function process(): number;
 
     /**
-     * Opaque handle of a `loadSfxAsync()` job. Dropping it cancels the job
-     * (and frees the sample if nobody took it from `poll()`).
+     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
+     * Dropping it cancels the job (and frees the sample if nobody took it).
      */
-    interface Job<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'SoundJob';
-        readonly __result?: T;
     }
 
     type JobState = 'running' | 'done' | 'failed' | 'cancelled';

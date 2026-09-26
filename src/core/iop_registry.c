@@ -99,13 +99,19 @@ char *get_block_device(const char* path) {
 	strncpy(massdev, path, 6);
 	int fd = fileXioDopen(massdev);
 	if (fd >= 0) {
-		char dev_name[10];
-		if (fileXioIoctl2(fd, USBMASS_IOCTL_GET_DRIVERNAME, NULL, 0, dev_name, sizeof(dev_name) - 1) >= 0) {
-			fileXioDclose(fd);
-
-			if (!strncmp(dev_name, "usb", 3)) {
+		char dev_name[10] = { 0 };   /* the driver name may fill it without a terminator */
+		int ret = fileXioIoctl2(fd, USBMASS_IOCTL_GET_DRIVERNAME, NULL, 0, dev_name, sizeof(dev_name) - 1);
+		fileXioDclose(fd);
+		if (ret >= 0) {
+			/* BDM driver names: "usb", "sdc" (MX4SIO), "ata" (internal HDD), "sd" (i.LINK). */
+			if (!strcmp(dev_name, "usb"))
 				return "usbmass_bd";
-			}
+			if (!strcmp(dev_name, "sdc"))
+				return "mx4sio_bd";
+			if (!strcmp(dev_name, "ata"))
+				return "ata_bd";
+			if (!strcmp(dev_name, "sd"))
+				return "IEEE1394_bd";
 		}
 	}
 

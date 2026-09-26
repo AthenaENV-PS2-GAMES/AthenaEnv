@@ -19,6 +19,7 @@ extern JSModuleDef *athena_draw_init(JSContext *ctx);
 extern JSModuleDef *athena_font_init(JSContext *ctx);
 extern JSModuleDef *athena_gamepad_init(JSContext *ctx);
 extern JSModuleDef *athena_image_init(JSContext *ctx);
+extern void athena_image_cleanup(JSContext *ctx);
 extern JSModuleDef *athena_imagelist_init(JSContext *ctx);
 extern JSModuleDef *athena_iop_init(JSContext *ctx);
 extern JSModuleDef *athena_loop_init(JSContext *ctx);
@@ -47,7 +48,7 @@ static const AthenaModuleEntry athena_registered_modules[] = {
     { "erl", "Native Modules (ERL)", NULL, NULL, NULL },
     { "font", "Font", "Font", athena_font_init, NULL },
     { "gamepad", "Gamepad", "Gamepad", athena_gamepad_init, NULL },
-    { "image", "Image", "Image", athena_image_init, NULL },
+    { "image", "Image", "Image", athena_image_init, athena_image_cleanup },
     { "imagelist", "ImageList", "ImageList", athena_imagelist_init, NULL },
     { "iop", "IOP", "IOP", athena_iop_init, NULL },
     { "loop", "Loop", "Loop", athena_loop_init, athena_loop_cleanup },

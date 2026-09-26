@@ -134,12 +134,11 @@ declare namespace Sound {
     function process(): number;
 
     /**
-     * Opaque handle of a `loadSfxAsync()` job. Dropping it cancels the job
-     * (and frees the sample if nobody took it from `poll()`).
+     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
+     * Dropping it cancels the job (and frees the sample if nobody took it).
      */
-    interface Job<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'SoundJob';
-        readonly __result?: T;
     }
 
     type JobState = 'running' | 'done' | 'failed' | 'cancelled';

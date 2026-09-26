@@ -5,6 +5,7 @@
 #include <ath_env.h>
 #include <ath_gil.h>
 #include <athena/archive.h>
+#include <athena/js/job.h>
 
 /*
  * Long operations (indexing a tar.gz, reading and extracting entries) run
@@ -598,41 +599,75 @@ static JSValue athena_archive_gzip_js(JSContext *ctx, JSValueConst this_val, int
 /* Background jobs                                                          */
 /* ------------------------------------------------------------------------ */
 
-/*
- * The worker owns its own archive and never runs script code: the script
- * polls. The result is converted once and kept, so every later poll()
- * returns the same ArrayBuffer or error object.
- */
-typedef struct JobHandle {
-    AthenaArchiveJob *job;
+/* What an Archive Job object (athena/js/job.h) keeps next to the native job. */
+typedef struct {
     const char *name;           /* "Archive.extractAsync" / "Archive.readAsync" */
     bool read;
-    bool settled;
-    JSValue outcome;            /* result or error once settled */
-} JobHandle;
+} ArchiveJobInfo;
 
-static JSClassID athena_archive_job_class_id;
+/* Converts the outcome once: an ArrayBuffer, the entries written, or an error. */
+static int archive_job_settle(JSContext *ctx, AthenaJob *job, AthenaJobState state, int result,
+    void *user, JSValue *outcome, bool *failed) {
+    ArchiveJobInfo *info = user;
+    AthenaArchiveJobStatus status;
 
-static void athena_archive_job_finalizer(JSRuntime *rt, JSValue value) {
-    JobHandle *handle = JS_GetOpaque(value, athena_archive_job_class_id);
-    if (!handle) return;
-    /* Cancels and joins: at most one block of work remains. */
-    athena_archive_job_destroy(handle->job);
-    JS_FreeValueRT(rt, handle->outcome);
-    free(handle);
+    if (state == ATHENA_JOB_DONE) {
+        if (info->read) {
+            void *data = NULL;
+            size_t size = 0;
+            athena_archive_job_take_data((AthenaArchiveJob *)job, &data, &size);
+            if (!data)
+                data = malloc(1);
+            if (!data) {
+                JS_ThrowOutOfMemory(ctx);
+                return -1;
+            }
+            *outcome = archive_new_buffer(ctx, data, size);
+        } else {
+            *outcome = JS_NewInt32(ctx, result);
+        }
+    } else {
+        *failed = true;
+        athena_archive_job_status((AthenaArchiveJob *)job, &status);
+        if (status.detail[0])
+            *outcome = archive_error(ctx, result, "%s: %s: %s", info->name,
+                athena_archive_strerror(result), status.detail);
+        else
+            *outcome = archive_error(ctx, result, "%s: %s", info->name,
+                athena_archive_strerror(result));
+    }
+    if (JS_IsException(*outcome)) {
+        *outcome = JS_UNDEFINED;
+        return -1;
+    }
+    return 0;
 }
 
-static JSClassDef athena_archive_job_class = {
-    "AthenaArchiveJob",
-    .finalizer = athena_archive_job_finalizer,
+static void archive_job_status(JSContext *ctx, AthenaJob *job, void *user, JSValue object) {
+    AthenaArchiveJobStatus status;
+
+    athena_archive_job_status((AthenaArchiveJob *)job, &status);
+    JS_DefinePropertyValueStr(ctx, object, "entry", JS_NewString(ctx, status.entry), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "entriesDone", JS_NewInt32(ctx, status.entries_done), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "entriesTotal", JS_NewInt32(ctx, status.entries_total), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "bytesDone",
+        JS_NewInt64(ctx, (int64_t)status.bytes_done), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "bytesTotal",
+        JS_NewInt64(ctx, (int64_t)status.bytes_total), JS_PROP_C_W_E);
+}
+
+static void archive_job_free_info(JSRuntime *rt, void *user) {
+    free(user);
+}
+
+/* Cancels and waits: the job stops at the next block and closes its archive. */
+static void archive_job_release(AthenaJob *job) {
+    athena_archive_job_destroy((AthenaArchiveJob *)job);
+}
+
+static const AthenaJsJobKind archive_job_kind = {
+    "Archive", archive_job_settle, archive_job_status, archive_job_free_info, archive_job_release,
 };
-
-static JobHandle *archive_job_handle(JSContext *ctx, JSValueConst value, const char *name) {
-    JobHandle *handle = JS_GetOpaque2(ctx, value, athena_archive_job_class_id);
-    if (!handle)
-        archive_throw(ctx, ATHENA_ARCHIVE_ERR_ARGUMENT, NULL, "%s: expected an Archive job", name);
-    return handle;
-}
 
 /* Callbacks cannot run on the worker thread: say so instead of ignoring them. */
 static int archive_reject_callbacks(JSContext *ctx, JSValueConst options, const char *name) {
@@ -710,28 +745,18 @@ static void archive_free_include(JSContext *ctx, const char **items, int count) 
 }
 
 static JSValue archive_new_job(JSContext *ctx, AthenaArchiveJob *job, const char *name, bool read) {
-    JobHandle *handle;
-    JSValue object;
+    ArchiveJobInfo *info;
 
     if (!job)
-        return archive_throw(ctx, ATHENA_ARCHIVE_ERR_MEMORY, NULL, "%s: cannot start the worker thread", name);
-    handle = calloc(1, sizeof(*handle));
-    if (!handle) {
+        return archive_throw(ctx, ATHENA_ARCHIVE_ERR_MEMORY, NULL, "%s: cannot start the background job", name);
+    info = calloc(1, sizeof(*info));
+    if (!info) {
         athena_archive_job_destroy(job);
         return JS_ThrowOutOfMemory(ctx);
     }
-    handle->job = job;
-    handle->name = name;
-    handle->read = read;
-    handle->outcome = JS_UNDEFINED;
-    object = JS_NewObjectClass(ctx, athena_archive_job_class_id);
-    if (JS_IsException(object)) {
-        athena_archive_job_destroy(job);
-        free(handle);
-        return object;
-    }
-    JS_SetOpaque(object, handle);
-    return object;
+    info->name = name;
+    info->read = read;
+    return athena_js_job_new(ctx, &archive_job_kind, (AthenaJob *)job, info, name);
 }
 
 /* Archive.extractAsync(path, destination?, { overwrite, maxSize, include }) */
@@ -801,116 +826,38 @@ static JSValue athena_archive_read_async_js(JSContext *ctx, JSValueConst this_va
     return result;
 }
 
-static const char *archive_job_state_name(AthenaArchiveJobState state) {
-    switch (state) {
-    case ATHENA_ARCHIVE_JOB_RUNNING: return "running";
-    case ATHENA_ARCHIVE_JOB_DONE: return "done";
-    case ATHENA_ARCHIVE_JOB_CANCELLED: return "cancelled";
-    default: return "failed";
-    }
-}
-
-/* Converts the outcome once, the first time the job is seen settled. */
-static int archive_job_settle(JSContext *ctx, JobHandle *handle, const AthenaArchiveJobStatus *status) {
-    if (handle->settled || status->state == ATHENA_ARCHIVE_JOB_RUNNING)
-        return 0;
-    if (status->state == ATHENA_ARCHIVE_JOB_DONE) {
-        if (handle->read) {
-            void *data = NULL;
-            size_t size = 0;
-            athena_archive_job_take_data(handle->job, &data, &size);
-            if (!data)
-                data = malloc(1);
-            if (!data) {
-                JS_ThrowOutOfMemory(ctx);
-                return -1;
-            }
-            handle->outcome = archive_new_buffer(ctx, data, size);
-        } else {
-            handle->outcome = JS_NewInt32(ctx, status->result);
-        }
-    } else if (status->detail[0]) {
-        handle->outcome = archive_error(ctx, status->result, "%s: %s: %s", handle->name,
-            athena_archive_strerror(status->result), status->detail);
-    } else {
-        handle->outcome = archive_error(ctx, status->result, "%s: %s", handle->name,
-            athena_archive_strerror(status->result));
-    }
-    if (JS_IsException(handle->outcome)) {
-        handle->outcome = JS_UNDEFINED;
+/* Module functions: the same as the job's own poll(), wait() and cancel(). */
+static int archive_job_arg(JSContext *ctx, int argc, JSValueConst *argv, int max, const char *name) {
+    if (!archive_argc(ctx, argc, 1, max, name))
+        return -1;
+    if (!athena_js_job_is(argv[0], &archive_job_kind)) {
+        archive_throw(ctx, ATHENA_ARCHIVE_ERR_ARGUMENT, NULL, "%s: expected an Archive job", name);
         return -1;
     }
-    handle->settled = true;
     return 0;
 }
 
-static JSValue archive_job_status_object(JSContext *ctx, JobHandle *handle) {
-    AthenaArchiveJobStatus status;
-    JSValue object;
-
-    athena_archive_job_status(handle->job, &status);
-    if (archive_job_settle(ctx, handle, &status) < 0)
-        return JS_EXCEPTION;
-
-    object = JS_NewObject(ctx);
-    if (JS_IsException(object)) return object;
-    JS_DefinePropertyValueStr(ctx, object, "state",
-        JS_NewString(ctx, archive_job_state_name(status.state)), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "entry", JS_NewString(ctx, status.entry), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "entriesDone", JS_NewInt32(ctx, status.entries_done), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "entriesTotal", JS_NewInt32(ctx, status.entries_total), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "bytesDone",
-        JS_NewInt64(ctx, (int64_t)status.bytes_done), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "bytesTotal",
-        JS_NewInt64(ctx, (int64_t)status.bytes_total), JS_PROP_C_W_E);
-    if (handle->settled) {
-        JS_DefinePropertyValueStr(ctx, object,
-            status.state == ATHENA_ARCHIVE_JOB_DONE ? "result" : "error",
-            JS_DupValue(ctx, handle->outcome), JS_PROP_C_W_E);
-    }
-    return object;
-}
-
 static JSValue athena_archive_poll_js(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JobHandle *handle;
-
-    if (!archive_argc(ctx, argc, 1, 1, "Archive.poll")) return JS_EXCEPTION;
-    handle = archive_job_handle(ctx, argv[0], "Archive.poll");
-    if (!handle) return JS_EXCEPTION;
-    return archive_job_status_object(ctx, handle);
+    if (archive_job_arg(ctx, argc, argv, 1, "Archive.poll") < 0) return JS_EXCEPTION;
+    return athena_js_job_poll(ctx, argv[0], &archive_job_kind, "Archive.poll");
 }
 
 static JSValue athena_archive_cancel_js(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JobHandle *handle;
-
-    if (!archive_argc(ctx, argc, 1, 1, "Archive.cancel")) return JS_EXCEPTION;
-    handle = archive_job_handle(ctx, argv[0], "Archive.cancel");
-    if (!handle) return JS_EXCEPTION;
-    athena_archive_job_cancel(handle->job);
-    return JS_UNDEFINED;
+    if (archive_job_arg(ctx, argc, argv, 1, "Archive.cancel") < 0) return JS_EXCEPTION;
+    return athena_js_job_cancel(ctx, argv[0], &archive_job_kind, "Archive.cancel");
 }
 
 /* Archive.wait(job, timeoutMs?): blocks with the GIL released, then polls. */
 static JSValue athena_archive_wait_js(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JobHandle *handle;
-    int32_t timeout = -1;
-
-    if (!archive_argc(ctx, argc, 1, 2, "Archive.wait")) return JS_EXCEPTION;
-    handle = archive_job_handle(ctx, argv[0], "Archive.wait");
-    if (!handle) return JS_EXCEPTION;
+    if (archive_job_arg(ctx, argc, argv, 2, "Archive.wait") < 0) return JS_EXCEPTION;
     if (archive_arg_present(argc, argv, 1)) {
         double number;
         if (!JS_IsNumber(argv[1]) || JS_ToFloat64(ctx, &number, argv[1]) ||
             !isfinite(number) || number < 0 || number > INT32_MAX)
             return archive_throw(ctx, ATHENA_ARCHIVE_ERR_TOO_LARGE, "INVALID_ARGUMENT",
                 "Archive.wait timeout must be a non-negative number of milliseconds");
-        timeout = (int32_t)number;
     }
-
-    athena_js_gil_unlock();
-    athena_archive_job_wait(handle->job, timeout);
-    athena_js_gil_lock();
-    return archive_job_status_object(ctx, handle);
+    return athena_js_job_wait(ctx, argv[0], argc - 1, argv + 1, &archive_job_kind, "Archive.wait");
 }
 
 /* ------------------------------------------------------------------------ */
@@ -936,8 +883,7 @@ static const JSCFunctionListEntry archive_module_funcs[] = {
 };
 
 static int athena_archive_module_init(JSContext *ctx, JSModuleDef *m) {
-    if (athena_register_class(ctx, &athena_archive_class_id, &athena_archive_class) < 0 ||
-        athena_register_class(ctx, &athena_archive_job_class_id, &athena_archive_job_class) < 0)
+    if (athena_register_class(ctx, &athena_archive_class_id, &athena_archive_class) < 0)
         return -1;
     return JS_SetModuleExportList(ctx, m, archive_module_funcs, countof(archive_module_funcs));
 }

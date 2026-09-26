@@ -18,6 +18,9 @@
 #define TRUE 1
 #define JSFILE_NOTFOUND -5656
 
+/* Main-thread stack kept for the C code JavaScript calls (decoders, FreeType). */
+#define MAIN_STACK_RESERVE (24 * 1024)
+
 JSModuleDef *athena_push_module(JSContext* ctx, JSModuleInitFunc *func, const JSCFunctionListEntry *func_list, int len, const char* module_name) {
     JSModuleDef *m;
     m = JS_NewCModule(ctx, module_name, func);
@@ -272,6 +275,8 @@ void athena_runtime_request_reload(const char *script, const char *return_to) {
 
 static uint64_t exit_last_poll;
 static uint64_t exit_held_since;
+/* The pad is read on the script thread only: JavaScript threads run the interrupt handler too. */
+static int exit_script_thread = -1;
 
 static uint64_t runtime_now_ms(void) {
     return GetTimerSystemTime() / (kBUSCLK / 1000);
@@ -301,7 +306,7 @@ static void poll_exit_buttons(void) {
 /* Called by QuickJS's interrupt handler and by js_std_loop(), on the script's thread. */
 int athena_runtime_stop_requested(void) {
 #ifdef ATHENA_MODULE_GAMEPAD
-    if (!reload_pending && return_script[0])
+    if (!reload_pending && return_script[0] && GetThreadId() == exit_script_thread)
         poll_exit_buttons();
 #endif
     return reload_pending;
@@ -366,6 +371,9 @@ const char* run_script(const char* script, bool isBuffer)
     athena_js_gil_init();
     athena_js_gil_lock();
 
+#ifdef ATHENA_MODULE_GAMEPAD
+    exit_script_thread = GetThreadId();
+#endif
     JSRuntime *rt = JS_NewRuntime(); 
     if (!rt) { 
         athena_js_gil_unlock();
@@ -374,12 +382,24 @@ const char* run_script(const char* script, bool isBuffer)
     }
     
     athena_js_gil_set_runtime(rt);
+    /*
+     * QuickJS assumes 256 KB of stack; the main thread has get_stack_size()
+     * (128 KB). Past this budget deep recursion throws a catchable
+     * "stack overflow" instead of overwriting the memory below the stack.
+     */
+    athena_js_gil_set_stack_budget(get_stack_size() - MAIN_STACK_RESERVE);
+    JS_SetMaxStackSize(rt, get_stack_size() - MAIN_STACK_RESERVE);
     js_std_set_worker_new_context_func(JS_NewCustomContext);
     js_std_init_handlers(rt);
     js_std_set_interrupt_handler(rt);
 
+    /*
+     * QuickJS's adaptive cycle collection (it runs again once the heap grew
+     * by half) keeps collections short. Images, textures and glyphs are
+     * allocated outside the JS heap, so waiting for the heap to fill would
+     * keep them alive long after they became garbage.
+     */
     JS_SetMemoryLimit(rt, memoryLimit);
-    JS_SetGCThreshold(rt, memoryLimit - 2097152); // 2MB margin for GC
 
     JSContext *ctx = JS_NewCustomContext(rt); 
     if (!ctx) { 

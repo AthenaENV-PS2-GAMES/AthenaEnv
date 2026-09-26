@@ -155,7 +155,16 @@ int athena_boot(int argc, char **argv) {
 
         if (boot_device) {
             if (is_bd) {
-                load_boot_driver("usbmass_bd");
+                /*
+                 * mass: may be USB, MX4SIO, the internal HDD or i.LINK: start the
+                 * block drivers of the build, find out which one holds the boot
+                 * path (get_block_device), then keep only that one.
+                 */
+                static const char *const block_drivers[] = {
+                    "usbmass_bd", "mx4sio_bd", "ata_bd", "IEEE1394_bd", NULL,
+                };
+                for (int i = 0; block_drivers[i]; i++)
+                    load_boot_driver(block_drivers[i]);
             } else {
                 load_boot_driver(boot_device);
             }

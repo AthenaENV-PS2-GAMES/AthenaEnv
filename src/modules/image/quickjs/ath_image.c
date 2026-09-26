@@ -75,8 +75,8 @@ static void image_update_ready(AthenaImage *image)
 		image->surface->Height > 0 &&
 		size > 0 &&
 		size != UINT32_MAX &&
-		(image->surface->PSM != GS_PSM_T4 &&
-		 image->surface->PSM != GS_PSM_T8 ||
+		((image->surface->PSM != GS_PSM_T4 &&
+		  image->surface->PSM != GS_PSM_T8) ||
 		 image->surface->Clut != NULL);
 }
 
@@ -217,10 +217,26 @@ static JSValue image_constructor(JSContext *ctx, JSValueConst new_target,
 
 	image = path ? athena_image_create(path, delayed) :
 		athena_image_create_empty(delayed);
+	if (!image) {
+		/*
+		 * Pixels live outside the JavaScript heap, so the collector does not
+		 * see them: garbage images in reference cycles may be what is
+		 * holding the memory. Collect and try once more.
+		 */
+		JS_RunGC(JS_GetRuntime(ctx));
+		image = path ? athena_image_create(path, delayed) :
+			athena_image_create_empty(delayed);
+	}
+	if (!image) {
+		JSValue error = path ?
+			JS_ThrowInternalError(ctx, "failed to create Image from '%s'", path) :
+			JS_ThrowInternalError(ctx, "failed to create Image");
+		if (path)
+			JS_FreeCString(ctx, path);
+		return error;
+	}
 	if (path)
 		JS_FreeCString(ctx, path);
-	if (!image)
-		return JS_ThrowInternalError(ctx, "failed to create Image");
 
 	prototype = JS_GetPropertyStr(ctx, new_target, "prototype");
 	if (JS_IsException(prototype)) {
@@ -325,6 +341,58 @@ static JSValue image_free(JSContext *ctx, JSValueConst this_val,
 	return JS_UNDEFINED;
 }
 
+/*
+ * Option names of draw() and drawList(), as atoms made once per runtime:
+ * JS_GetPropertyStr() would turn each name into an atom again on every call.
+ */
+enum {
+	ATOM_WIDTH, ATOM_HEIGHT, ATOM_STARTX, ATOM_STARTY, ATOM_ENDX, ATOM_ENDY,
+	ATOM_ANGLE, ATOM_COLOR, ATOM_X, ATOM_Y, ATOM_FIRST, ATOM_COUNT, ATOM_TOTAL
+};
+static const char *const image_atom_names[ATOM_TOTAL] = {
+	"width", "height", "startx", "starty", "endx", "endy",
+	"angle", "color", "x", "y", "first", "count",
+};
+static JSAtom image_atoms[ATOM_TOTAL];
+/* Atoms belong to one runtime: other runtimes (os.Worker) look names up. */
+static JSRuntime *image_atoms_runtime;
+
+static JSValue image_get_option(JSContext *ctx, JSValueConst options, int atom)
+{
+	if (JS_GetRuntime(ctx) == image_atoms_runtime)
+		return JS_GetProperty(ctx, options, image_atoms[atom]);
+	return JS_GetPropertyStr(ctx, options, image_atom_names[atom]);
+}
+
+/* Reads an optional float option into target; 0 on exception. */
+static int image_option_float(JSContext *ctx, JSValueConst options, int atom,
+	float *target)
+{
+	JSValue value = image_get_option(ctx, options, atom);
+	int ok = 1;
+
+	if (JS_IsException(value))
+		return 0;
+	if (!JS_IsUndefined(value) && JS_ToFloat32(ctx, target, value))
+		ok = 0;
+	JS_FreeValue(ctx, value);
+	return ok;
+}
+
+static int image_option_uint(JSContext *ctx, JSValueConst options, int atom,
+	uint32_t *target)
+{
+	JSValue value = image_get_option(ctx, options, atom);
+	int ok = 1;
+
+	if (JS_IsException(value))
+		return 0;
+	if (!JS_IsUndefined(value) && JS_ToUint32(ctx, target, value))
+		ok = 0;
+	JS_FreeValue(ctx, value);
+	return ok;
+}
+
 static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 	JSValueConst *argv)
 {
@@ -351,32 +419,18 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 	color = image->color;
 
 	if (argc == 3) {
-		JSValue value;
-		if (!JS_IsObject(argv[2]) || JS_IsArray(ctx, argv[2]))
+		JSValueConst options = argv[2];
+		if (!JS_IsObject(options) || JS_IsArray(ctx, options))
 			return JS_ThrowTypeError(ctx, "Image.draw options must be an object");
-#define IMAGE_OPTION_FLOAT(name, target) \
-		value = JS_GetPropertyStr(ctx, argv[2], name); \
-		if (JS_IsException(value)) return JS_EXCEPTION; \
-		if (!JS_IsUndefined(value) && JS_ToFloat32(ctx, &(target), value)) { \
-			JS_FreeValue(ctx, value); return JS_EXCEPTION; \
-		} \
-		JS_FreeValue(ctx, value)
-		IMAGE_OPTION_FLOAT("width", width);
-		IMAGE_OPTION_FLOAT("height", height);
-		IMAGE_OPTION_FLOAT("startx", startx);
-		IMAGE_OPTION_FLOAT("starty", starty);
-		IMAGE_OPTION_FLOAT("endx", endx);
-		IMAGE_OPTION_FLOAT("endy", endy);
-		IMAGE_OPTION_FLOAT("angle", angle);
-#undef IMAGE_OPTION_FLOAT
-		value = JS_GetPropertyStr(ctx, argv[2], "color");
-		if (JS_IsException(value))
+		if (!image_option_float(ctx, options, ATOM_WIDTH, &width) ||
+			!image_option_float(ctx, options, ATOM_HEIGHT, &height) ||
+			!image_option_float(ctx, options, ATOM_STARTX, &startx) ||
+			!image_option_float(ctx, options, ATOM_STARTY, &starty) ||
+			!image_option_float(ctx, options, ATOM_ENDX, &endx) ||
+			!image_option_float(ctx, options, ATOM_ENDY, &endy) ||
+			!image_option_float(ctx, options, ATOM_ANGLE, &angle) ||
+			!image_option_uint(ctx, options, ATOM_COLOR, &color))
 			return JS_EXCEPTION;
-		if (!JS_IsUndefined(value) && JS_ToUint32(ctx, &color, value)) {
-			JS_FreeValue(ctx, value);
-			return JS_EXCEPTION;
-		}
-		JS_FreeValue(ctx, value);
 	}
 
 	if (!image_float_valid(width, 1) || !image_float_valid(height, 1) ||
@@ -613,8 +667,123 @@ static JSClassDef image_class = {
 	.finalizer = image_finalizer,
 };
 
+/*
+ * One record of TileMap.SpriteBuffer (AthenaTileSprite in <athena/tilemap.h>,
+ * TileMap.layout): drawList() reads the same buffers, so the Image module
+ * does not need TileMap in the build.
+ */
+typedef struct {
+	float x, y, w, h;
+	float u1, v1, u2, v2;
+	uint32_t r, g, b, a;
+	uint32_t pad0, pad1;
+	float zindex;
+	uint32_t pad2;
+} ImageSpriteRecord;
+
+#define IMAGE_LIST_CHUNK 128
+static prim_tex_sprite image_list_chunk[IMAGE_LIST_CHUNK];
+
+static uint32_t image_channel(uint32_t value)
+{
+	return value > 255 ? 255 : value;
+}
+
+/*
+ * image.drawList(sprites, { x, y, first, count }): draws many sprites of this
+ * texture in one GIF packet per 128, with the texture state sent once.
+ */
+static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
+	JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+	uint8_t *data;
+	size_t size, total;
+	float x = 0.0f, y = 0.0f;
+	uint32_t first = 0, count;
+	int queued = 0;
+
+	if (!image_argc(ctx, argc, 1, 2, "Image.drawList"))
+		return JS_EXCEPTION;
+	if (!athena_image_is_loaded(image))
+		return JS_ThrowInternalError(ctx, "image is not loaded");
+
+	data = JS_GetArrayBuffer(ctx, &size, argv[0]);
+	if (!data) {
+		size_t offset, length, element;
+		JSValue buffer;
+
+		JS_FreeValue(ctx, JS_GetException(ctx));
+		buffer = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &length, &element);
+		if (JS_IsException(buffer))
+			return JS_ThrowTypeError(ctx,
+				"Image.drawList expects a sprite buffer (ArrayBuffer or typed array)");
+		data = JS_GetArrayBuffer(ctx, &size, buffer);
+		JS_FreeValue(ctx, buffer);
+		if (!data)
+			return JS_EXCEPTION;
+		data += offset;
+		size = length;
+	}
+	total = size / sizeof(ImageSpriteRecord);
+	count = (uint32_t)total;
+
+	if (argc == 2 && !JS_IsUndefined(argv[1])) {
+		JSValueConst options = argv[1];
+		if (!JS_IsObject(options) || JS_IsArray(ctx, options))
+			return JS_ThrowTypeError(ctx, "Image.drawList options must be an object");
+		count = UINT32_MAX;
+		if (!image_option_float(ctx, options, ATOM_X, &x) ||
+			!image_option_float(ctx, options, ATOM_Y, &y) ||
+			!image_option_uint(ctx, options, ATOM_FIRST, &first) ||
+			!image_option_uint(ctx, options, ATOM_COUNT, &count))
+			return JS_EXCEPTION;
+		if (count == UINT32_MAX)
+			count = first <= total ? (uint32_t)(total - first) : 0;
+	}
+	if (first > total || count > total - first)
+		return JS_ThrowRangeError(ctx,
+			"Image.drawList: sprites %u..%u are outside the buffer (%u sprites)",
+			(unsigned)first, (unsigned)(first + count), (unsigned)total);
+	if (!image_float_valid(x, 0) || !image_float_valid(y, 0))
+		return JS_ThrowRangeError(ctx, "Image.drawList x and y must be finite");
+
+	if (image->delayed && image->status == ATHENA_IMAGE_STATUS_DECODED)
+		image->status = ATHENA_IMAGE_STATUS_UPLOAD_PENDING;
+
+	for (uint32_t i = first; i < first + count; i++) {
+		ImageSpriteRecord record;
+		prim_tex_sprite *sprite;
+
+		/* Typed arrays may start anywhere: the EE faults on unaligned float loads. */
+		memcpy(&record, data + (size_t)i * sizeof(record), sizeof(record));
+		if (record.w == 0.0f || record.h == 0.0f)
+			continue;   /* TileMap.EMPTY and unused records */
+
+		sprite = &image_list_chunk[queued++];
+		sprite->x = record.x;
+		sprite->y = record.y;
+		sprite->w = record.w;
+		sprite->h = record.h;
+		sprite->u1 = record.u1;
+		sprite->v1 = record.v1;
+		sprite->u2 = record.u2;
+		sprite->v2 = record.v2;
+		sprite->rgba = image_channel(record.r) | (image_channel(record.g) << 8) |
+			(image_channel(record.b) << 16) | (image_channel(record.a) << 24);
+		if (queued == IMAGE_LIST_CHUNK) {
+			draw_image_list(image->surface, x, y, image_list_chunk, queued);
+			queued = 0;
+		}
+	}
+	if (queued)
+		draw_image_list(image->surface, x, y, image_list_chunk, queued);
+	return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry image_proto_funcs[] = {
 	JS_CFUNC_DEF("draw", 2, image_draw),
+	JS_CFUNC_DEF("drawList", 2, image_draw_list),
 	JS_CFUNC_DEF("ready", 0, image_ready),
 	JS_CFUNC_DEF("loading", 0, image_loading),
 	JS_CFUNC_DEF("failed", 0, image_failed),
@@ -650,6 +819,12 @@ static const JSCFunctionListEntry image_static_funcs[] = {
 static int image_module_init(JSContext *ctx, JSModuleDef *module)
 {
 	JSValue prototype, constructor;
+
+	if (!image_atoms_runtime) {
+		for (int i = 0; i < ATOM_TOTAL; i++)
+			image_atoms[i] = JS_NewAtom(ctx, image_atom_names[i]);
+		image_atoms_runtime = JS_GetRuntime(ctx);
+	}
 	JS_NewClassID(&image_class_id);
 	JS_NewClass(JS_GetRuntime(ctx), image_class_id, &image_class);
 	prototype = JS_NewObject(ctx);
@@ -663,6 +838,17 @@ static int image_module_init(JSContext *ctx, JSModuleDef *module)
 		countof(image_static_funcs));
 	JS_SetModuleExport(ctx, module, "Image", constructor);
 	return 0;
+}
+
+void athena_image_cleanup(JSContext *ctx)
+{
+	if (JS_GetRuntime(ctx) != image_atoms_runtime)
+		return;
+	for (int i = 0; i < ATOM_TOTAL; i++) {
+		JS_FreeAtom(ctx, image_atoms[i]);
+		image_atoms[i] = JS_ATOM_NULL;
+	}
+	image_atoms_runtime = NULL;
 }
 
 JSModuleDef *athena_image_init(JSContext *ctx)

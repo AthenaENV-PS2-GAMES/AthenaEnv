@@ -7,13 +7,12 @@
 #include <athena/font.h> /* Coords */
 
 /// Maximal count of atlases per font
-#define ATLAS_MAX    4
-/// Atlas width in pixels
-#define ATLAS_WIDTH  256
-/// Atlas height in pixels
-#define ATLAS_HEIGHT 256
+#define ATLAS_MAX    8
 
-#define FNTSYS_CHAR_SIZE 26 
+/// Default rasterization size, in pixels
+#define FNTSYS_CHAR_SIZE 26
+#define FNTSYS_MIN_SIZE 6
+#define FNTSYS_MAX_SIZE 128
 
 #define ALIGN_TOP     (0 << 0)
 #define ALIGN_BOTTOM  (1 << 0)
@@ -24,10 +23,13 @@
 #define ALIGN_NONE    (ALIGN_TOP | ALIGN_LEFT)
 #define ALIGN_CENTER  (ALIGN_VCENTER | ALIGN_HCENTER)
 
-/// default (built-in) font id
-#define FNT_DEFAULT (0)
-/// Value returned on errors
-#define FNT_ERROR   (-1)
+/// Errors returned by fntLoadFile() and fntLoadMemory()
+#define FNT_ERROR       (-1)    /* unreadable file or not a font */
+#define FNT_ERROR_SLOTS (-2)    /* FNT_MAX_COUNT distinct fonts are loaded */
+#define FNT_ERROR_MEMORY (-3)
+
+/// Distinct fonts (file and size) loaded at once; equal ones are shared
+#define FNT_MAX_COUNT (16)
 
 /** Initializes the font subsystem */
 void fntInit();
@@ -35,36 +37,47 @@ void fntInit();
 /** Terminates the font subsystem */
 void fntEnd();
 
-/** Loads a font from a file path
- * @param path The path to the font file
- * @return font slot id (negative value means error happened) */
-int fntLoadFile(const char *path);
+/**
+ * Loads a font file (NULL: the embedded Quicksand) rasterized at `size`
+ * pixels. A font already loaded with the same path and size is shared.
+ * Returns the font id, or FNT_ERROR, FNT_ERROR_SLOTS or FNT_ERROR_MEMORY.
+ */
+int fntLoadFile(const char *path, int size);
 
-/** Releases a font slot */
+/**
+ * Same as fntLoadFile() for a font file already in memory. On success the
+ * font owns `data` (freed with free()); on failure the caller keeps it.
+ */
+int fntLoadMemory(const char *path, void *data, int data_size, int size);
+
+/** Whole file in a malloc()ed buffer, or NULL. Thread-safe: no font state is touched. */
+void *fntReadFile(const char *path, int *size);
+
+/** Releases a reference to a font; the font is freed with its last one. */
 void fntRelease(int id);
 
-/** Updates to the native display resolution and aspect ratio
- * @note Invalidates the whole glyph cache for all fonts! */
+/** Rasterization size of a font, in pixels. */
+int fntGetSize(int id);
+
+/**
+ * Re-reads the video mode (resolution, 4:3 or 16:9, interlaced frame mode)
+ * for the glyph aspect ratio. Checked automatically before drawing; a
+ * change invalidates every glyph cache.
+ */
 void fntUpdateAspectRatio();
 
 int fntRenderStringPlus(int id, int x, int y, short aligned, size_t width, size_t height, const char *string, float scale, u64 colour, float outline, u64 outline_colour, float dropshadow, u64 dropshadow_colour);
 
-/** Renders a text with specified window dimensions */
+/** Renders a text with specified window dimensions; `\n` starts a new line. */
 int fntRenderString(int id, int x, int y, short aligned, size_t width, size_t height, const char *string, float scale, u64 colour);
 
-/** replaces spaces with newlines so that the text fits into the specified width.
- * @note A destrutive operation - modifies the given string!
- */
-void fntFitString(int id, char *string, size_t width);
-
-/** Calculates the width of the given text string
- * We can't use the height for alignment, as the horizontal center would depends of the contained text itself */
+/** Width of the widest line of the given text, in pixels. */
 int fntCalcDimensions(int id, float scale, const char *str);
 
-void fntSetPixelSize(int fontid, int width, int height);
+/** Distance between two lines of text, in pixels. */
+int fntGetLineHeight(int id, float scale);
 
-void fntSetCharSize(int fontid, int width, int height);
-
+/** Width of the widest line and height of all lines. */
 Coords fntGetTextSize(int id, const char* text, float scale);
 
 #endif

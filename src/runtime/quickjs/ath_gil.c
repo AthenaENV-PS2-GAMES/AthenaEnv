@@ -12,6 +12,7 @@
 typedef struct {
     bool suspended;
     JSRuntimeThreadState state;
+    size_t stack_budget;        /* 0: ATH_GIL_DEFAULT_STACK_BUDGET */
 } AthenaJsGilThreadSlot;
 
 static int athena_js_gil_semaphore = -1;
@@ -31,6 +32,9 @@ static void athena_js_gil_enter_runtime(void) {
     if (!athena_js_gil_runtime) return;
 
     AthenaJsGilThreadSlot *slot = athena_js_gil_current_slot();
+    /* JS_Enter/JS_Resume derive the stack limit from it. */
+    JS_SetMaxStackSize(athena_js_gil_runtime, slot && slot->stack_budget ?
+        slot->stack_budget : ATH_GIL_DEFAULT_STACK_BUDGET);
     if (slot && slot->suspended) {
         JS_Resume(athena_js_gil_runtime, &slot->state);
         slot->suspended = false;
@@ -118,6 +122,13 @@ void athena_js_gil_leave(void) {
     if (SignalSema(athena_js_gil_semaphore) < 0) {
         dbgprintf("[AthenaCore] Warning: unable to release QuickJS GIL semaphore\n");
     }
+}
+
+void athena_js_gil_set_stack_budget(size_t bytes) {
+    AthenaJsGilThreadSlot *slot = athena_js_gil_current_slot();
+
+    if (slot)
+        slot->stack_budget = bytes;
 }
 
 void athena_js_gil_set_runtime(JSRuntime *rt) {

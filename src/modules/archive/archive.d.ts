@@ -152,14 +152,13 @@ declare namespace Archive {
     /* --- Background jobs ------------------------------------------------ */
 
     /**
-     * Opaque handle for work running on a worker thread. The worker opens its
-     * own copy of the archive and never runs script code; the script calls
-     * `poll()` (e.g. once per frame) to follow it. Dropping the handle cancels
-     * the job.
+     * Work running on the shared job pool (see `AthenaJob`). The worker opens
+     * its own copy of the archive and never runs script code; the script
+     * awaits the job, or calls `poll()` (e.g. once per frame) to follow it.
+     * Dropping the handle cancels the job.
      */
-    interface Job<T> {
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
         readonly __brand: 'ArchiveJob';
-        readonly __result?: T;
     }
 
     type JobState = 'running' | 'done' | 'failed' | 'cancelled';

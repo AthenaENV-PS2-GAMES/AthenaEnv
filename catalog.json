@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-26T12:23:39.520Z",
+  "generatedAt": "2026-09-26T14:25:56.663Z",
   "modules": [
     {
       "id": "archive",
@@ -186,7 +186,8 @@
       "dependencies": {
         "modules": [
           "graphics",
-          "color"
+          "color",
+          "thread"
         ],
         "iop": [],
         "ee_libs": [
@@ -244,6 +245,54 @@
           "-ljpeg",
           "-lpng"
         ]
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "hdd",
+      "name": "Internal HDD",
+      "description": "Internal hard disk drivers for exFAT/FAT32 disks (not PFS): boot from and access mass:/. Needs the network adapter or a console with a built-in HDD bay.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "ps2dev9",
+          "bdm",
+          "bdmfs_fatfs",
+          "ata_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "ilink",
+      "name": "i.LINK Storage",
+      "description": "i.LINK (IEEE 1394) storage drivers, on the consoles that have the port: boot from and access mass:/.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "iLinkman",
+          "bdm",
+          "bdmfs_fatfs",
+          "IEEE1394_bd"
+        ],
+        "ee_libs": []
       },
       "global_alias": null,
       "api": {
@@ -403,6 +452,30 @@
       "api": {
         "native": true,
         "quickjs": true
+      }
+    },
+    {
+      "id": "mx4sio",
+      "name": "MX4SIO",
+      "description": "MX4SIO (SD card adapter in memory card slot 2) drivers: boot from and access mass:/. Slot 2 then no longer reads memory cards.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "sio2man",
+          "bdm",
+          "bdmfs_fatfs",
+          "mx4sio_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
       }
     },
     {

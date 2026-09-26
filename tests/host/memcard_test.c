@@ -2,6 +2,7 @@
 #include "host_runtime.h"
 
 #include "memcard.c"
+#include "job.c"
 #include "memcard_job.c"
 
 #include "fake_libmc.h"
@@ -502,10 +503,14 @@ static void test_jobs(void) {
     athena_memcard_job_destroy(job);
 
     CHECK(athena_memcard_job_read(2, "/x") == NULL, "job on a bad port");
-    /* Destroying a running job joins it. */
+    /* Destroying a running job waits for it: no card handle is left open. */
     job = athena_memcard_job_write(0, "/drop", data, size, &options);
     athena_memcard_job_destroy(job);
-    CHECK(threads_alive == 0 && open_fds(0), "workers joined, handles released");
+    CHECK(open_fds(0), "handles released");
+    /* Jobs run on the shared pool, whose workers stop with the runtime. */
+    CHECK(threads_alive <= ATHENA_JOB_WORKERS, "pool workers: %d", threads_alive);
+    athena_job_pool_stop();
+    CHECK(threads_alive == 0, "workers joined: %d", threads_alive);
     free(data);
 }
 

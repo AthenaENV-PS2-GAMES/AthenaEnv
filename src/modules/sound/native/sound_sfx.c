@@ -14,6 +14,7 @@
 #include <athena/mutex.h>
 #include <athena/sound.h>
 #include <athena/thread.h>
+#include <athena/job.h>
 
 #include "sound_internal.h"
 
@@ -361,64 +362,69 @@ fail:
 
 /* --- Loading on a worker thread ------------------------------------------ */
 
-#define SFX_JOB_STACK_SIZE (16 * 1024)
-#define SFX_JOB_WAIT_POLL_US 1000
-
-struct AthenaSfxJob {
-    AthenaThread *thread;
-    AthenaMutex *mutex;
-    /* Immutable while the worker runs. */
+/*
+ * The read runs on the shared job pool (athena/job.h), below the script
+ * thread: it reads while the frame loop waits for vsync. The upload stays on
+ * the script thread (athena_sfx_job_poll).
+ */
+typedef struct {
+    /* Immutable while the read runs. */
     char *path;
-    /* Protected by `mutex`, written by the worker. */
-    bool read_done;
-    bool cancel;
-    int read_status;
+    /* Written by the read, under athena_job_lock(). */
     uint8_t *buffer;
     int size;
     AdpcmHeader header;
     char detail[160];
-    /* Script thread only: the outcome, once the upload was attempted. */
+} SfxRead;
+
+struct AthenaSfxJob {
+    AthenaJob *read;
+    char *path;
+    /* Script thread only. */
+    bool cancel;
     AthenaSfxJobState state;
     int result;
+    char detail[160];
 };
 
-static void sfx_job_worker(void *arg) {
-    AthenaSfxJob *job = arg;
+static int sfx_read_run(AthenaJob *job, void *data) {
+    SfxRead *read = data;
     char detail[160] = "";
     AdpcmHeader header;
     uint8_t *buffer = NULL;
     int size = 0;
     int status;
 
-    status = sfx_read_checked(job->path, &buffer, &size, &header, detail, sizeof(detail));
-
-    athena_mutex_core_lock(job->mutex);
-    job->read_status = status;
-    job->header = header;
-    memcpy(job->detail, detail, sizeof(job->detail));
-    if (job->cancel) {
+    status = sfx_read_checked(read->path, &buffer, &size, &header, detail, sizeof(detail));
+    /* A read cannot be interrupted, but a cancelled one is not kept. */
+    if (athena_job_should_stop(job)) {
         free(buffer);
-    } else {
-        job->buffer = buffer;
-        job->size = size;
+        return ATHENA_SOUND_ERR_CANCELLED;
     }
-    job->read_done = true;
-    athena_mutex_core_unlock(job->mutex);
-
-    athena_thread_core_worker_finished(job->thread);
-    ExitThread();
+    athena_job_lock(job);
+    read->header = header;
+    memcpy(read->detail, detail, sizeof(read->detail));
+    read->buffer = buffer;
+    read->size = size;
+    athena_job_unlock(job);
+    return status;
 }
 
-static void sfx_job_free(AthenaSfxJob *job) {
-    if (job->mutex)
-        athena_mutex_core_destroy(job->mutex);
-    free(job->buffer);
-    free(job->path);
-    free(job);
+static void sfx_read_free(void *data) {
+    SfxRead *read = data;
+
+    free(read->buffer);
+    free(read->path);
+    free(read);
 }
+
+static const AthenaJobType sfx_read_type = {
+    "Sound effect", sfx_read_run, sfx_read_free, ATHENA_SOUND_ERR_CANCELLED, ATHENA_JOB_PRIORITY_CPU,
+};
 
 AthenaSfxJob *athena_sfx_load_async(const char *path, int *result) {
-    AthenaSfxJob *job;
+    AthenaSfxJob *job = NULL;
+    SfxRead *read = NULL;
     int status = ATHENA_SOUND_ERR_MEMORY;
 
     if (!path || !path[0]) {
@@ -426,27 +432,17 @@ AthenaSfxJob *athena_sfx_load_async(const char *path, int *result) {
         goto fail;
     }
     job = calloc(1, sizeof(*job));
-    if (!job)
+    read = calloc(1, sizeof(*read));
+    if (!job || !read)
         goto fail;
     job->state = ATHENA_SFX_JOB_RUNNING;
     job->path = sound_absolute_path(path);
-    job->mutex = job->path ? athena_mutex_core_create() : NULL;
-    if (!job->mutex) {
-        sfx_job_free(job);
+    read->path = job->path ? strdup(job->path) : NULL;
+    if (!read->path)
         goto fail;
-    }
-    /* Below the script thread: it reads while the frame loop waits for vsync. */
-    job->thread = athena_thread_core_create("Sound sfx load", sfx_job_worker, job,
-        SFX_JOB_STACK_SIZE, ATHENA_THREAD_DEFAULT_PRIORITY + 1);
-    if (!job->thread) {
-        sfx_job_free(job);
-        status = ATHENA_SOUND_ERR_THREAD;
-        goto fail;
-    }
-    if (athena_thread_core_start(job->thread) < 0) {
-        /* Never started, so destroy() also finalizes the thread. */
-        athena_thread_core_destroy(job->thread);
-        sfx_job_free(job);
+    job->read = athena_job_submit(&sfx_read_type, read);
+    read = NULL;    /* owned by the pool, even when the submission failed */
+    if (!job->read) {
         status = ATHENA_SOUND_ERR_THREAD;
         goto fail;
     }
@@ -455,31 +451,41 @@ AthenaSfxJob *athena_sfx_load_async(const char *path, int *result) {
     return job;
 
 fail:
+    if (read)
+        free(read->path);
+    free(read);
+    if (job)
+        free(job->path);
+    free(job);
     if (result)
         *result = status;
     return NULL;
 }
 
+AthenaJob *athena_sfx_job_core(AthenaSfxJob *job) {
+    return job->read;
+}
+
 AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *result) {
-    uint8_t *buffer;
-    AthenaSfx *sfx;
-    bool done;
+    AthenaJobState read_state;
+    int read_result = 0;
 
     *out = NULL;
     if (job->state == ATHENA_SFX_JOB_RUNNING) {
-        athena_mutex_core_lock(job->mutex);
-        done = job->read_done;
-        buffer = job->buffer;
-        job->buffer = NULL;
-        if (job->cancel) {
+        read_state = athena_job_state(job->read, &read_result);
+        if (job->cancel || read_state == ATHENA_JOB_CANCELLED) {
             job->state = ATHENA_SFX_JOB_CANCELLED;
-        } else if (done && job->read_status < 0) {
+        } else if (read_state == ATHENA_JOB_FAILED) {
+            SfxRead *read = athena_job_data(job->read);
             job->state = ATHENA_SFX_JOB_FAILED;
-            job->result = job->read_status;
-        }
-        athena_mutex_core_unlock(job->mutex);
+            job->result = read_result;
+            memcpy(job->detail, read->detail, sizeof(job->detail));
+        } else if (read_state == ATHENA_JOB_DONE) {
+            SfxRead *read = athena_job_data(job->read);
+            uint8_t *buffer = read->buffer;
+            AthenaSfx *sfx;
 
-        if (job->state == ATHENA_SFX_JOB_RUNNING && done) {
+            read->buffer = NULL;
             /* The upload goes through the script thread's tables. */
             sound_set_detail(NULL);
             sfx = sfx_new(job->path);
@@ -487,7 +493,7 @@ AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *r
                 free(buffer);
                 job->result = ATHENA_SOUND_ERR_MEMORY;
             } else {
-                job->result = sfx_upload_buffer(sfx, buffer, job->size, &job->header);
+                job->result = sfx_upload_buffer(sfx, buffer, read->size, &read->header);
                 if (job->result < 0) {
                     snprintf(job->detail, sizeof(job->detail), "%s", athena_sound_error_detail());
                     sfx_delete(sfx);
@@ -496,8 +502,6 @@ AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *r
                 }
             }
             job->state = job->result < 0 ? ATHENA_SFX_JOB_FAILED : ATHENA_SFX_JOB_DONE;
-        } else {
-            free(buffer);
         }
     }
     if (job->state == ATHENA_SFX_JOB_FAILED)
@@ -508,41 +512,23 @@ AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *r
 }
 
 bool athena_sfx_job_wait(AthenaSfxJob *job, int timeout_ms) {
-    clock_t start = clock();
-
-    for (;;) {
-        bool done;
-
-        athena_mutex_core_lock(job->mutex);
-        done = job->read_done || job->cancel;
-        athena_mutex_core_unlock(job->mutex);
-        if (done || job->state != ATHENA_SFX_JOB_RUNNING)
-            return true;
-        if (timeout_ms >= 0 &&
-            (clock() - start) * 1000 / CLOCKS_PER_SEC >= (clock_t)timeout_ms)
-            return false;
-        DelayThread(SFX_JOB_WAIT_POLL_US);
-    }
+    if (job->cancel || job->state != ATHENA_SFX_JOB_RUNNING)
+        return true;
+    return athena_job_wait(job->read, timeout_ms);
 }
 
 void athena_sfx_job_cancel(AthenaSfxJob *job) {
-    athena_mutex_core_lock(job->mutex);
     job->cancel = true;
-    athena_mutex_core_unlock(job->mutex);
+    athena_job_cancel(job->read);
 }
 
+/* Never blocks: a read still running is freed by the pool once it ends. */
 void athena_sfx_job_destroy(AthenaSfxJob *job) {
     if (!job)
         return;
-    athena_sfx_job_cancel(job);
-    /* The read cannot be interrupted: wait for it. */
-    athena_thread_core_stop(job->thread);
-    athena_thread_core_wait(job->thread);
-    for (int attempts = 0; attempts < 100 &&
-        athena_thread_core_get_status(job->thread) != THS_DORMANT; attempts++)
-        DelayThread(100);
-    athena_thread_core_finalize(job->thread);
-    sfx_job_free(job);
+    athena_job_release(job->read);
+    free(job->path);
+    free(job);
 }
 
 static void sfx_release_channel(int channel) {

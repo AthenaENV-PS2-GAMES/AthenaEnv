@@ -371,6 +371,7 @@ function cardTests() {
 
     /* The same card through the iomanX mc device (fopen, what std.open uses). */
     test("files written by MemoryCard are read through std.open", function() {
+        if (typeof std.open !== "function") return skip("files written by MemoryCard are read through std.open", "std.open is not in this runtime");
         MemoryCard.writeFile(ROOT + "/interop.txt", "from MemoryCard");
         const file = std.open(ROOT + "/interop.txt", "rb");
         assert(file, "std.open failed");
@@ -379,6 +380,7 @@ function cardTests() {
         assert(text === "from MemoryCard", "text " + JSON.stringify(text));
     });
     test("files written through std.open are read by MemoryCard", function() {
+        if (typeof std.open !== "function") return skip("files written through std.open are read by MemoryCard", "std.open is not in this runtime");
         const file = std.open(ROOT + "/std.txt", "wb");
         assert(file, "std.open failed");
         file.puts("from std");
@@ -387,6 +389,7 @@ function cardTests() {
         assert(MemoryCard.stat(ROOT + "/std.txt").size === 8, "size");
     });
     test("std.open and MemoryCard share the driver's three handles", function() {
+        if (typeof std.open !== "function") return skip("std.open and MemoryCard share the driver's three handles", "std.open is not in this runtime");
         const outside = std.open(ROOT + "/std.txt", "rb");
         assert(outside, "std.open failed");
         const files = [];
@@ -518,6 +521,8 @@ async function asyncTests() {
 
     /* The point of the jobs: the frame loop keeps flipping while the card works. */
     await testAsync("frames keep coming while a job writes", async function() {
+        if (typeof Loop === "undefined")
+            return skip("frames keep coming while a job writes", "Loop is not in this runtime");
         const size = 256 * 1024;
         if (MemoryCard.getInfo(0).freeBytes < size + 64 * 1024)
             return skip("frames keep coming while a job writes", "needs 320 KiB free");

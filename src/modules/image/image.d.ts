@@ -45,6 +45,17 @@ type ImageDrawOptions = {
     color?: number;
 };
 
+/** Options of `drawList()`. */
+type ImageDrawListOptions = {
+    /** Offset added to every sprite; defaults to 0. */
+    x?: number;
+    y?: number;
+    /** First record to draw; defaults to 0. */
+    first?: number;
+    /** Records to draw; defaults to the rest of the buffer. */
+    count?: number;
+};
+
 /** Options controlling image creation and texture upload behavior. */
 type ImageOptions = {
     /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
@@ -105,6 +116,25 @@ declare class Image {
     error(): ImageLoadError | undefined;
     /** Queues a textured sprite at `(x, y)` for the current frame. */
     draw(x: number, y: number, options?: ImageDrawOptions): void;
+    /**
+     * Queues many sprites of this image at once: the texture state is sent
+     * once per 128 sprites instead of once per sprite, which makes it several
+     * times cheaper than as many `draw()` calls. `sprites` uses the record
+     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
+     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
+     * buffer serves both; the TileMap module is not required. Records with a
+     * zero width or height are skipped.
+     *
+     * @example
+     * ```js
+     * const sprites = new Float32Array(16 * count);        // 64-byte records
+     * const colors = new Uint32Array(sprites.buffer);
+     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
+     * //           colors[16*i + 8..11] = r, g, b, a
+     * image.drawList(sprites, { x: cameraX, y: cameraY });
+     * ```
+     */
+    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
     /** Uploads the image synchronously and pins its VRAM allocation. */
     lock(): boolean;
     /** Allows the texture manager to evict the image from VRAM. */

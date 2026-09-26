@@ -141,6 +141,7 @@ const char *athena_sound_result_string(int result) {
     case ATHENA_SOUND_ERR_SPU_MEMORY: return "not enough SPU2/IOP memory for the sample";
     case ATHENA_SOUND_ERR_CORRUPT: return "corrupt ADPCM data";
     case ATHENA_SOUND_ERR_THREAD: return "cannot start the streaming thread";
+    case ATHENA_SOUND_ERR_CANCELLED: return "cancelled";
     default: return "unknown error";
     }
 }
@@ -156,6 +157,7 @@ const char *athena_sound_result_code(int result) {
     case ATHENA_SOUND_ERR_SPU_MEMORY: return "SPU_MEMORY";
     case ATHENA_SOUND_ERR_CORRUPT: return "CORRUPT";
     case ATHENA_SOUND_ERR_THREAD: return "THREAD";
+    case ATHENA_SOUND_ERR_CANCELLED: return "CANCELLED";
     default: return "UNKNOWN";
     }
 }

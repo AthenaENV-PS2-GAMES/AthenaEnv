@@ -8,6 +8,7 @@ MODULE_SRCS = \
 	src/generated/native_registry.c \
 	src/modules/mutex/native/mutex.c \
 	src/modules/thread/native/thread.c \
+	src/modules/thread/native/job.c \
 	src/modules/archive/native/archive.c \
 	src/modules/archive/native/archive_job.c \
 	src/modules/box2d/native/box2d.c \
@@ -99,6 +100,7 @@ MODULE_JS_SRCS = \
 	src/generated/js_registry.c \
 	src/modules/mutex/quickjs/ath_mutex.c \
 	src/modules/thread/quickjs/ath_thread.c \
+	src/modules/thread/quickjs/ath_job.c \
 	src/modules/archive/quickjs/ath_archive.c \
 	src/modules/box2d/quickjs/ath_box2d.c \
 	src/modules/box2d/quickjs/ath_box2d_body.c \

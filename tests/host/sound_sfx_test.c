@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "sound_sfx.c"
+#include "job.c"
 #include "sound_path.c"
 #include "host_runtime.h"
 
@@ -288,7 +289,7 @@ static void test_async(void) {
     CHECK(iop_count == 0, "a cancelled job uploads nothing");
     athena_sfx_job_destroy(job);
 
-    /* Dropped while reading: destroy waits for the worker. */
+    /* Dropped while reading: destroy does not wait; the pool frees the read when it ends. */
     job = athena_sfx_load_async(FIXTURES "over.adp", &r);
     athena_sfx_job_destroy(job);
 
@@ -302,6 +303,8 @@ static void test_async(void) {
     athena_sfx_job_destroy(job);
     while (filled > 0)
         athena_sfx_destroy(fill[--filled]);
+    /* Reads run on the shared job pool, whose workers stop with the runtime. */
+    athena_job_pool_stop();
     CHECK(threads_alive == 0 && iop_count == 0 && iop_rejected == 0,
         "workers joined (%d alive), memory freed", threads_alive);
 }

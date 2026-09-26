@@ -1,0 +1,44 @@
+{
+  "id": "mx4sio",
+  "name": "MX4SIO",
+  "description": "MX4SIO (SD card adapter in memory card slot 2) drivers: boot from and access mass:/. Slot 2 then no longer reads memory cards.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/mx4sio.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "sio2man",
+      "bdm",
+      "bdmfs_fatfs",
+      "mx4sio_bd"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_mx4sio_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "sio2man",
+      "irx": "$(PS2SDK)/iop/irx/sio2man.irx"
+    },
+    {
+      "name": "bdm",
+      "irx": "$(PS2SDK)/iop/irx/bdm.irx"
+    },
+    {
+      "name": "bdmfs_fatfs",
+      "irx": "$(PS2SDK)/iop/irx/bdmfs_fatfs.irx"
+    },
+    {
+      "name": "mx4sio_bd",
+      "irx": "$(PS2SDK)/iop/irx/mx4sio_bd.irx"
+    }
+  ],
+  "types": null
+}

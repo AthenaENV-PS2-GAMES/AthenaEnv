@@ -7,6 +7,7 @@
 #include <athena/debug.h>
 
 #include <athena/thread.h>
+#include <athena/job.h>
 
 extern void *_gp;
 
@@ -285,6 +286,9 @@ void athena_thread_core_finalize(AthenaThread *thread) {
 }
 
 void athena_thread_core_wait_all(void) {
+    /* Idle job workers wait on a semaphore: wake and join them first. */
+    athena_job_pool_stop();
+
     for (int i = 0; i < ATHENA_MAX_TASKS; i++) {
         if (s_tasks[i].active && s_tasks[i].thread)
             atomic_store_explicit(&s_tasks[i].thread->stop_requested, true,

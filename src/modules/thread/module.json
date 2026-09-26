@@ -7,7 +7,8 @@
   "required": false,
   "default": true,
   "sources": [
-    "native/thread.c"
+    "native/thread.c",
+    "native/job.c"
   ],
   "dependencies": {
     "modules": [],
@@ -20,7 +21,8 @@
   },
   "quickjs": {
     "sources": [
-      "quickjs/ath_thread.c"
+      "quickjs/ath_thread.c",
+      "quickjs/ath_job.c"
     ],
     "module_name": "Thread",
     "global_alias": "Thread",

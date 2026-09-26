@@ -15,7 +15,6 @@ extern "C" {
  * @param newCWD returns the path to the file as pfs mount point string (`pfs:/retroarch/`)
  * @return true on success
 */
-int getMountInfo(char *path, char *mountString, char *mountPoint, char *newCWD);
 
 char* s_sprintf(const char* format, ...);
 

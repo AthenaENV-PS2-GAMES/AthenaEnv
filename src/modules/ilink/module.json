@@ -1,0 +1,44 @@
+{
+  "id": "ilink",
+  "name": "i.LINK Storage",
+  "description": "i.LINK (IEEE 1394) storage drivers, on the consoles that have the port: boot from and access mass:/.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/ilink.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "iLinkman",
+      "bdm",
+      "bdmfs_fatfs",
+      "IEEE1394_bd"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_ilink_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "iLinkman",
+      "irx": "$(PS2SDK)/iop/irx/iLinkman.irx"
+    },
+    {
+      "name": "bdm",
+      "irx": "$(PS2SDK)/iop/irx/bdm.irx"
+    },
+    {
+      "name": "bdmfs_fatfs",
+      "irx": "$(PS2SDK)/iop/irx/bdmfs_fatfs.irx"
+    },
+    {
+      "name": "IEEE1394_bd",
+      "irx": "$(PS2SDK)/iop/irx/IEEE1394_bd.irx"
+    }
+  ],
+  "types": null
+}

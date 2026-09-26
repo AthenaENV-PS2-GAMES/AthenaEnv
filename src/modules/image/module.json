@@ -23,7 +23,8 @@
     "module_name": "Image",
     "global_alias": "Image",
     "global_export": "Image.Image",
-    "init_func": "athena_image_init"
+    "init_func": "athena_image_init",
+    "cleanup_func": "athena_image_cleanup"
   },
   "types": "image.d.ts"
 }

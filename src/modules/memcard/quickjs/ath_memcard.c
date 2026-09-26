@@ -7,11 +7,9 @@
 #include <ath_env.h>
 #include <ath_gil.h>
 #include <athena/memcard.h>
+#include <athena/js/job.h>
 
 #include "ath_memcard.h"
-
-/* Delay between two checks of a job someone awaits. */
-#define MC_JOB_TICK_MS 4
 
 /*
  * Every call that talks to the card runs with the GIL released, so other
@@ -1229,88 +1227,97 @@ typedef enum {
     MC_JOB_FORMAT,
 } McJobKind;
 
-/*
- * The worker never runs script code: the script polls, or awaits the job,
- * which polls from a timer. The outcome is converted once and kept.
- */
+/* What a MemoryCard Job object (athena/js/job.h) keeps next to the native job. */
 typedef struct {
-    AthenaMemcardJob *job;
     const char *name;
     McJobKind kind;
     char target[ATHENA_MEMCARD_PATH_MAX + 8];  /* "mc0:/..." for error messages */
-    bool settled;
-    bool failed;                /* settled with an error, a JSON parse error included */
-    JSValue outcome;            /* result or error once settled */
-    JSValue promise;            /* created by the first then() */
-    JSValue resolve, reject;    /* until the promise is settled */
-} McJobHandle;
+} McJobInfo;
 
-static JSClassID mc_job_class_id;
+/* Converts the outcome once, the first time the job is seen settled. */
+static int mc_job_settle(JSContext *ctx, AthenaJob *job, AthenaJobState state, int result,
+    void *user, JSValue *outcome, bool *failed) {
+    McJobInfo *info = user;
 
-static void mc_job_finalizer(JSRuntime *rt, JSValue value) {
-    McJobHandle *handle = JS_GetOpaque(value, mc_job_class_id);
-    if (!handle)
-        return;
-    /* Cancels and joins: at most one block of work remains (a format runs to the end). */
-    athena_memcard_job_destroy(handle->job);
-    JS_FreeValueRT(rt, handle->outcome);
-    JS_FreeValueRT(rt, handle->promise);
-    JS_FreeValueRT(rt, handle->resolve);
-    JS_FreeValueRT(rt, handle->reject);
-    free(handle);
+    if (state == ATHENA_JOB_DONE) {
+        if (info->kind == MC_JOB_READ || info->kind == MC_JOB_READ_TEXT ||
+            info->kind == MC_JOB_READ_JSON) {
+            void *data = NULL;
+            size_t size = 0;
+            /* The data ends with a ' ' (athena_memcard_read_file). */
+            athena_memcard_job_take_data((AthenaMemcardJob *)job, &data, &size);
+            if (!data && !(data = calloc(1, 1))) {
+                JS_ThrowOutOfMemory(ctx);
+                return -1;
+            }
+            if (info->kind == MC_JOB_READ) {
+                *outcome = mc_new_buffer(ctx, data, size);
+            } else {
+                *outcome = info->kind == MC_JOB_READ_TEXT ?
+                    JS_NewStringLen(ctx, data, size) : JS_ParseJSON(ctx, data, size, info->target);
+                free(data);
+                /* A parse error settles the job as failed, with the SyntaxError. */
+                if (JS_IsException(*outcome) && info->kind == MC_JOB_READ_JSON) {
+                    *outcome = JS_GetException(ctx);
+                    JS_SetPropertyStr(ctx, *outcome, "path", JS_NewString(ctx, info->target));
+                    *failed = true;
+                }
+            }
+        } else if (info->kind == MC_JOB_WRITE) {
+            *outcome = JS_NewInt32(ctx, result);
+        }
+    } else {
+        *failed = true;
+        *outcome = mc_error(ctx, result, "%s: %s: %s", info->name,
+            athena_memcard_strerror(result), info->target);
+        if (!JS_IsException(*outcome))
+            JS_SetPropertyStr(ctx, *outcome, "path", JS_NewString(ctx, info->target));
+    }
+    if (JS_IsException(*outcome)) {
+        *outcome = JS_UNDEFINED;
+        return -1;
+    }
+    return 0;
 }
 
-static void mc_job_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark) {
-    McJobHandle *handle = JS_GetOpaque(value, mc_job_class_id);
-    if (!handle)
-        return;
-    JS_MarkValue(rt, handle->outcome, mark);
-    JS_MarkValue(rt, handle->promise, mark);
-    JS_MarkValue(rt, handle->resolve, mark);
-    JS_MarkValue(rt, handle->reject, mark);
+static void mc_job_status(JSContext *ctx, AthenaJob *job, void *user, JSValue object) {
+    AthenaMemcardJobStatus status;
+
+    athena_memcard_job_status((AthenaMemcardJob *)job, &status);
+    JS_DefinePropertyValueStr(ctx, object, "bytesDone",
+        JS_NewInt64(ctx, (int64_t)status.bytes_done), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "bytesTotal",
+        JS_NewInt64(ctx, (int64_t)status.bytes_total), JS_PROP_C_W_E);
 }
 
-static JSClassDef mc_job_class = {
-    "MemoryCardJob",
-    .finalizer = mc_job_finalizer,
-    .gc_mark = mc_job_mark,
+static void mc_job_free_info(JSRuntime *rt, void *user) {
+    free(user);
+}
+
+/* Cancels and waits: a cancelled job must not keep one of the three card handles. */
+static void mc_job_release(AthenaJob *job) {
+    athena_memcard_job_destroy((AthenaMemcardJob *)job);
+}
+
+static const AthenaJsJobKind mc_job_kind = {
+    "MemoryCard", mc_job_settle, mc_job_status, mc_job_free_info, mc_job_release,
 };
-
-static McJobHandle *mc_job_handle(JSContext *ctx, JSValueConst value, const char *name) {
-    McJobHandle *handle = JS_GetOpaque(value, mc_job_class_id);
-    if (!handle)
-        mc_throw(ctx, ATHENA_MEMCARD_ERR_ARGUMENT, "%s: expected a MemoryCard job", name);
-    return handle;
-}
 
 static JSValue mc_new_job(JSContext *ctx, AthenaMemcardJob *job, const char *name, McJobKind kind,
     int port, const char *path) {
-    McJobHandle *handle;
-    JSValue object;
+    McJobInfo *info;
 
     if (!job)
-        return mc_throw(ctx, ATHENA_MEMCARD_ERR_MEMORY, "%s: cannot start the worker thread", name);
-    handle = calloc(1, sizeof(*handle));
-    if (!handle) {
+        return mc_throw(ctx, ATHENA_MEMCARD_ERR_MEMORY, "%s: cannot start the background job", name);
+    info = calloc(1, sizeof(*info));
+    if (!info) {
         athena_memcard_job_destroy(job);
         return JS_ThrowOutOfMemory(ctx);
     }
-    handle->job = job;
-    handle->name = name;
-    handle->kind = kind;
-    snprintf(handle->target, sizeof(handle->target), "mc%d:%s", port, path ? path : "");
-    handle->outcome = JS_UNDEFINED;
-    handle->promise = JS_UNDEFINED;
-    handle->resolve = JS_UNDEFINED;
-    handle->reject = JS_UNDEFINED;
-    object = JS_NewObjectClass(ctx, mc_job_class_id);
-    if (JS_IsException(object)) {
-        athena_memcard_job_destroy(job);
-        free(handle);
-        return object;
-    }
-    JS_SetOpaque(object, handle);
-    return object;
+    info->name = name;
+    info->kind = kind;
+    snprintf(info->target, sizeof(info->target), "mc%d:%s", port, path ? path : "");
+    return athena_js_job_new(ctx, &mc_job_kind, (AthenaJob *)job, info, name);
 }
 
 /* readFileAsync / readTextAsync / readJSONAsync: the worker reads, the script converts. */
@@ -1376,113 +1383,32 @@ static JSValue mc_js_format_async(JSContext *ctx, JSValueConst this_val, int arg
     return mc_new_job(ctx, athena_memcard_job_format(port), name, MC_JOB_FORMAT, port, NULL);
 }
 
-static const char *mc_job_state_name(AthenaMemcardJobState state) {
-    switch (state) {
-    case ATHENA_MEMCARD_JOB_RUNNING: return "running";
-    case ATHENA_MEMCARD_JOB_DONE: return "done";
-    case ATHENA_MEMCARD_JOB_CANCELLED: return "cancelled";
-    default: return "failed";
-    }
-}
-
-/* Converts the outcome once, the first time the job is seen settled. */
-static int mc_job_settle(JSContext *ctx, McJobHandle *handle, const AthenaMemcardJobStatus *status) {
-    if (handle->settled || status->state == ATHENA_MEMCARD_JOB_RUNNING)
-        return 0;
-    if (status->state == ATHENA_MEMCARD_JOB_DONE) {
-        if (handle->kind == MC_JOB_READ || handle->kind == MC_JOB_READ_TEXT ||
-            handle->kind == MC_JOB_READ_JSON) {
-            void *data = NULL;
-            size_t size = 0;
-            /* The data ends with a ' ' (athena_memcard_read_file). */
-            athena_memcard_job_take_data(handle->job, &data, &size);
-            if (!data && !(data = calloc(1, 1))) {
-                JS_ThrowOutOfMemory(ctx);
-                return -1;
-            }
-            if (handle->kind == MC_JOB_READ) {
-                handle->outcome = mc_new_buffer(ctx, data, size);
-            } else {
-                handle->outcome = handle->kind == MC_JOB_READ_TEXT ?
-                    JS_NewStringLen(ctx, data, size) : JS_ParseJSON(ctx, data, size, handle->target);
-                free(data);
-                /* A parse error settles the job as failed, with the SyntaxError. */
-                if (JS_IsException(handle->outcome) && handle->kind == MC_JOB_READ_JSON) {
-                    handle->outcome = JS_GetException(ctx);
-                    JS_SetPropertyStr(ctx, handle->outcome, "path", JS_NewString(ctx, handle->target));
-                    handle->failed = true;
-                }
-            }
-        } else if (handle->kind == MC_JOB_WRITE) {
-            handle->outcome = JS_NewInt32(ctx, status->result);
-        } else {
-            handle->outcome = JS_UNDEFINED;
-        }
-    } else {
-        handle->failed = true;
-        handle->outcome = mc_error(ctx, status->result, "%s: %s: %s", handle->name,
-            athena_memcard_strerror(status->result), handle->target);
-        if (!JS_IsException(handle->outcome))
-            JS_SetPropertyStr(ctx, handle->outcome, "path", JS_NewString(ctx, handle->target));
-    }
-    if (JS_IsException(handle->outcome)) {
-        handle->outcome = JS_UNDEFINED;
+/* Module functions: the same as the job's own poll(), wait() and cancel(). */
+static int mc_job_arg(JSContext *ctx, int argc, JSValueConst *argv, int max, const char *name) {
+    if (!mc_argc(ctx, argc, 1, max, name))
+        return -1;
+    if (!athena_js_job_is(argv[0], &mc_job_kind)) {
+        mc_throw(ctx, ATHENA_MEMCARD_ERR_ARGUMENT, "%s: expected a MemoryCard job", name);
         return -1;
     }
-    handle->settled = true;
     return 0;
 }
 
-static JSValue mc_job_status_object(JSContext *ctx, McJobHandle *handle) {
-    AthenaMemcardJobStatus status;
-    JSValue object;
-
-    athena_memcard_job_status(handle->job, &status);
-    if (mc_job_settle(ctx, handle, &status) < 0)
-        return JS_EXCEPTION;
-    object = JS_NewObject(ctx);
-    if (JS_IsException(object))
-        return object;
-    JS_DefinePropertyValueStr(ctx, object, "state", JS_NewString(ctx,
-        handle->settled && handle->failed && status.state == ATHENA_MEMCARD_JOB_DONE ? "failed" :
-        mc_job_state_name(status.state)), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "bytesDone",
-        JS_NewInt64(ctx, (int64_t)status.bytes_done), JS_PROP_C_W_E);
-    JS_DefinePropertyValueStr(ctx, object, "bytesTotal",
-        JS_NewInt64(ctx, (int64_t)status.bytes_total), JS_PROP_C_W_E);
-    if (handle->settled)
-        JS_DefinePropertyValueStr(ctx, object,
-            handle->failed ? "error" : "result",
-            JS_DupValue(ctx, handle->outcome), JS_PROP_C_W_E);
-    return object;
-}
-
 static JSValue mc_js_poll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    McJobHandle *handle;
-
-    if (!mc_argc(ctx, argc, 1, 1, "MemoryCard.poll") ||
-        !(handle = mc_job_handle(ctx, argv[0], "MemoryCard.poll")))
+    if (mc_job_arg(ctx, argc, argv, 1, "MemoryCard.poll") < 0)
         return JS_EXCEPTION;
-    return mc_job_status_object(ctx, handle);
+    return athena_js_job_poll(ctx, argv[0], &mc_job_kind, "MemoryCard.poll");
 }
 
 static JSValue mc_js_cancel(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    McJobHandle *handle;
-
-    if (!mc_argc(ctx, argc, 1, 1, "MemoryCard.cancel") ||
-        !(handle = mc_job_handle(ctx, argv[0], "MemoryCard.cancel")))
+    if (mc_job_arg(ctx, argc, argv, 1, "MemoryCard.cancel") < 0)
         return JS_EXCEPTION;
-    athena_memcard_job_cancel(handle->job);
-    return JS_UNDEFINED;
+    return athena_js_job_cancel(ctx, argv[0], &mc_job_kind, "MemoryCard.cancel");
 }
 
 /* MemoryCard.wait(job, timeoutMs?): blocks with the GIL released, then polls. */
 static JSValue mc_js_wait(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    McJobHandle *handle;
-    int32_t timeout = -1;
-
-    if (!mc_argc(ctx, argc, 1, 2, "MemoryCard.wait") ||
-        !(handle = mc_job_handle(ctx, argv[0], "MemoryCard.wait")))
+    if (mc_job_arg(ctx, argc, argv, 2, "MemoryCard.wait") < 0)
         return JS_EXCEPTION;
     if (mc_present(argc, argv, 1)) {
         double number;
@@ -1490,103 +1416,9 @@ static JSValue mc_js_wait(JSContext *ctx, JSValueConst this_val, int argc, JSVal
             !isfinite(number) || number < 0 || number > INT32_MAX)
             return mc_throw(ctx, ATHENA_MEMCARD_ERR_ARGUMENT,
                 "MemoryCard.wait timeout must be a non-negative number of milliseconds");
-        timeout = (int32_t)number;
     }
-    athena_js_gil_unlock();
-    athena_memcard_job_wait(handle->job, timeout);
-    athena_js_gil_lock();
-    return mc_job_status_object(ctx, handle);
+    return athena_js_job_wait(ctx, argv[0], argc - 1, argv + 1, &mc_job_kind, "MemoryCard.wait");
 }
-
-static JSValue mc_job_tick(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-    int magic, JSValue *data);
-
-/* Checks the job again in `delay_ms`, through the event loop's timers. */
-static int mc_job_schedule(JSContext *ctx, JSValueConst job, int delay_ms) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue set_timeout = JS_GetPropertyStr(ctx, global, "setTimeout");
-    JSValue args[2], ret;
-
-    JS_FreeValue(ctx, global);
-    if (!JS_IsFunction(ctx, set_timeout)) {
-        JS_FreeValue(ctx, set_timeout);
-        mc_throw(ctx, ATHENA_MEMCARD_ERR_NOT_READY, "MemoryCard: awaiting a job needs setTimeout");
-        return -1;
-    }
-    args[0] = JS_NewCFunctionData(ctx, mc_job_tick, 0, 0, 1, (JSValue *)&job);
-    args[1] = JS_NewInt32(ctx, delay_ms);
-    ret = JS_IsException(args[0]) ? JS_EXCEPTION : JS_Call(ctx, set_timeout, JS_UNDEFINED, 2, args);
-    JS_FreeValue(ctx, args[0]);
-    JS_FreeValue(ctx, set_timeout);
-    if (JS_IsException(ret))
-        return -1;
-    JS_FreeValue(ctx, ret);
-    return 0;
-}
-
-/* Timer callback of an awaited job: settles its promise or checks again later. */
-static JSValue mc_job_tick(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
-    int magic, JSValue *data) {
-    McJobHandle *handle = JS_GetOpaque(data[0], mc_job_class_id);
-    AthenaMemcardJobStatus status;
-    JSValue func, value, ret;
-
-    if (!handle || JS_IsUndefined(handle->resolve))
-        return JS_UNDEFINED;
-    athena_memcard_job_status(handle->job, &status);
-    if (status.state == ATHENA_MEMCARD_JOB_RUNNING)
-        return mc_job_schedule(ctx, data[0], MC_JOB_TICK_MS) < 0 ? JS_EXCEPTION : JS_UNDEFINED;
-
-    if (mc_job_settle(ctx, handle, &status) < 0) {
-        func = handle->reject;
-        value = JS_GetException(ctx);
-    } else {
-        func = handle->failed ? handle->reject : handle->resolve;
-        value = JS_DupValue(ctx, handle->outcome);
-    }
-    func = JS_DupValue(ctx, func);
-    JS_FreeValue(ctx, handle->resolve);
-    JS_FreeValue(ctx, handle->reject);
-    handle->resolve = JS_UNDEFINED;
-    handle->reject = JS_UNDEFINED;
-    ret = JS_Call(ctx, func, JS_UNDEFINED, 1, (JSValueConst *)&value);
-    JS_FreeValue(ctx, func);
-    JS_FreeValue(ctx, value);
-    if (JS_IsException(ret))
-        return ret;
-    JS_FreeValue(ctx, ret);
-    return JS_UNDEFINED;
-}
-
-/* job.then(): makes a job awaitable. The job is checked every few milliseconds. */
-static JSValue mc_job_then(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    McJobHandle *handle = JS_GetOpaque2(ctx, this_val, mc_job_class_id);
-    JSValue then, ret;
-
-    if (!handle)
-        return JS_EXCEPTION;
-    if (JS_IsUndefined(handle->promise)) {
-        JSValue funcs[2];
-        JSValue promise = JS_NewPromiseCapability(ctx, funcs);
-        if (JS_IsException(promise))
-            return promise;
-        handle->promise = promise;
-        handle->resolve = funcs[0];
-        handle->reject = funcs[1];
-        if (mc_job_schedule(ctx, this_val, 0) < 0)
-            return JS_EXCEPTION;
-    }
-    then = JS_GetPropertyStr(ctx, handle->promise, "then");
-    if (JS_IsException(then))
-        return then;
-    ret = JS_Call(ctx, then, handle->promise, argc, argv);
-    JS_FreeValue(ctx, then);
-    return ret;
-}
-
-static const JSCFunctionListEntry mc_job_proto[] = {
-    JS_CFUNC_DEF("then", 2, mc_job_then),
-};
 
 /* ------------------------------------------------------------------------ */
 /* Registration                                                             */
@@ -1640,15 +1472,11 @@ static const JSCFunctionListEntry mc_module_funcs[] = {
 static int mc_module_init(JSContext *ctx, JSModuleDef *m) {
     JSValue proto;
 
-    if (athena_register_class(ctx, &mc_file_class_id, &mc_file_class) < 0 ||
-        athena_register_class(ctx, &mc_job_class_id, &mc_job_class) < 0)
+    if (athena_register_class(ctx, &mc_file_class_id, &mc_file_class) < 0)
         return -1;
     proto = JS_NewObject(ctx);
     JS_SetPropertyFunctionList(ctx, proto, mc_file_proto, countof(mc_file_proto));
     JS_SetClassProto(ctx, mc_file_class_id, proto);
-    proto = JS_NewObject(ctx);
-    JS_SetPropertyFunctionList(ctx, proto, mc_job_proto, countof(mc_job_proto));
-    JS_SetClassProto(ctx, mc_job_class_id, proto);
     return JS_SetModuleExportList(ctx, m, mc_module_funcs, countof(mc_module_funcs));
 }
 

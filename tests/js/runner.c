@@ -23,6 +23,7 @@
 JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
 JSModuleDef *athena_memcard_init(JSContext *ctx);
+void athena_js_job_class_init(JSContext *ctx);
 void memcard_host_init(void);
 
 /* <athena/math.h>, used by quickjs.c; the EE versions are approximations. */
@@ -253,6 +254,7 @@ int main(int argc, char **argv) {
 
     athena_box2d_init(ctx);
     memcard_host_init();
+    athena_js_job_class_init(ctx);   /* as the Thread module does */
     athena_memcard_init(ctx);
     if (eval_module(ctx, bootstrap, strlen(bootstrap), "<bootstrap>") < 0)
         return 2;

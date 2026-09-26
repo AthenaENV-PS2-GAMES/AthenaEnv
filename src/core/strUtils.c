@@ -85,51 +85,6 @@ char** str_split(char* a_str, const char a_delim)
     return result;
 }
 
-int getMountInfo(char *path, char *mountString, char *mountPoint, char *newCWD)
-{
-    int expected_items = 4;
-    int i = 0;
-    char *items[expected_items];
-    char* duplicate = strdup(path); //otherwise, original path will become `hdd0:`
-    char** tokens = str_split(path, ':');
-
-    if (!tokens)
-        goto quit;
-
-    for (i = 0; *(tokens + i); i++) {
-        if (i < expected_items) {
-            items[i] = *(tokens + i);
-        } else {
-            free(*(tokens + i));    
-        }
-    }
-
-    if (i < 3 )
-        goto quit;
-
-    if (mountPoint != NULL)
-        sprintf(mountPoint, "%s:%s", items[0], items[1]);
-
-    if (mountString != NULL)
-        sprintf(mountString, "%s:", items[2]);
-
-    if (newCWD != NULL)
-        sprintf(newCWD, "%s:%s", items[2], i > 3 ? items[3] : "");
-
-    free(items[0]);
-    free(items[1]);
-    free(items[2]);
-
-    if (i > 3)
-        free(items[3]);
-
-    return 1;
-quit:
-    if (duplicate != NULL)
-        free(duplicate);
-    return 0;
-}
-
 int count_nonascii(const char *str) {
     int count = 0;
 
@@ -147,7 +102,7 @@ int count_spaces(const char *str, const char *chars) {
     int count = 0;
 
     while (*chars) {
-        char *tmp_str = str;
+        const char *tmp_str = str;
 
         while (*tmp_str) {
             if (*tmp_str == *chars) {

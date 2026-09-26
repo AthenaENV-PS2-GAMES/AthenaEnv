@@ -38,6 +38,8 @@ typedef enum {
     ATHENA_SOUND_ERR_CORRUPT = -8,
     /* The streaming thread could not be started. */
     ATHENA_SOUND_ERR_THREAD = -9,
+    /* A loadSfxAsync() job was cancelled. */
+    ATHENA_SOUND_ERR_CANCELLED = -10,
 } AthenaSoundResult;
 
 const char *athena_sound_result_string(int result);
@@ -150,8 +152,11 @@ AthenaSfxJobState athena_sfx_job_poll(AthenaSfxJob *job, AthenaSfx **out, int *r
 bool athena_sfx_job_wait(AthenaSfxJob *job, int timeout_ms);
 /* The job ends as CANCELLED unless it already finished. */
 void athena_sfx_job_cancel(AthenaSfxJob *job);
-/* Cancels, waits for the worker (a read cannot be interrupted) and frees. */
+/* Cancels and frees; a read still running is freed when it ends. Never blocks. */
 void athena_sfx_job_destroy(AthenaSfxJob *job);
+/* The read job on the shared pool (athena/job.h), for the JavaScript Job layer. */
+struct AthenaJob;
+struct AthenaJob *athena_sfx_job_core(AthenaSfxJob *job);
 
 /*
  * Plays on `channel` (0..23), or on a free channel when `channel` is < 0.

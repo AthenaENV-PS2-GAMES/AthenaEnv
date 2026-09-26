@@ -49,7 +49,10 @@ static JSValue athena_system_list_dir(JSContext *ctx, JSValue this_val, int argc
         if (strchr(requested, ':')) {
             written = snprintf(path, sizeof(path), "%s", requested);
         } else {
-            written = snprintf(path, sizeof(path), "%s%s", boot_path, requested);
+            /* getcwd() on a console returns "mass0:/bin", without the trailing slash. */
+            size_t length = strlen(boot_path);
+            const char *separator = length && boot_path[length - 1] != '/' && boot_path[length - 1] != ':' ? "/" : "";
+            written = snprintf(path, sizeof(path), "%s%s%s", boot_path, separator, requested);
         }
         JS_FreeCString(ctx, requested);
         if (written < 0 || (size_t)written >= sizeof(path)) {

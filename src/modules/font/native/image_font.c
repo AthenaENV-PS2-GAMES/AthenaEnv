@@ -190,9 +190,7 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 		const char *text_to_render = String;
 		
 		owl_packet *packet = NULL;
-		owl_qword *last_cnt, *last_direct, *last_prim, *before_first_draw, *after_draw;
 		int texture_id = -1;
-		bool started_rendering = false;
 
 		int printable_chars = 0;
 		for (const char *p = String; *p; p++) {
@@ -204,7 +202,6 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 		int text_vert_size = printable_chars * 2;
 		packet = owl_query_packet(CHANNEL_VIF1, (texture_id != -1 ? 12 : 8) + text_vert_size);
 
-		last_cnt = packet->ptr;
 		owl_add_cnt_tag(packet, (texture_id != -1 ? 11 : 7) + text_vert_size, 0);
 
 		if (texture_id != -1) {
@@ -222,7 +219,6 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
 		}
 
-		last_direct = packet->ptr;
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
@@ -264,7 +260,6 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 
 		owl_add_tag(packet, GS_RGBAQ, color);
 
-		last_prim = packet->ptr;
 		owl_add_tag(packet,
 			((uint64_t)(GS_UV) << 0 | (uint64_t)(GS_XYZ2) << 4),
 			VU_GS_GIFTAG(text_vert_size,
@@ -273,7 +268,6 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 				1, 2)
 		);
 
-		before_first_draw = packet->ptr;
 
 		for (; *text_to_render; ++text_to_render) {
 			unsigned char c = (unsigned char)*text_to_render;

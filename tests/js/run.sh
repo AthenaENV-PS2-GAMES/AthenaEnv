@@ -30,11 +30,12 @@ for f in src/modules/box2d/native/box2d/*.c; do
     build "$OUT/obj/b2_$(basename "$f" .c).o" "$f" $UBSAN $B2FLAGS -w
 done
 # MemoryCard runs against the fake card of tests/host/fake_libmc.h.
-MC="-Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native"
+MC="-Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native -Isrc/modules/thread/include"
 $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
     -Wno-missing-field-initializers -Wno-cast-function-type -Werror $MC $INC \
     -o "$OUT/runner" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
     tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
+    src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
     src/modules/memcard/quickjs/ath_memcard.c "$OUT"/obj/*.o -lm -lpthread
 
 cd bin

@@ -17,13 +17,17 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/loop/include -Isrc/modules/loop/nat
 $CC $CFLAGS -Isrc/modules/loop/include -Isrc/modules/loop/native \
     -o "$OUT/loop_systems_test" tests/host/loop_systems_test.c
 $CC $CFLAGS -Isrc/runtime/quickjs -o "$OUT/output_test" tests/host/output_test.c
+$CC $CFLAGS -Itests/host -Itests/host/stubs -Isrc/modules/thread/include -Isrc/modules/thread/native \
+    -o "$OUT/job_test" tests/host/job_test.c -lpthread
 $CC $CFLAGS -Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native \
+    -Isrc/modules/thread/include -Isrc/modules/thread/native \
     -o "$OUT/memcard_test" tests/host/memcard_test.c -lpthread
 $CC $CFLAGS -Isrc/readini/include -o "$OUT/readini_test" \
     tests/host/readini_test.c src/readini/src/readini.c
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
     -o "$OUT/sound_stream_test" tests/host/sound_stream_test.c -lpthread -lm
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
+    -Isrc/modules/thread/include -Isrc/modules/thread/native \
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
     -o "$OUT/video_test" tests/host/video_test.c -lpthread
@@ -41,6 +45,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/loop_test"
 "$OUT/loop_systems_test"
 "$OUT/output_test"
+"$OUT/job_test"
 "$OUT/memcard_test"
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"

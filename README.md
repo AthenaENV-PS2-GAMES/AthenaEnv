@@ -227,10 +227,46 @@ device prefix: `mass:/` (USB), `mc0:/` and `mc1:/` (memory cards), `cdrom0:`
   `System.getMemoryStats()` reports the binary size, the native heap, the
   QuickJS heap and its limit; `bin/tests/memory_stats.js` shows them on
   screen.
+- Pixels, textures and glyphs live outside the JavaScript heap, so the
+  collector cannot tell how much memory an unused `Image` or `Font` holds.
+  Call `free()` on the ones you are done with (at a scene change, for
+  example), and `std.gc()` on loading screens. Loading an image or font that
+  runs out of memory collects garbage and tries once more.
+- Deep recursion throws a catchable `InternalError: stack overflow` before it
+  can overrun the stack: the main thread has 128 KB, and `Thread.new()`
+  threads 32 KB by default.
+
+### Background jobs
+
+Slow work runs on a small pool of worker threads while frames keep coming:
+reading and writing memory card files, extracting archives, loading sound
+effects and fonts. Every `*Async` function returns a job, with the same API
+in every module:
+
+```js
+async function load() {
+    const font = await Font.loadAsync("fonts/title.ttf", { size: 40 });   // await it...
+    const save = await MemoryCard.readJSONAsync("mc0:/MYGAME/save.json");
+    return { font, save };
+}
+
+const job = Archive.extractAsync("dlc.zip", "mass:/GAME/dlc");
+Loop.run(() => {
+    const status = job.poll();          // ...or poll it: { state, result | error, ...progress }
+    if (status.state === "running") drawBar(status.bytesDone / status.bytesTotal);
+});
+```
+
+`job.wait(timeoutMs)` blocks until it settles and `job.cancel()` stops it;
+`MemoryCard.poll(job)`, `Archive.wait(job)` and the like do the same. Jobs
+that wait for the IOP (memory card, disc, USB) run above the script thread,
+the ones that use the CPU (decompression) below it. C modules submit their
+own kinds of jobs through `<athena/job.h>` and expose them with
+`<athena/js/job.h>`.
 
 ## Modules
 
-The default build contains every module except `box2d`, `box2ddraw` and `erl`.
+The default build contains every module except `box2d`, `box2ddraw`, `erl`, `hdd`, `ilink` and `mx4sio`.
 Each module's API is documented in its TypeScript declaration, linked in the
 tables below.
 
@@ -242,23 +278,29 @@ tables below.
 | [`loop`](src/modules/loop/loop.d.ts) | `Loop` | Runtime-driven game loop: frame delta, fixed steps, time scale, frame pacing and statistics. |
 | [`draw`](src/modules/draw/draw.d.ts) | `Draw` | Points, lines, rectangles, circles, triangles and quads, flat or Gouraud shaded. |
 | [`color`](src/modules/color/color.d.ts) | `Color` | Packing and editing of RGBA colors. |
-| [`image`](src/modules/image/image.d.ts) | `Image` | PNG, JPEG and BMP loading, pixel access and textured drawing with tint, source rectangle and rotation. |
+| [`image`](src/modules/image/image.d.ts) | `Image` | PNG, JPEG and BMP loading, pixel access and textured drawing with tint, source rectangle and rotation; `drawList()` draws many sprites of one texture at once. |
 | [`imagelist`](src/modules/imagelist/imagelist.d.ts) | `ImageList` | Asynchronous image loading with priorities, deduplication, an LRU cache and an optional decoder thread. |
-| [`font`](src/modules/font/font.d.ts) | `Font` | TrueType and bitmap fonts with scaling, alignment, outline and drop shadow. |
+| [`font`](src/modules/font/font.d.ts) | `Font` | TrueType fonts at any size, loaded on a worker with `Font.loadAsync()`, and bitmap fonts; multi-line text, kerning, alignment, outline and drop shadow, with square glyphs on NTSC, PAL, 480p and 16:9. |
 | [`tilemap`](src/modules/tilemap/tilemap.d.ts) | `TileMap` | VU1-accelerated batched sprites and tilemaps. |
 | [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. See [docs/VIDEO.md](docs/VIDEO.md). |
 | `graphics` | — | GS initialization and the rendering core shared by the modules above. |
 
 ```js
 const logo = new Image("logo.png");
-const font = new Font("fonts/title.ttf");
-font.scale = 1.5;
+const font = new Font("fonts/title.ttf", { size: 40 });   // rasterized at 40 px
 
 Loop.run(() => {
     logo.draw(100, 80);
-    font.print(100, 300, "Press START");
+    font.print(100, 300, "Press START\nto continue");
 }, { clearColor: Color.new(20, 20, 40) });
 ```
+
+`image.drawList()` takes the sprite records of `TileMap.SpriteBuffer` (x, y,
+w, h, u1, v1, u2, v2, r, g, b, a): the texture state goes out once per 128
+sprites instead of once per `draw()`, for particles, bullets and tiles that
+change every frame. Fonts share glyph caches between equal loads (same file
+and size); at most 16 different ones are loaded at a time, so `free()` the
+ones no longer used.
 
 ### Input
 
@@ -280,7 +322,7 @@ Loop.run(() => {
 
 | Module | Global | Description |
 |---|---|---|
-| [`sound`](src/modules/sound/sound.d.ts) | `Sound` | ADPCM sound effects on the 24 SPU2 voices and one streamed WAV or Ogg Vorbis music track, with fades. |
+| [`sound`](src/modules/sound/sound.d.ts) | `Sound` | ADPCM sound effects on the 24 SPU2 voices, loaded sync or on a worker with `Sound.loadSfxAsync()`, and one streamed WAV or Ogg Vorbis music track, with fades. |
 
 ```js
 const music = new Sound.Stream("music/theme.ogg");
@@ -354,8 +396,16 @@ Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
 | [`iop`](src/modules/iop/iop.d.ts) | `IOP` | IOP driver discovery, loading, reset and memory statistics. |
 | [`memcard`](src/modules/memcard/memcard.d.ts) | `MemoryCard` | Memory cards on `mc0:/` and `mc1:/`: card status and swap detection, files (whole, JSON or streamed), directories, attributes and dates, atomic saves, `icon.sys`, format, and every slow call also as an awaitable background job. Also the drivers the memory card boot device needs. |
 | `usbmass` | — | USB storage drivers (`mass:/`). |
+| `mx4sio` | — | MX4SIO (SD card adapter in memory card slot 2) drivers (`mass:/`). Not in the default build; slot 2 no longer reads memory cards while it is loaded. |
+| `hdd` | — | Internal hard disk drivers for exFAT/FAT32 disks, not PFS (`mass:/`). Not in the default build. |
+| `ilink` | — | i.LINK (IEEE 1394) storage drivers (`mass:/`), on the consoles that have the port. Not in the default build. |
 | `cdrom` | — | Disc filesystem driver (`cdrom0:`). |
 | `poweroff` | — | IOP power-off driver. |
+
+USB, MX4SIO, the internal HDD and i.LINK all appear as `mass:/` through the
+same BDM drivers. When booting from `mass:`, the drivers of every one of
+these modules in the build are started, the one holding the boot folder is
+found, and only that one is kept.
 
 ```js
 // Read a file straight from a zip, without extracting it.
@@ -397,9 +447,28 @@ screen.
 
 | Module | Global | Description |
 |---|---|---|
-| [`thread`](src/modules/thread/thread.d.ts) | `Thread` | EE threads. |
-| [`mutex`](src/modules/mutex/mutex.d.ts) | `Mutex` | Mutual exclusion for data shared with threads. |
+| [`thread`](src/modules/thread/thread.d.ts) | `Thread` | EE threads with stack and priority control, recursion limit protection, and the worker pool behind background jobs. |
+| [`mutex`](src/modules/mutex/mutex.d.ts) | `Mutex` | Mutual exclusion for data shared between threads. |
 | [`timer`](src/modules/timer/timer.d.ts) | `Timer` | Pausable elapsed-time timers. |
+
+```js
+const mutex = Mutex.new();
+let counter = 0;
+
+const worker = Thread.new(() => {
+    Mutex.lock(mutex);
+    counter++;
+    Mutex.unlock(mutex);
+}, "worker", 32768);
+
+Thread.start(worker);
+```
+
+Callbacks execute preemptively on native EE threads and share the QuickJS
+runtime through an internal lock (the GIL); deeper recursion throws a
+catchable `InternalError: stack overflow` instead of overrunning the stack
+(`bin/tests/stack_test.js`). For I/O and heavy decoding, prefer the
+[Background jobs](#background-jobs) pool (`*Async`).
 
 ### Native modules
 
@@ -453,8 +522,9 @@ node tools/modules.js configure --all                          # everything
 
 `configure` regenerates `Makefile.modules`, `src/generated/` and
 `bin/athena.d.ts`. Boot devices are modules too: a build that runs from USB can
-drop `memcard` and `cdrom` to save RAM, but a build without the driver of its
-boot device cannot read its own scripts.
+drop `memcard` and `cdrom` to save RAM, while builds booting from SD card
+adapters or internal storage include `mx4sio`, `hdd` or `ilink`. A build without
+the driver of its boot device cannot read its own scripts.
 
 Local builds with a ps2dev toolchain, build options and the C library are
 described in [docs/BUILDING_ATHENA.md](docs/BUILDING_ATHENA.md).
@@ -563,7 +633,10 @@ initialization.
 Scripts run one after another in the same ELF, so native state that outlives
 a script (loaded IOP drivers, enabled gamepad drivers) carries over.
 Tests that check a fresh start, such as `gamepad_test.js`, are only reliable
-as the first script after boot.
+as the first script after boot. Key test suites in `bin/tests/` include
+`stack_test.js` (recursion and stack limits), `font_async_test.js` (font
+rasterization and async jobs), `memcard_test.js` (synchronous and async saves)
+and `memory_stats.js`.
 
 Test on real hardware before a release: the emulator tolerates misaligned
 memory accesses and provides the `host:` device, which a console does not.
