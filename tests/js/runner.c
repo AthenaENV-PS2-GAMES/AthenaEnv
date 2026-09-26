@@ -5,17 +5,23 @@
  * console.log and std.gc. JS_FreeRuntime() at the end asserts that every
  * object was released. Run with tests/js/run.sh.
  *
- * Only modules without hardware dependencies can be linked here (Box2D).
+ * Only modules without hardware dependencies can be linked here: Box2D,
+ * and MemoryCard against the fake card of tests/host/fake_libmc.h. A
+ * minimal setTimeout runs after the script, for awaited MemoryCard jobs.
  */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include <ath_env.h>
 
 JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
+JSModuleDef *athena_memcard_init(JSContext *ctx);
+void memcard_host_init(void);
 
 /* <athena/math.h>, used by quickjs.c; the EE versions are approximations. */
 float athena_cosf(float x) { return cosf(x); }
@@ -80,31 +86,105 @@ static char *read_file(const char *path, size_t *length) {
     return data;
 }
 
+static void print_exception(JSContext *ctx) {
+    JSValue error = JS_GetException(ctx);
+    JSValue stack = JS_GetPropertyStr(ctx, error, "stack");
+    const char *message = JS_ToCString(ctx, error);
+    const char *trace = JS_ToCString(ctx, stack);
+    printf("Uncaught %s\n%s\n", message ? message : "exception", trace ? trace : "");
+    JS_FreeCString(ctx, message);
+    JS_FreeCString(ctx, trace);
+    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, error);
+}
+
+static void run_jobs(JSContext *ctx) {
+    JSContext *job_ctx;
+    int ret;
+
+    while ((ret = JS_ExecutePendingJob(JS_GetRuntime(ctx), &job_ctx)) != 0)
+        if (ret < 0)
+            print_exception(job_ctx);
+}
+
 static int eval_module(JSContext *ctx, const char *code, size_t length, const char *name) {
     JSValue value = JS_Eval(ctx, code, length, name, JS_EVAL_TYPE_MODULE);
-    JSContext *job_ctx;
 
     if (JS_IsException(value)) {
-        JSValue error = JS_GetException(ctx);
-        JSValue stack = JS_GetPropertyStr(ctx, error, "stack");
-        const char *message = JS_ToCString(ctx, error);
-        const char *trace = JS_ToCString(ctx, stack);
-        printf("Uncaught %s\n%s\n", message ? message : "exception", trace ? trace : "");
-        JS_FreeCString(ctx, message);
-        JS_FreeCString(ctx, trace);
-        JS_FreeValue(ctx, stack);
-        JS_FreeValue(ctx, error);
+        print_exception(ctx);
         return -1;
     }
     JS_FreeValue(ctx, value);
-    while (JS_ExecutePendingJob(JS_GetRuntime(ctx), &job_ctx) > 0)
-        ;
+    run_jobs(ctx);
     return 0;
+}
+
+/* setTimeout(func, ms): one-shot timers, run by run_timers() in due order. */
+typedef struct Timer {
+    JSValue func;
+    double due;
+    struct Timer *next;
+} Timer;
+
+static Timer *timers;
+
+static double clock_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+}
+
+static JSValue js_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    double delay = 0;
+    Timer *timer;
+
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx, "setTimeout expects a function");
+    if (argc > 1 && JS_ToFloat64(ctx, &delay, argv[1]))
+        return JS_EXCEPTION;
+    timer = malloc(sizeof(*timer));
+    if (!timer)
+        return JS_ThrowOutOfMemory(ctx);
+    timer->func = JS_DupValue(ctx, argv[0]);
+    timer->due = clock_ms() + (delay > 0 ? delay : 0);
+    timer->next = timers;
+    timers = timer;
+    return JS_UNDEFINED;
+}
+
+static int run_timers(JSContext *ctx) {
+    int ret = 0;
+
+    while (timers) {
+        Timer **earliest = &timers, *timer;
+        JSValue result;
+        double wait;
+
+        for (Timer **t = &timers; *t; t = &(*t)->next)
+            if ((*t)->due < (*earliest)->due)
+                earliest = t;
+        timer = *earliest;
+        *earliest = timer->next;
+        wait = timer->due - clock_ms();
+        if (wait > 0)
+            usleep((useconds_t)(wait * 1000));
+        result = JS_Call(ctx, timer->func, JS_UNDEFINED, 0, NULL);
+        JS_FreeValue(ctx, timer->func);
+        free(timer);
+        if (JS_IsException(result)) {
+            print_exception(ctx);
+            ret = -1;
+        }
+        JS_FreeValue(ctx, result);
+        run_jobs(ctx);
+    }
+    return ret;
 }
 
 int main(int argc, char **argv) {
     /* As generated in src/generated/js_registry.c. */
-    static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;";
+    static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;"
+        "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -125,9 +205,12 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, global, "console", console);
     JS_SetPropertyStr(ctx, std, "gc", JS_NewCFunction(ctx, js_gc, "gc", 0));
     JS_SetPropertyStr(ctx, global, "std", std);
+    JS_SetPropertyStr(ctx, global, "setTimeout", JS_NewCFunction(ctx, js_set_timeout, "setTimeout", 2));
     JS_FreeValue(ctx, global);
 
     athena_box2d_init(ctx);
+    memcard_host_init();
+    athena_memcard_init(ctx);
     if (eval_module(ctx, bootstrap, strlen(bootstrap), "<bootstrap>") < 0)
         return 2;
     code = read_file(argv[1], &length);
@@ -137,6 +220,8 @@ int main(int argc, char **argv) {
     }
     ret = eval_module(ctx, code, length, argv[1]);
     free(code);
+    if (run_timers(ctx) < 0)
+        ret = -1;
 
     athena_box2d_cleanup(ctx);
     JS_FreeContext(ctx);

@@ -112,11 +112,12 @@ function buildCatalog(modules = discoverModules()) {
                 iop: m.dependencies?.iop || [],
                 ee_libs: m.dependencies?.ee_libs || []
             },
-            global_alias: m.quickjs?.global_alias || null,
+            global_alias: m.quickjs?.global_alias || m.js?.global_alias || null,
             api: {
                 // C API: native sources or public headers (include/athena/).
                 native: (m.sources || []).length > 0 || fs.existsSync(path.join(m._dirPath, 'include')),
-                quickjs: !!m.quickjs
+                // JavaScript API: a QuickJS binding or an embedded JavaScript module.
+                quickjs: !!(m.quickjs || m.js)
             }
         }))
     };
@@ -179,7 +180,7 @@ function commandList() {
     console.log('========================================\n');
     for (const m of modules) {
         const reqStr = m.required ? '[REQUIRED]' : (m.default ? '[DEFAULT]' : '[OPTIONAL]');
-        console.log(`- ${m.id} (${m.name}) ${reqStr}`);
+        console.log(`- ${m.id} (${m.name}) ${reqStr}${m.js ? ' [JS]' : ''}`);
         console.log(`  Category: ${m.category || 'General'}`);
         console.log(`  Description: ${m.description}`);
         if (m.dependencies?.modules?.length) {
@@ -213,6 +214,55 @@ const NATIVE_HOOKS = {
 
 function cString(value) {
     return value == null ? 'NULL' : `"${value}"`;
+}
+
+const JS_IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+// Module names are import specifiers: no quotes, backslashes or path syntax.
+const JS_MODULE_NAME = /^[A-Za-z_$][A-Za-z0-9_$-]*$/;
+
+/*
+ * Embedded JavaScript module of `m` (module.json "js"), validated, or null.
+ * The source is embedded as <symbol> / size_<symbol> and compiled when first
+ * imported, under its module name.
+ */
+function moduleJs(m) {
+    const js = m.js;
+    if (!js) return null;
+    if (typeof js.source !== 'string' || !js.source.endsWith('.js')) {
+        throw new Error(`Module ${m.id}: js.source must be the path of one .js file`);
+    }
+    if (!fs.existsSync(path.join(m._dirPath, js.source))) {
+        throw new Error(`Module ${m.id}: js.source "${js.source}" does not exist`);
+    }
+    if (!JS_MODULE_NAME.test(js.module_name || '')) {
+        throw new Error(`Module ${m.id}: js.module_name must be a name like "Scene"`);
+    }
+    if (js.global_alias != null && !JS_IDENT.test(js.global_alias)) {
+        throw new Error(`Module ${m.id}: js.global_alias must be a JavaScript identifier`);
+    }
+    return {
+        moduleName: js.module_name,
+        globalAlias: js.global_alias || null,
+        globalExport: js.global_export || null,
+        symbol: `athena_js_${m.id.replace(/[^A-Za-z0-9_]/g, '_')}`,
+        file: `src/modules/${m._dirName}/${js.source}`,
+    };
+}
+
+/* Import names must be unique across the QuickJS bindings and the JavaScript modules. */
+function checkModuleNames(modules) {
+    const owners = new Map();
+    for (const m of modules) {
+        const names = [];
+        if (m.quickjs) names.push(m.quickjs.module_name || m.name);
+        if (m.js) names.push(moduleJs(m).moduleName);
+        for (const name of names) {
+            if (owners.has(name)) {
+                throw new Error(`Module name "${name}" is used by both '${owners.get(name)}' and '${m.id}'`);
+            }
+            owners.set(name, m.id);
+        }
+    }
 }
 
 function selectModules(selectedArg, allModules) {
@@ -309,6 +359,8 @@ function generateJsRegistry(modules) {
     let decls = '';
     let entries = '';
     let bootstrapJs = '';
+    let jsDecls = '';
+    let jsEntries = '';
 
     for (const m of modules) {
         const qjs = m.quickjs || {};
@@ -326,6 +378,16 @@ function generateJsRegistry(modules) {
             bootstrapJs += `import * as ${qjs.global_alias} from '${modName}';\\n`;
             bootstrapJs += `globalThis.${qjs.global_alias} = ${qjs.global_export || qjs.global_alias};\\n`;
         }
+
+        const js = moduleJs(m);
+        if (js) {
+            jsDecls += `extern unsigned char ${js.symbol}[];\nextern unsigned int size_${js.symbol};\n`;
+            jsEntries += `    { "${js.moduleName}", ${js.symbol}, &size_${js.symbol} },\n`;
+            if (js.globalAlias) {
+                bootstrapJs += `import * as ${js.globalAlias} from '${js.moduleName}';\\n`;
+                bootstrapJs += `globalThis.${js.globalAlias} = ${js.globalExport || js.globalAlias};\\n`;
+            }
+        }
     }
 
     return `/*
@@ -334,6 +396,7 @@ function generateJsRegistry(modules) {
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include <ath_env.h>
 #include <athena_js_module.h>
 
@@ -364,6 +427,26 @@ static const char *modules_bootstrap_code =
 const char *athena_get_modules_bootstrap_script(void) {
     return modules_bootstrap_code;
 }
+
+/* JavaScript modules (module.json "js"), embedded as source by Makefile.embed. */
+${jsDecls}
+static const struct {
+    const char *module_name;
+    const unsigned char *source;
+    const unsigned int *size;
+} athena_js_modules[] = {
+${jsEntries}    { NULL, NULL, NULL }
+};
+
+const char *athena_find_js_module(const char *module_name, size_t *length) {
+    for (int i = 0; athena_js_modules[i].module_name != NULL; i++) {
+        if (strcmp(athena_js_modules[i].module_name, module_name) == 0) {
+            *length = *athena_js_modules[i].size;
+            return (const char *)athena_js_modules[i].source;
+        }
+    }
+    return NULL;
+}
 `;
 }
 
@@ -374,6 +457,7 @@ function generateMakefileModules(modules) {
     const libs = new Set();
     // symbol -> { file, build }
     const embeds = new Map();
+    const jsEmbeds = [];
     let exportSymbols = false;
 
     for (const m of modules) {
@@ -405,6 +489,8 @@ function generateMakefileModules(modules) {
             }
             embeds.set(e.symbol, e);
         }
+        const js = moduleJs(m);
+        if (js) jsEmbeds.push(js);
         if (m.build?.export_symbols) exportSymbols = true;
     }
 
@@ -412,6 +498,10 @@ function generateMakefileModules(modules) {
     for (const [symbol, e] of embeds) {
         embedVars += `MODULE_EMBED_PATH_${symbol} = ${e.file}\n`;
         if (e.build) embedVars += `MODULE_EMBED_BUILD_${symbol} = ${e.build}\n`;
+    }
+    let jsEmbedVars = '';
+    for (const js of jsEmbeds) {
+        jsEmbedVars += `MODULE_EMBED_PATH_${js.symbol} = ${js.file}\n`;
     }
 
     const list = items => items.length ? ` \\\n\t${items.join(' \\\n\t')}` : '';
@@ -434,6 +524,9 @@ MODULE_LIBS =${libs.size ? ` ${[...libs].join(' ')}` : ''}
 # Files embedded with bin2c as <symbol> / size_<symbol>. Rules live in Makefile.embed.
 MODULE_EMBED =${embeds.size ? ` ${[...embeds.keys()].join(' ')}` : ''}
 ${embedVars}
+# JavaScript modules (module.json "js"), embedded the same way. Only RUNTIME=quickjs links them.
+MODULE_JS_EMBED =${jsEmbeds.length ? ` ${jsEmbeds.map(js => js.symbol).join(' ')}` : ''}
+${jsEmbedVars}
 # 1 when a module needs the binary's symbol table at runtime (erl).
 MODULE_EXPORT_SYMBOLS = ${exportSymbols ? 1 : 0}
 `;
@@ -442,6 +535,7 @@ MODULE_EXPORT_SYMBOLS = ${exportSymbols ? 1 : 0}
 function commandConfigure(selectedArg) {
     const allModules = discoverModules();
     const configuredModules = resolveDependencies(selectModules(selectedArg, allModules), allModules);
+    checkModuleNames(configuredModules);
     console.log(`[Athena] Configuring ${configuredModules.length} module(s): ${configuredModules.map(m => m.id).join(', ')}`);
 
     fs.mkdirSync(path.join(GENERATED_DIR, 'athena'), { recursive: true });

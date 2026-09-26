@@ -70,9 +70,12 @@ MODULE_SRCS = \
 	src/modules/imagelist/native/path.c \
 	src/modules/iop/native/iop.c \
 	src/modules/loop/native/loop.c \
+	src/modules/loop/native/loop_systems.c \
 	src/modules/vector/native/vector_math.c \
 	src/modules/matrix4/native/matrix4.c \
 	src/modules/memcard/native/memcard.c \
+	src/modules/memcard/native/memcard_iop.c \
+	src/modules/memcard/native/memcard_job.c \
 	src/modules/poweroff/native/poweroff.c \
 	src/modules/screen/native/screen.c \
 	src/modules/sound/native/sound_iop.c \
@@ -113,6 +116,7 @@ MODULE_JS_SRCS = \
 	src/modules/loop/quickjs/ath_loop.c \
 	src/modules/vector/quickjs/ath_vector.c \
 	src/modules/matrix4/quickjs/ath_matrix4.c \
+	src/modules/memcard/quickjs/ath_memcard.c \
 	src/modules/screen/quickjs/ath_screen.c \
 	src/modules/sound/quickjs/ath_sound.c \
 	src/modules/system/quickjs/ath_system.c \
@@ -141,6 +145,7 @@ MODULE_INCS = \
 	-Isrc/modules/loop/include \
 	-Isrc/modules/vector/include \
 	-Isrc/modules/matrix4/include \
+	-Isrc/modules/memcard/include \
 	-Isrc/modules/screen/include \
 	-Isrc/modules/sound/include \
 	-Isrc/modules/system/include \
@@ -174,6 +179,9 @@ MODULE_EMBED_BUILD_loader_elf = ee_modules/loader
 MODULE_EMBED_PATH_bdm_irx = $(PS2SDK)/iop/irx/bdm.irx
 MODULE_EMBED_PATH_bdmfs_fatfs_irx = $(PS2SDK)/iop/irx/bdmfs_fatfs.irx
 MODULE_EMBED_PATH_usbmass_bd_irx = $(PS2SDK)/iop/irx/usbmass_bd.irx
+
+# JavaScript modules (module.json "js"), embedded the same way. Only RUNTIME=quickjs links them.
+MODULE_JS_EMBED =
 
 # 1 when a module needs the binary's symbol table at runtime (erl).
 MODULE_EXPORT_SYMBOLS = 1

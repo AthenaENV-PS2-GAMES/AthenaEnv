@@ -14,6 +14,10 @@ CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-functi
 
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/loop/include -Isrc/modules/loop/native \
     -o "$OUT/loop_test" tests/host/loop_test.c -lm
+$CC $CFLAGS -Isrc/modules/loop/include -Isrc/modules/loop/native \
+    -o "$OUT/loop_systems_test" tests/host/loop_systems_test.c
+$CC $CFLAGS -Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native \
+    -o "$OUT/memcard_test" tests/host/memcard_test.c -lpthread
 $CC $CFLAGS -Isrc/readini/include -o "$OUT/readini_test" \
     tests/host/readini_test.c src/readini/src/readini.c
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
@@ -34,6 +38,8 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
     "$OUT"/box2d/*.o -lpthread -lm
 
 "$OUT/loop_test"
+"$OUT/loop_systems_test"
+"$OUT/memcard_test"
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"
 "$OUT/sound_stream_test"

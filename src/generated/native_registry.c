@@ -14,6 +14,7 @@ extern int athena_erl_init(void);
 extern void athena_gamepad_register_iop(void);
 extern void athena_iop_register_iop(void);
 extern void athena_memcard_register_iop(void);
+extern int athena_memcard_module_init(void);
 extern void athena_poweroff_register_iop(void);
 extern void athena_sound_register_iop(void);
 extern int athena_sound_module_init(void);
@@ -40,7 +41,7 @@ const AthenaNativeModule athena_native_modules[] = {
     { "loop", NULL, NULL, NULL, NULL, NULL },
     { "vector", NULL, NULL, NULL, NULL, NULL },
     { "matrix4", NULL, NULL, NULL, NULL, NULL },
-    { "memcard", athena_memcard_register_iop, NULL, NULL, NULL, NULL },
+    { "memcard", athena_memcard_register_iop, athena_memcard_module_init, NULL, NULL, NULL },
     { "poweroff", athena_poweroff_register_iop, NULL, NULL, NULL, NULL },
     { "screen", NULL, NULL, NULL, NULL, NULL },
     { "sound", athena_sound_register_iop, athena_sound_module_init, athena_sound_module_shutdown, NULL, NULL },

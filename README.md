@@ -44,6 +44,8 @@ Highlights:
   and a VU1-batched tilemap renderer for thousands of sprites.
 - **Asynchronous assets**: images, sound effects and archives load on worker
   threads without stalling the frame.
+- **Memory card saves**: JSON saves that survive a pulled card, awaitable
+  without dropping frames, and `icon.sys` generation for the PS2 browser.
 - **Box2D 3.2 physics** with a debug renderer.
 - **MPEG-1/2 video** decoded by the IPU and usable as a texture.
 - **Up to eight players**: PS2 pads, multitaps, DualShock 3/4 over USB and
@@ -157,6 +159,23 @@ Options: `clear`, `clearColor`, `maxDelta`, `fixedStep`, `maxSteps` and
 `vsyncInterval` (`2` holds a steady 30 FPS on NTSC). `Loop.setTimeScale()`
 slows down or pauses game time, and `Loop.getStats()` reports the FPS and the
 CPU time spent per frame.
+
+Modules and games register per-frame work once as **systems**, which run
+around the handlers every frame, by priority, until they are removed:
+
+```js
+Loop.addSystem({
+    name: "hud",
+    priority: 100,
+    realTime: true,                        // keeps running with setTimeScale(0)
+    postUpdate(dt) { /* animate */ },
+    postDraw() { font.print(20, 20, `FPS ${Loop.getStats().fps | 0}`); },
+});
+```
+
+The phases are `preUpdate(dt)`, `update(step)` (with each handler update),
+`postUpdate(dt)`, `preDraw(alpha)` and `postDraw(alpha)`; C modules register
+systems through `<athena/loop.h>`.
 
 Unlike a `while (true)` loop, `Loop.run()` returns immediately and frames start
 once the script ends, so timers, promises and `async` functions keep running
@@ -278,8 +297,8 @@ Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
 | [`system`](src/modules/system/system.d.ts) | `System` | Files and folders, devices, hardware information, memory statistics, timing, garbage collection and launching ELFs. Always included. |
 | [`archive`](src/modules/archive/archive.d.ts) | `Archive` | Reads zip, tar, tar.gz and gzip; safe extraction, also on a worker thread; gzip in memory. |
 | [`iop`](src/modules/iop/iop.d.ts) | `IOP` | IOP driver discovery, loading, reset and memory statistics. |
+| [`memcard`](src/modules/memcard/memcard.d.ts) | `MemoryCard` | Memory cards on `mc0:/` and `mc1:/`: card status and swap detection, files (whole, JSON or streamed), directories, attributes and dates, atomic saves, `icon.sys`, format, and every slow call also as an awaitable background job. Also the drivers the memory card boot device needs. |
 | `usbmass` | — | USB storage drivers (`mass:/`). |
-| `memcard` | — | Memory card drivers (`mc0:/`, `mc1:/`). |
 | `cdrom` | — | Disc filesystem driver (`cdrom0:`). |
 | `poweroff` | — | IOP power-off driver. |
 
@@ -289,6 +308,35 @@ const pack = Archive.open("assets.zip");
 const bytes = new Uint8Array(Archive.read(pack, "levels/1.json"));
 Archive.close(pack);
 ```
+
+```js
+// Save and load a game. The *Async calls run on a worker thread, so the frame
+// loop keeps drawing; atomic saves keep the previous save if the card is pulled.
+const SAVE = "mc0:/MYGAME/save.json";
+
+async function save(state) {
+    try {
+        await MemoryCard.writeJSONAsync(SAVE, state, { atomic: true });  // creates mc0:/MYGAME
+    } catch (error) {
+        console.log(`Save failed: ${error.code}`);                      // NO_CARD, FULL, CARD_CHANGED...
+    }
+}
+
+async function load() {
+    if (!MemoryCard.getInfo(0).connected) return null;
+    return MemoryCard.exists(SAVE) ? await MemoryCard.readJSONAsync(SAVE) : null;
+}
+
+// The PS2 browser shows a save directory that has an icon.sys and its icon.
+MemoryCard.writeFile("mc0:/MYGAME/icon.sys",
+    MemoryCard.createIconSys({ title: "My Game\nSlot 1", icon: "icon.ico" }));
+```
+
+Three files can be open at once on both cards together, `fopen("mc0:...")`
+included, and each directory holds a fixed number of entries. A handle opened
+before the card was swapped or the IOP was reset is refused instead of writing
+to the wrong card. `bin/tests/memcard_example.js` is a complete save/load
+screen.
 
 ### Concurrency and timing
 
@@ -366,10 +414,38 @@ src/modules/<id>/
 ├── include/athena/    # public C API
 ├── native/            # C implementation, independent of JavaScript
 ├── quickjs/           # JavaScript binding
+├── js/                # JavaScript implementation, for modules written in JavaScript
 └── <id>.d.ts          # TypeScript declaration
 ```
 
 The native part never depends on QuickJS, so every module is usable from C.
+
+#### JavaScript modules
+
+Code that organizes a game (scenes, menus, tweens) gains nothing from C. A
+module can be written in JavaScript instead, and is embedded in the binary,
+selected, typed and made global like any other:
+
+```json
+{
+  "id": "scene",
+  "name": "Scene",
+  "dependencies": { "modules": ["loop", "imagelist"] },
+  "js": { "source": "js/scene.js", "module_name": "Scene", "global_alias": "Scene" },
+  "types": "scene.d.ts"
+}
+```
+
+- `source` is one ES module file. It is embedded as text and compiled the
+  first time it is imported, so its errors report `Scene:<line>`.
+- Import what it uses (`import * as Loop from "Loop"`): the globals of other
+  modules are assigned only after every module has been evaluated. Relative
+  imports are resolved on the boot device, not in the binary.
+- `global_export` works as for QuickJS bindings, e.g. `"Scene.Scene"` to make
+  a class the global.
+- A module may have both a QuickJS binding and a JavaScript part, with
+  different module names: the fast path in C, the rest in JavaScript. JavaScript
+  modules only exist with `RUNTIME=quickjs`; C code never depends on them.
 
 ## Native code
 

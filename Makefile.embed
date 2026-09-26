@@ -8,7 +8,8 @@ $(EE_EMBED_DIR)filexio.c: $(PS2SDK)/iop/irx/fileXio.irx | $(EE_EMBED_DIR)
 
 #------------------ Files embedded by Athena modules ------------------#
 # MODULE_EMBED, MODULE_EMBED_PATH_<symbol> and MODULE_EMBED_BUILD_<symbol> come
-# from Makefile.modules (module.json "embed" / "embed_irx"). Each file becomes
+# from Makefile.modules (module.json "embed" / "embed_irx"), as does
+# MODULE_JS_EMBED for the sources of JavaScript modules ("js"). Each file becomes
 # <symbol>[] / size_<symbol>. Files built from this repository are rebuilt
 # when any source in their directory changes.
 
@@ -22,5 +23,5 @@ $(MODULE_EMBED_PATH_$(1)): $(filter-out %.irx %.elf %.o %.d,$(wildcard $(MODULE_
 	$$(MAKE) -C $(MODULE_EMBED_BUILD_$(1))
 endef
 
-$(foreach e,$(MODULE_EMBED),$(eval $(call MODULE_EMBED_RULE,$(e))))
+$(foreach e,$(MODULE_EMBED) $(MODULE_JS_EMBED),$(eval $(call MODULE_EMBED_RULE,$(e))))
 $(foreach e,$(MODULE_EMBED),$(if $(MODULE_EMBED_BUILD_$(e)),$(eval $(call MODULE_EMBED_BUILD_RULE,$(e)))))

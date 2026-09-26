@@ -6,7 +6,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <libmc.h>
 #include <libcdvd.h>
 #include <timer.h>
 #define NEWLIB_PORT_AWARE

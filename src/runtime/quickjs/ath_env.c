@@ -158,11 +158,52 @@ static int qjs_handle_file(JSContext *ctx, const char *filename) {
     return retval;
 }
 
+/*
+ * Module loader: JavaScript modules embedded in the binary first, then the
+ * default loader (files and .erl native modules). An embedded module is
+ * compiled from its source on first import, under its module name.
+ */
+static JSModuleDef *athena_module_loader(JSContext *ctx, const char *module_name,
+                                         void *opaque)
+{
+    size_t length;
+    const char *source = athena_find_js_module(module_name, &length);
+    char *buf;
+    JSValue func_val;
+    JSModuleDef *m;
+
+    if (!source)
+        return js_module_loader(ctx, module_name, opaque);
+
+    /* JS_Eval() needs a NUL-terminated buffer. */
+    buf = js_malloc(ctx, length + 1);
+    if (!buf)
+        return NULL;
+    memcpy(buf, source, length);
+    buf[length] = '\0';
+
+    func_val = JS_Eval(ctx, buf, length, module_name,
+                       JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    js_free(ctx, buf);
+    if (JS_IsException(func_val))
+        return NULL;
+    /* No realpath(): the module has no file. import.meta.url is file://<name>. */
+    js_module_set_import_meta(ctx, func_val, 0, 0);
+    /* The module is already referenced, so this reference is dropped. */
+    m = JS_VALUE_GET_PTR(func_val);
+    JS_FreeValue(ctx, func_val);
+    dbgprintf("AthenaCore: JavaScript module %s compiled (%u bytes)\n", module_name, (unsigned)length);
+    return m;
+}
+
 static JSContext *JS_NewCustomContext(JSRuntime *rt)
 {
     JSContext *ctx = JS_NewContext(rt);
     if (!ctx)
         return NULL;
+
+    /* Also runs for worker runtimes, after quickjs-libc set its default loader. */
+    JS_SetModuleLoaderFunc(rt, NULL, athena_module_loader, NULL);
 
     /* Base system modules */
     js_init_module_std(ctx, "std");
@@ -230,8 +271,6 @@ const char* run_script(const char* script, bool isBuffer)
         JS_FreeRuntime(rt);
         return "AthenaError: Context creation failed"; 
     }
-
-    JS_SetModuleLoaderFunc(rt, NULL, js_module_loader, NULL);
 
     dbgprintf("[AthenaCore] Executing entry script: %s\n", script);
     int s = qjs_handle_file(ctx, script);

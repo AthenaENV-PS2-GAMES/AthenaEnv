@@ -29,6 +29,31 @@ expectThrow("negative time scale", () => Loop.setTimeScale(-1));
 assert("loop idle before run", !Loop.isRunning());
 assert("default time scale", Loop.getTimeScale() === 1);
 
+// Systems: validation and registry.
+expectThrow("addSystem without a system", () => Loop.addSystem());
+expectThrow("addSystem with a number", () => Loop.addSystem(1));
+expectThrow("addSystem with a function", () => Loop.addSystem(noop));
+expectThrow("addSystem without phases", () => Loop.addSystem({ name: "empty" }));
+expectThrow("addSystem with a non-function phase", () => Loop.addSystem({ update: 1 }));
+expectThrow("addSystem with a fractional priority", () => Loop.addSystem({ update: noop, priority: 1.5 }));
+expectThrow("addSystem with a non-boolean realTime", () => Loop.addSystem({ update: noop, realTime: 1 }));
+expectThrow("addSystem with a non-string name", () => Loop.addSystem({ update: noop, name: 1 }));
+expectThrow("removeSystem with a number", () => Loop.removeSystem(1));
+{
+    const probe = { name: "probe", priority: 3, postDraw: noop, update: noop };
+    assert("addSystem returns the system", Loop.addSystem(probe) === probe);
+    expectThrow("addSystem twice", () => Loop.addSystem(probe));
+    expectThrow("addSystem with a taken name", () => Loop.addSystem({ name: "probe", update: noop }));
+    const info = Loop.getSystems().find(s => s.name === "probe");
+    assert("getSystems lists the system", info && info.priority === 3 && !info.native &&
+        !info.realTime && info.phases.join() === "update,postDraw");
+    assert("removeSystem by name", Loop.removeSystem("probe"));
+    assert("removeSystem of a removed system", !Loop.removeSystem(probe));
+    assert("system re-added after removal", Loop.addSystem(probe) === probe);
+    assert("removeSystem by object", Loop.removeSystem(probe));
+    assert("no JavaScript systems left", !Loop.getSystems().some(s => !s.native));
+}
+
 // Frames start after this script. Several timers expiring together all run
 // in the same frame.
 const timerFrames = [];
@@ -98,9 +123,82 @@ function startPaused() {
             assert("paused game does not update", updates === 0);
             assert("paused game time is frozen", Loop.getElapsedTime() === elapsed);
             Loop.setTimeScale(1);
-            finish();
+            startSystems();
         },
     }, { fixedStep: STEP });
+}
+
+// Phase order of systems and handlers, systems added and removed while the
+// loop runs, and real time. Each frame's trace is checked by the first system
+// of the next frame.
+function startSystems() {
+    const trace = [];
+    const frame = ["a.pre", "b.update", "a.update", "handler.update", "a.post",
+        "a.preDraw", "handler.draw", "a.postDraw"];
+    const withLate = ["late", ...frame];
+    const withoutB = withLate.filter(step => step !== "b.update");
+    let frames = 0;
+
+    const same = (a, b) => a.length === b.length && a.every((step, i) => step === b[i]);
+    const first = Loop.addSystem({
+        name: "first",
+        priority: -1000,
+        preUpdate() {
+            const expected = [null, frame, frame, withLate, withLate, withoutB][frames];
+            if (expected) assert("system order in frame " + frames + ": " + trace.join(), same(trace, expected));
+            trace.length = 0;
+            if (frames === 5) finishSystems();
+        },
+    });
+    const a = Loop.addSystem({
+        name: "a",
+        priority: 1,
+        preUpdate() { trace.push("a.pre"); },
+        update() { trace.push("a.update"); },
+        postUpdate() { trace.push("a.post"); },
+        preDraw() { trace.push("a.preDraw"); },
+        postDraw() {
+            trace.push("a.postDraw");
+            if (frames === 2) Loop.addSystem(late);  // runs from the next frame
+        },
+    });
+    const b = Loop.addSystem({
+        name: "b",
+        update() {
+            trace.push("b.update");
+            if (frames === 3) assert("b removes itself", Loop.removeSystem(this));
+        },
+    });
+    const late = { name: "late", priority: -10, preUpdate() { trace.push("late"); } };
+    const real = Loop.addSystem({
+        realTime: true,
+        preUpdate(dt) { this.real = dt; },
+        update(dt) { this.scaled = dt; },
+        postUpdate(dt) {
+            if (this.scaled > 0)
+                assert("realTime systems get the real delta", Math.abs(this.real - 2 * this.scaled) < 1e-6 && dt === this.real);
+        },
+    });
+    Loop.setTimeScale(0.5);
+
+    Loop.run({
+        update() { trace.push("handler.update"); },
+        draw() {
+            trace.push("handler.draw");
+            frames++;
+        },
+    });
+
+    function finishSystems() {
+        Loop.setTimeScale(1);
+        assert("systems in run order", Loop.getSystems().filter(s => !s.native)
+            .map(s => s.name).join() === "first,late,,a");
+        Loop.stop();
+        assert("systems survive Loop.stop", Loop.getSystems().some(s => s.name === "a"));
+        for (const system of [first, late, a, real]) assert("remove system", Loop.removeSystem(system));
+        assert("b was removed", !Loop.removeSystem(b));
+        finish();
+    }
 }
 
 function finish() {

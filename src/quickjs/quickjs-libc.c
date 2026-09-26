@@ -3718,7 +3718,10 @@ int js_std_loop(JSContext *ctx)
             return -1;
         }
 
-        if (poll_result == JS_POLL_EMPTY && !ts->frame_func) {
+        /* a frame handler may have queued jobs (a promise resolved in the
+           frame that stopped the loop): run them before leaving */
+        if (poll_result == JS_POLL_EMPTY && !ts->frame_func &&
+            !JS_IsJobPending(JS_GetRuntime(ctx))) {
             break;
         }
     }

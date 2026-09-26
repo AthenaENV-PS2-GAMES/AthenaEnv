@@ -13,9 +13,7 @@
   "dependencies": {
     "modules": [],
     "iop": [],
-    "ee_libs": [
-      "-lmc"
-    ]
+    "ee_libs": []
   },
   "embed": [
     {

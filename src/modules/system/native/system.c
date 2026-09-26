@@ -1,6 +1,5 @@
 #include <fcntl.h>
 #include <dirent.h>
-#include <libmc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,16 +109,17 @@ int athena_system_move_file_native(const char *source, const char *destination) 
     return rename(source, destination);
 }
 
-int athena_system_get_memory_card_info(int port, AthenaMemoryCardInfo *info) {
-    if (!athena_module_enabled("memcard"))
-        return ATHENA_SYSTEM_ERR_NO_MEMCARD;
-    int request = mcGetInfo(port, 0, &info->type, &info->free_space, &info->format);
-    if (request < 0) return request;
+/*
+ * Provided by the memcard module when it is in the build. It serializes
+ * libmc, which keeps one command in flight for the whole EE.
+ */
+extern int athena_memcard_get_info_raw(int port, int *type, int *free_clusters,
+    int *formatted) __attribute__((weak));
 
-    int result = 0;
-    mcSync(0, NULL, &result);
-    if (result < -2) return result;
-    return 0;
+int athena_system_get_memory_card_info(int port, AthenaMemoryCardInfo *info) {
+    if (!athena_memcard_get_info_raw)
+        return ATHENA_SYSTEM_ERR_NO_MEMCARD;
+    return athena_memcard_get_info_raw(port, &info->type, &info->free_space, &info->format);
 }
 
 int athena_system_mount_native(const char *mountpoint, const char *blockdev, int mode) {

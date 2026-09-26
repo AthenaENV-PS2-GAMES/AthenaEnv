@@ -20,6 +20,12 @@ void athena_register_all_modules(JSContext *ctx);
 const char *athena_get_modules_bootstrap_script(void);
 void athena_cleanup_all_modules(JSContext *ctx);
 
+/*
+ * Source of the JavaScript module (module.json "js") imported as
+ * `module_name`, not NUL-terminated, or NULL when the build has none.
+ */
+const char *athena_find_js_module(const char *module_name, size_t *length);
+
 #ifdef __cplusplus
 }
 #endif

@@ -60,4 +60,90 @@ int athena_loop_clock_steps(AthenaLoopClock *clock, float step, int max_steps);
 /* Fraction (0..1) of a fixed step left in the accumulator, for interpolation. */
 float athena_loop_clock_alpha(const AthenaLoopClock *clock, float step);
 
+/*
+ * Systems: callbacks that modules (tweens, cameras, particles, debug
+ * overlays...) register once and that the game loop runs every frame around
+ * the application's own update and draw, in this order:
+ *
+ *     PRE_UPDATE(dt)    once per frame
+ *     UPDATE(step)      before each application update: once per frame with
+ *                       dt, or once per fixed step
+ *     POST_UPDATE(dt)   once per frame, after the updates
+ *     PRE_DRAW(alpha)   before the application draw
+ *     POST_DRAW(alpha)  after the application draw (overlays)
+ *
+ * Within a phase, systems run by ascending priority, then in the order they
+ * were added. The JavaScript Loop runs them; a C game loop calls
+ * athena_loop_systems_run() itself. Main thread only.
+ */
+typedef enum {
+    ATHENA_LOOP_PRE_UPDATE,
+    ATHENA_LOOP_UPDATE,
+    ATHENA_LOOP_POST_UPDATE,
+    ATHENA_LOOP_PRE_DRAW,
+    ATHENA_LOOP_POST_DRAW,
+    ATHENA_LOOP_PHASE_COUNT
+} AthenaLoopPhase;
+
+#define ATHENA_LOOP_PHASE_BIT(phase) (1u << (phase))
+
+/*
+ * Runs one phase of a system. `value` is the phase argument described above;
+ * for PRE_UPDATE and POST_UPDATE it is the real (unscaled) delta when the
+ * system asked for real time. A negative return stops the game loop.
+ */
+typedef int (*AthenaLoopSystemFunc)(void *opaque, AthenaLoopPhase phase, float value);
+
+typedef struct {
+    const char *name;           /* optional and unique; copied */
+    int priority;               /* lower runs first */
+    uint32_t phases;            /* ATHENA_LOOP_PHASE_BIT() mask of the phases to run */
+    bool real_time;             /* PRE/POST_UPDATE get the real delta */
+    AthenaLoopSystemFunc func;
+    /*
+     * Optional; called once the registry no longer uses `opaque`. Removing a
+     * system while phases run defers this until the phase ends.
+     */
+    void (*release)(void *opaque);
+    void *opaque;
+} AthenaLoopSystemDesc;
+
+/* Error codes of athena_loop_system_add(). */
+#define ATHENA_LOOP_SYSTEM_EINVAL (-1)  /* no func, or no phase */
+#define ATHENA_LOOP_SYSTEM_EEXIST (-2)  /* name already registered */
+#define ATHENA_LOOP_SYSTEM_ENOMEM (-3)
+
+/*
+ * Registers a system and returns its id (> 0), or a negative error code. A
+ * system added while a phase runs starts with the next phase.
+ */
+int athena_loop_system_add(const AthenaLoopSystemDesc *desc);
+
+/* Unregisters a system; false when `id` is not registered. */
+bool athena_loop_system_remove(int id);
+
+/* Id of the system called `name`, or 0. */
+int athena_loop_system_find(const char *name);
+
+/*
+ * Copies the ids of the registered systems, in run order, into `ids` (at
+ * most `max`) and returns how many systems are registered.
+ */
+int athena_loop_system_list(int *ids, int max);
+
+/* Description of system `id`, or NULL. Valid until the system is removed. */
+const AthenaLoopSystemDesc *athena_loop_system_get(int id);
+
+/*
+ * Runs `phase` of every system that asked for it. `real_value` replaces
+ * `value` in PRE/POST_UPDATE for real-time systems. Returns 0, or the
+ * negative result of the first system that failed, whose id is stored in
+ * `failed_id` when not NULL; the remaining systems of the phase do not run.
+ */
+int athena_loop_systems_run(AthenaLoopPhase phase, float value, float real_value,
+    int *failed_id);
+
+/* Removes every system. */
+void athena_loop_systems_clear(void);
+
 #endif /* ATHENA_LOOP_H */

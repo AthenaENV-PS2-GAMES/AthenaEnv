@@ -118,7 +118,7 @@ ifeq ($(RUNTIME),quickjs)
   JS_CORE = quickjs/cutils.o quickjs/libbf.o quickjs/libregexp.o quickjs/libunicode.o \
             quickjs/realpath.o quickjs/quickjs.o quickjs/quickjs-libc.o
   RUNTIME_OBJS = runtime/quickjs/main.o runtime/quickjs/ath_env.o runtime/quickjs/ath_gil.o \
-                 $(JS_CORE) $(call src_to_obj,$(MODULE_JS_SRCS))
+                 $(JS_CORE) $(call src_to_obj,$(MODULE_JS_SRCS)) $(MODULE_JS_EMBED:%=%.o)
   EE_INCS += -Isrc/runtime/quickjs/include -Isrc/quickjs
   EE_CFLAGS += -DATHENA_RUNTIME_QUICKJS -DCONFIG_BIGNUM
 else

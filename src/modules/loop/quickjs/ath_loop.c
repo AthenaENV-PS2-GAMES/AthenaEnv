@@ -52,6 +52,31 @@ typedef struct {
     uint32_t vsync_interval;
 } LoopOptions;
 
+/*
+ * A system added from JavaScript: the object and the phase methods it had
+ * when it was added. Kept in a list for lookups by object; the registry frees
+ * it through system_release(), possibly after the phase that removed it.
+ */
+typedef struct JsSystem {
+    JSContext *ctx;
+    JSValue object;
+    JSValue funcs[ATHENA_LOOP_PHASE_COUNT];
+    int id;
+    struct JsSystem *next;
+} JsSystem;
+
+static JsSystem *js_systems;
+/* Set when a JavaScript system threw, so its exception is the one reported. */
+static bool js_system_threw;
+
+static const char *const phase_names[ATHENA_LOOP_PHASE_COUNT] = {
+    [ATHENA_LOOP_PRE_UPDATE] = "preUpdate",
+    [ATHENA_LOOP_UPDATE] = "update",
+    [ATHENA_LOOP_POST_UPDATE] = "postUpdate",
+    [ATHENA_LOOP_PRE_DRAW] = "preDraw",
+    [ATHENA_LOOP_POST_DRAW] = "postDraw",
+};
+
 static int loop_argc(JSContext *ctx, int argc, int minimum, int maximum,
     const char *name) {
     if (argc < minimum || argc > maximum) {
@@ -86,6 +111,63 @@ static int loop_call(JSContext *ctx, JSValueConst func, double value) {
     return 0;
 }
 
+static int system_call(void *opaque, AthenaLoopPhase phase, float value) {
+    JsSystem *system = opaque;
+    JSContext *ctx = system->ctx;
+    JSValue object, callback, arg, ret;
+
+    /* Systems of another context wait for their own loop. */
+    if (ctx != loop_state.ctx || JS_IsUndefined(system->funcs[phase]))
+        return 0;
+    object = JS_DupValue(ctx, system->object);
+    callback = JS_DupValue(ctx, system->funcs[phase]);
+    arg = JS_NewFloat64(ctx, value);
+    ret = JS_Call(ctx, callback, object, 1, &arg);
+    JS_FreeValue(ctx, callback);
+    JS_FreeValue(ctx, object);
+    if (JS_IsException(ret)) {
+        js_system_threw = true;
+        return -1;
+    }
+    JS_FreeValue(ctx, ret);
+    return 0;
+}
+
+static void system_release(void *opaque) {
+    JsSystem *system = opaque;
+    JsSystem **link = &js_systems;
+
+    while (*link && *link != system)
+        link = &(*link)->next;
+    if (*link)
+        *link = system->next;
+    JS_FreeValue(system->ctx, system->object);
+    for (int i = 0; i < ATHENA_LOOP_PHASE_COUNT; i++)
+        JS_FreeValue(system->ctx, system->funcs[i]);
+    js_free(system->ctx, system);
+}
+
+/* Runs one phase of the systems; -1 with an exception pending on failure. */
+static int loop_systems(JSContext *ctx, AthenaLoopPhase phase, float value,
+    float real_value) {
+    int failed_id;
+    const AthenaLoopSystemDesc *desc;
+
+    js_system_threw = false;
+    if (athena_loop_systems_run(phase, value, real_value, &failed_id) >= 0)
+        return 0;
+    if (js_system_threw)
+        return -1;
+    if (!failed_id) {
+        JS_ThrowOutOfMemory(ctx);
+        return -1;
+    }
+    desc = athena_loop_system_get(failed_id);
+    JS_ThrowInternalError(ctx, "Loop system '%s' failed in %s",
+        desc && desc->name ? desc->name : "(unnamed)", phase_names[phase]);
+    return -1;
+}
+
 /*
  * Holds the flip until `vsync_interval` vblanks after the previous one. With
  * VSync on, the flip itself waits for the last of them.
@@ -113,11 +195,21 @@ static int loop_frame(JSContext *ctx, void *opaque) {
     if (state->clear)
         clearScreen(state->clear_color);
 
+    /* A handler or system that calls run() or stop() skips the rest of the frame. */
+    if (loop_systems(ctx, ATHENA_LOOP_PRE_UPDATE, state->clock.delta,
+        state->clock.real_delta) < 0)
+        return -1;
+
     state->steps = 0;
     if (state->fixed_step > 0.0f) {
         int steps = athena_loop_clock_steps(&state->clock, state->fixed_step,
             state->max_steps);
         while (steps-- > 0 && generation == state->generation) {
+            if (loop_systems(ctx, ATHENA_LOOP_UPDATE, state->fixed_step,
+                state->fixed_step) < 0)
+                return -1;
+            if (generation != state->generation)
+                break;
             if (!JS_IsUndefined(state->update) &&
                 loop_call(ctx, state->update, state->fixed_step) < 0)
                 return -1;
@@ -125,7 +217,11 @@ static int loop_frame(JSContext *ctx, void *opaque) {
         }
         state->alpha = athena_loop_clock_alpha(&state->clock, state->fixed_step);
     } else {
-        if (!JS_IsUndefined(state->update)) {
+        if (generation == state->generation &&
+            loop_systems(ctx, ATHENA_LOOP_UPDATE, state->clock.delta,
+                state->clock.delta) < 0)
+            return -1;
+        if (generation == state->generation && !JS_IsUndefined(state->update)) {
             if (loop_call(ctx, state->update, state->clock.delta) < 0)
                 return -1;
             state->steps = 1;
@@ -133,8 +229,18 @@ static int loop_frame(JSContext *ctx, void *opaque) {
         state->alpha = 1.0f;
     }
 
+    if (generation == state->generation &&
+        loop_systems(ctx, ATHENA_LOOP_POST_UPDATE, state->clock.delta,
+            state->clock.real_delta) < 0)
+        return -1;
+    if (generation == state->generation &&
+        loop_systems(ctx, ATHENA_LOOP_PRE_DRAW, state->alpha, state->alpha) < 0)
+        return -1;
     if (generation == state->generation && !JS_IsUndefined(state->draw) &&
         loop_call(ctx, state->draw, state->alpha) < 0)
+        return -1;
+    if (generation == state->generation &&
+        loop_systems(ctx, ATHENA_LOOP_POST_DRAW, state->alpha, state->alpha) < 0)
         return -1;
 
     /* Everything since the previous flip, timers and promises included. */
@@ -433,6 +539,201 @@ static JSValue loop_get_stats(JSContext *ctx, JSValueConst this_val, int argc,
     return stats;
 }
 
+/* The live JavaScript system of `ctx` added as `object`, or NULL. */
+static JsSystem *system_by_object(JSContext *ctx, JSValueConst object) {
+    for (JsSystem *system = js_systems; system; system = system->next) {
+        if (system->ctx == ctx &&
+            JS_VALUE_GET_PTR(system->object) == JS_VALUE_GET_PTR(object) &&
+            athena_loop_system_get(system->id))
+            return system;
+    }
+    return NULL;
+}
+
+static JSValue loop_add_system(JSContext *ctx, JSValueConst this_val, int argc,
+    JSValueConst *argv) {
+    JSValueConst object = argv[0];
+    AthenaLoopSystemDesc desc = { .func = system_call, .release = system_release };
+    JsSystem *system;
+    JSValue value;
+    const char *name = NULL;
+    int id;
+
+    if (!loop_argc(ctx, argc, 1, 1, "Loop.addSystem"))
+        return JS_EXCEPTION;
+    if (!JS_IsObject(object) || JS_IsArray(ctx, object) || JS_IsFunction(ctx, object))
+        return JS_ThrowTypeError(ctx, "Loop.addSystem expects an object");
+    if (system_by_object(ctx, object))
+        return JS_ThrowTypeError(ctx, "Loop.addSystem: this system was already added");
+
+    system = js_mallocz(ctx, sizeof(*system));
+    if (!system)
+        return JS_EXCEPTION;
+    system->ctx = ctx;
+    system->object = JS_UNDEFINED;
+    for (int i = 0; i < ATHENA_LOOP_PHASE_COUNT; i++)
+        system->funcs[i] = JS_UNDEFINED;
+
+    for (int i = 0; i < ATHENA_LOOP_PHASE_COUNT; i++) {
+        value = JS_GetPropertyStr(ctx, object, phase_names[i]);
+        if (JS_IsException(value))
+            goto fail;
+        if (JS_IsUndefined(value))
+            continue;
+        if (!JS_IsFunction(ctx, value)) {
+            JS_FreeValue(ctx, value);
+            JS_ThrowTypeError(ctx, "Loop.addSystem %s must be a function", phase_names[i]);
+            goto fail;
+        }
+        system->funcs[i] = value;
+        desc.phases |= ATHENA_LOOP_PHASE_BIT(i);
+    }
+    if (!desc.phases) {
+        JS_ThrowTypeError(ctx, "Loop.addSystem system needs preUpdate, update, "
+            "postUpdate, preDraw or postDraw");
+        goto fail;
+    }
+
+    value = JS_GetPropertyStr(ctx, object, "priority");
+    if (JS_IsException(value))
+        goto fail;
+    if (!JS_IsUndefined(value)) {
+        double priority;
+        if (!JS_IsNumber(value) || JS_ToFloat64(ctx, &priority, value) ||
+            priority != floor(priority) || priority < -1e6 || priority > 1e6) {
+            JS_FreeValue(ctx, value);
+            JS_ThrowRangeError(ctx, "Loop.addSystem priority must be an integer "
+                "between -1000000 and 1000000");
+            goto fail;
+        }
+        desc.priority = (int)priority;
+    }
+    JS_FreeValue(ctx, value);
+
+    value = JS_GetPropertyStr(ctx, object, "realTime");
+    if (JS_IsException(value))
+        goto fail;
+    if (!JS_IsUndefined(value)) {
+        if (!JS_IsBool(value)) {
+            JS_FreeValue(ctx, value);
+            JS_ThrowTypeError(ctx, "Loop.addSystem realTime must be a boolean");
+            goto fail;
+        }
+        desc.real_time = JS_ToBool(ctx, value);
+    }
+    JS_FreeValue(ctx, value);
+
+    value = JS_GetPropertyStr(ctx, object, "name");
+    if (JS_IsException(value))
+        goto fail;
+    if (!JS_IsUndefined(value)) {
+        if (!JS_IsString(value)) {
+            JS_FreeValue(ctx, value);
+            JS_ThrowTypeError(ctx, "Loop.addSystem name must be a string");
+            goto fail;
+        }
+        name = JS_ToCString(ctx, value);
+        JS_FreeValue(ctx, value);
+        if (!name)
+            goto fail;
+    }
+
+    system->object = JS_DupValue(ctx, object);
+    desc.name = name;
+    desc.opaque = system;
+    id = athena_loop_system_add(&desc);
+    if (id < 0) {
+        if (id == ATHENA_LOOP_SYSTEM_EEXIST)
+            JS_ThrowTypeError(ctx, "Loop.addSystem: a system named '%s' already exists", name);
+        else
+            JS_ThrowOutOfMemory(ctx);
+        JS_FreeCString(ctx, name);
+        system_release(system);
+        return JS_EXCEPTION;
+    }
+    JS_FreeCString(ctx, name);
+    system->id = id;
+    system->next = js_systems;
+    js_systems = system;
+    return JS_DupValue(ctx, object);
+
+fail:
+    system_release(system);
+    return JS_EXCEPTION;
+}
+
+static JSValue loop_remove_system(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    int id = 0;
+
+    if (!loop_argc(ctx, argc, 1, 1, "Loop.removeSystem"))
+        return JS_EXCEPTION;
+    if (JS_IsString(argv[0])) {
+        const char *name = JS_ToCString(ctx, argv[0]);
+        if (!name)
+            return JS_EXCEPTION;
+        id = athena_loop_system_find(name);
+        JS_FreeCString(ctx, name);
+    } else if (JS_IsObject(argv[0])) {
+        JsSystem *system = system_by_object(ctx, argv[0]);
+        id = system ? system->id : 0;
+    } else {
+        return JS_ThrowTypeError(ctx, "Loop.removeSystem expects a system or its name");
+    }
+    return JS_NewBool(ctx, id && athena_loop_system_remove(id));
+}
+
+static JSValue loop_get_systems(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv) {
+    int count, *ids;
+    JSValue list;
+
+    if (!loop_argc(ctx, argc, 0, 0, "Loop.getSystems"))
+        return JS_EXCEPTION;
+    count = athena_loop_system_list(NULL, 0);
+    ids = js_malloc(ctx, (count ? count : 1) * sizeof(*ids));
+    if (!ids)
+        return JS_EXCEPTION;
+    count = athena_loop_system_list(ids, count);
+
+    list = JS_NewArray(ctx);
+    for (int i = 0; i < count && !JS_IsException(list); i++) {
+        const AthenaLoopSystemDesc *desc = athena_loop_system_get(ids[i]);
+        JSValue entry = JS_NewObject(ctx), phases = JS_NewArray(ctx);
+        int phase_count = 0;
+
+        for (int p = 0; p < ATHENA_LOOP_PHASE_COUNT; p++) {
+            if (desc->phases & ATHENA_LOOP_PHASE_BIT(p))
+                JS_SetPropertyUint32(ctx, phases, phase_count++,
+                    JS_NewString(ctx, phase_names[p]));
+        }
+        JS_SetPropertyStr(ctx, entry, "name",
+            desc->name ? JS_NewString(ctx, desc->name) : JS_UNDEFINED);
+        JS_SetPropertyStr(ctx, entry, "priority", JS_NewInt32(ctx, desc->priority));
+        JS_SetPropertyStr(ctx, entry, "realTime", JS_NewBool(ctx, desc->real_time));
+        JS_SetPropertyStr(ctx, entry, "phases", phases);
+        JS_SetPropertyStr(ctx, entry, "native", JS_NewBool(ctx, desc->func != system_call));
+        JS_SetPropertyUint32(ctx, list, i, entry);
+    }
+    js_free(ctx, ids);
+    return list;
+}
+
+/* Removes the JavaScript systems of `ctx`. */
+static void loop_remove_js_systems(JSContext *ctx) {
+    JsSystem *system = js_systems;
+
+    while (system) {
+        JsSystem *next = system->next;
+        if (system->ctx == ctx && athena_loop_system_get(system->id)) {
+            /* Unless a phase is running, this frees `system`. */
+            athena_loop_system_remove(system->id);
+            next = js_systems;
+        }
+        system = next;
+    }
+}
+
 static const JSCFunctionListEntry loop_funcs[] = {
     JS_CFUNC_DEF("run", 2, loop_run),
     JS_CFUNC_DEF("stop", 0, loop_stop),
@@ -444,6 +745,9 @@ static const JSCFunctionListEntry loop_funcs[] = {
     JS_CFUNC_DEF("getRealElapsedTime", 0, loop_get_real_elapsed_time),
     JS_CFUNC_DEF("getFrameCount", 0, loop_get_frame_count),
     JS_CFUNC_DEF("getStats", 0, loop_get_stats),
+    JS_CFUNC_DEF("addSystem", 1, loop_add_system),
+    JS_CFUNC_DEF("removeSystem", 1, loop_remove_system),
+    JS_CFUNC_DEF("getSystems", 0, loop_get_systems),
 };
 
 static int loop_module_init(JSContext *ctx, JSModuleDef *module) {
@@ -457,6 +761,7 @@ JSModuleDef *athena_loop_init(JSContext *ctx) {
 }
 
 void athena_loop_cleanup(JSContext *ctx) {
+    loop_remove_js_systems(ctx);
     /* Another context still running its loop keeps its state. */
     if (loop_state.ctx && loop_state.ctx != ctx)
         return;

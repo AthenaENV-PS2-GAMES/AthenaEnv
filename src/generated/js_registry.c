@@ -4,6 +4,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 #include <ath_env.h>
 #include <athena_js_module.h>
 
@@ -24,6 +25,7 @@ extern JSModuleDef *athena_loop_init(JSContext *ctx);
 extern void athena_loop_cleanup(JSContext *ctx);
 extern JSModuleDef *athena_vector_init(JSContext *ctx);
 extern JSModuleDef *athena_matrix4_init(JSContext *ctx);
+extern JSModuleDef *athena_memcard_init(JSContext *ctx);
 extern JSModuleDef *athena_screen_init(JSContext *ctx);
 extern JSModuleDef *athena_sound_init(JSContext *ctx);
 extern JSModuleDef *athena_system_init(JSContext *ctx);
@@ -50,7 +52,7 @@ static const AthenaModuleEntry athena_registered_modules[] = {
     { "loop", "Loop", "Loop", athena_loop_init, athena_loop_cleanup },
     { "vector", "Vector", "Vector", athena_vector_init, NULL },
     { "matrix4", "Matrix4", "Matrix4", athena_matrix4_init, NULL },
-    { "memcard", "Memory Card", NULL, NULL, NULL },
+    { "memcard", "MemoryCard", "MemoryCard", athena_memcard_init, NULL },
     { "poweroff", "Power Off", NULL, NULL, NULL },
     { "screen", "Screen", "Screen", athena_screen_init, NULL },
     { "sound", "Sound", "Sound", athena_sound_init, NULL },
@@ -79,8 +81,28 @@ void athena_cleanup_all_modules(JSContext *ctx) {
 }
 
 static const char *modules_bootstrap_code =
-    "import * as Mutex from 'Mutex';\nglobalThis.Mutex = Mutex;\nimport * as Thread from 'Thread';\nglobalThis.Thread = Thread;\nimport * as Archive from 'Archive';\nglobalThis.Archive = Archive;\nimport * as Box2D from 'Box2D';\nglobalThis.Box2D = Box2D;\nimport * as Color from 'Color';\nglobalThis.Color = Color;\nimport * as Box2DDraw from 'Box2DDraw';\nglobalThis.Box2DDraw = Box2DDraw;\nimport * as Draw from 'Draw';\nglobalThis.Draw = Draw;\nimport * as Font from 'Font';\nglobalThis.Font = Font.Font;\nimport * as Gamepad from 'Gamepad';\nglobalThis.Gamepad = Gamepad;\nimport * as Image from 'Image';\nglobalThis.Image = Image.Image;\nimport * as ImageList from 'ImageList';\nglobalThis.ImageList = ImageList.ImageList;\nimport * as IOP from 'IOP';\nglobalThis.IOP = IOP;\nimport * as Loop from 'Loop';\nglobalThis.Loop = Loop;\nimport * as Vector from 'Vector';\nglobalThis.Vector = Vector;\nimport * as Matrix4 from 'Matrix4';\nglobalThis.Matrix4 = Matrix4;\nimport * as Screen from 'Screen';\nglobalThis.Screen = Screen;\nimport * as Sound from 'Sound';\nglobalThis.Sound = Sound;\nimport * as System from 'System';\nglobalThis.System = System;\nimport * as TileMap from 'TileMap';\nglobalThis.TileMap = TileMap;\nimport * as Timer from 'Timer';\nglobalThis.Timer = Timer;\nimport * as Video from 'Video';\nglobalThis.Video = Video.Video;\n";
+    "import * as Mutex from 'Mutex';\nglobalThis.Mutex = Mutex;\nimport * as Thread from 'Thread';\nglobalThis.Thread = Thread;\nimport * as Archive from 'Archive';\nglobalThis.Archive = Archive;\nimport * as Box2D from 'Box2D';\nglobalThis.Box2D = Box2D;\nimport * as Color from 'Color';\nglobalThis.Color = Color;\nimport * as Box2DDraw from 'Box2DDraw';\nglobalThis.Box2DDraw = Box2DDraw;\nimport * as Draw from 'Draw';\nglobalThis.Draw = Draw;\nimport * as Font from 'Font';\nglobalThis.Font = Font.Font;\nimport * as Gamepad from 'Gamepad';\nglobalThis.Gamepad = Gamepad;\nimport * as Image from 'Image';\nglobalThis.Image = Image.Image;\nimport * as ImageList from 'ImageList';\nglobalThis.ImageList = ImageList.ImageList;\nimport * as IOP from 'IOP';\nglobalThis.IOP = IOP;\nimport * as Loop from 'Loop';\nglobalThis.Loop = Loop;\nimport * as Vector from 'Vector';\nglobalThis.Vector = Vector;\nimport * as Matrix4 from 'Matrix4';\nglobalThis.Matrix4 = Matrix4;\nimport * as MemoryCard from 'MemoryCard';\nglobalThis.MemoryCard = MemoryCard;\nimport * as Screen from 'Screen';\nglobalThis.Screen = Screen;\nimport * as Sound from 'Sound';\nglobalThis.Sound = Sound;\nimport * as System from 'System';\nglobalThis.System = System;\nimport * as TileMap from 'TileMap';\nglobalThis.TileMap = TileMap;\nimport * as Timer from 'Timer';\nglobalThis.Timer = Timer;\nimport * as Video from 'Video';\nglobalThis.Video = Video.Video;\n";
 
 const char *athena_get_modules_bootstrap_script(void) {
     return modules_bootstrap_code;
+}
+
+/* JavaScript modules (module.json "js"), embedded as source by Makefile.embed. */
+
+static const struct {
+    const char *module_name;
+    const unsigned char *source;
+    const unsigned int *size;
+} athena_js_modules[] = {
+    { NULL, NULL, NULL }
+};
+
+const char *athena_find_js_module(const char *module_name, size_t *length) {
+    for (int i = 0; athena_js_modules[i].module_name != NULL; i++) {
+        if (strcmp(athena_js_modules[i].module_name, module_name) == 0) {
+            *length = *athena_js_modules[i].size;
+            return (const char *)athena_js_modules[i].source;
+        }
+    }
+    return NULL;
 }

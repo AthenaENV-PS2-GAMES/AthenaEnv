@@ -92,7 +92,11 @@ declare namespace Loop {
      * An exception thrown by a handler stops the program.
      */
     function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
-    /** Stops the loop after the current frame; the program ends once no timers remain. */
+    /**
+     * Stops the loop after the current frame; the program ends once no timers
+     * remain. Registered systems stay registered and run again with the next
+     * `Loop.run()`.
+     */
     function stop(): void;
     /** Returns whether the loop is running. */
     function isRunning(): boolean;
@@ -114,4 +118,77 @@ declare namespace Loop {
     function getFrameCount(): number;
     /** Returns the frame statistics of the last frame. */
     function getStats(): Stats;
+
+    /**
+     * A system: per-frame work that a module or the game registers once, and
+     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
+     * long as the loop runs, surviving `Loop.run()` replacements and
+     * `Loop.stop()`. Each frame runs, in order:
+     *
+     * 1. `preUpdate(dt)` of every system, once;
+     * 2. `update(step)` of every system, then the `update` handler: once with
+     *    `dt`, or once per fixed step with `fixedStep`;
+     * 3. `postUpdate(dt)` of every system, once;
+     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
+     *    overlays such as debug information or screen transitions.
+     *
+     * Within a phase, systems run by ascending `priority`, then in the order
+     * they were added. `this` is the system object. An exception thrown by a
+     * system stops the program, as one thrown by a handler.
+     */
+    interface System {
+        /** Unique name, for `removeSystem()` and `getSystems()`. */
+        name?: string;
+        /** Lower runs first. Integer; defaults to `0`. */
+        priority?: number;
+        /**
+         * `preUpdate` and `postUpdate` receive the real delta, ignoring
+         * `setTimeScale()`: for menus and transitions that keep moving while
+         * the game is paused. Defaults to `false`.
+         */
+        realTime?: boolean;
+        preUpdate?(dt: number): void;
+        /** Same cadence and argument as the `update` handler. */
+        update?(step: number): void;
+        postUpdate?(dt: number): void;
+        preDraw?(alpha: number): void;
+        postDraw?(alpha: number): void;
+    }
+
+    /** A registered system, as listed by `getSystems()`. */
+    interface SystemInfo {
+        name: string | undefined;
+        priority: number;
+        realTime: boolean;
+        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
+        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
+        /** True for systems registered by native modules. */
+        native: boolean;
+    }
+
+    /**
+     * Registers a system and returns it. Its methods are read now: replacing
+     * them later has no effect until it is added again. A system added during
+     * a frame starts with the next phase. Throws when the object has no phase
+     * method, was already added, or its name is taken.
+     *
+     * @example
+     * ```js
+     * const flash = Loop.addSystem({
+     *     name: "flash",
+     *     priority: 100,
+     *     alpha: 128,              // 0x80 is opaque on the GS
+     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
+     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
+     * });
+     * ```
+     */
+    function addSystem<T extends System>(system: T): T;
+    /**
+     * Unregisters a system, given the object or its name. Returns whether it
+     * was registered. A system removed during a phase does not run again.
+     */
+    function removeSystem(system: System | string): boolean;
+    /** Registered systems, in run order. */
+    function getSystems(): SystemInfo[];
 }
