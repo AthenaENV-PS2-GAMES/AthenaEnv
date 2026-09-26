@@ -12,26 +12,32 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    const char *err_msg = NULL;
-    /* std.reload() longjmps back here after switching the entry script. */
-    setjmp(*get_reset_buf());
+    for (;;) {
+        const char *entry = athena_boot_entry();
+        const char *err_msg;
+        const char *next;
 
-    dbgprintf("[AthenaCore] Running script: %s\n", athena_boot_entry());
-    err_msg = run_script(athena_boot_entry(), false);
+        dbgprintf("[AthenaCore] Running script: %s\n", entry);
+        err_msg = run_script(entry, false);
 
-    if (err_msg != NULL) {
-        dbgprintf("\n==================== [ATHENA CORE ERROR] ====================\n");
-        dbgprintf("%s\n", err_msg);
-        dbgprintf("=============================================================\n");
-        printf("\n[AthenaCore Error]: %s\n", err_msg);
-
-        // Render On-Screen Crash Screen on TV
-        athena_display_crash_screen("JavaScript Uncaught Exception", err_msg, dark_mode);
-
-        // Infinite loop to keep console output visible
-        while (1) {
-            SleepThread();
+        /* std.reload(), or a launched script going back to its launcher. */
+        next = athena_runtime_next_script(entry, err_msg);
+        if (next) {
+            dbgprintf("[AthenaCore] Switching to script: %s\n", next);
+            set_default_script(next);
+            continue;
         }
+
+        if (err_msg != NULL) {
+            dbgprintf("\n==================== [ATHENA CORE ERROR] ====================\n");
+            dbgprintf("%s\n", err_msg);
+            dbgprintf("=============================================================\n");
+            printf("\n[AthenaCore Error]: %s\n", err_msg);
+
+            // Render On-Screen Crash Screen on TV; it never returns.
+            athena_display_crash_screen("JavaScript Uncaught Exception", err_msg, dark_mode);
+        }
+        break;
     }
 
     athena_modules_shutdown();

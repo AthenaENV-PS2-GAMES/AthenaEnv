@@ -570,6 +570,21 @@ AthenaGamepadResult athena_gamepad_core_init(void) {
     return ATHENA_GAMEPAD_OK;
 }
 
+uint16_t athena_gamepad_core_peek(int port) {
+    struct padButtonStatus status;
+    int state;
+
+    if (!gamepad_initialized || port < 0 || port >= GAMEPAD_PORTS ||
+        !gamepad_devices[gamepad_port_device(port, 0)].open)
+        return 0;
+    state = padGetState(port, 0);
+    if (state != PAD_STATE_STABLE && state != PAD_STATE_FINDCTP1)
+        return 0;
+    if (padRead(port, 0, &status) == 0)
+        return 0;
+    return 0xffff ^ status.btns;
+}
+
 static void gamepad_start_driver(GamepadDriver driver, bool enabled) {
     if (!enabled || gamepad_iop_ready(driver) || gamepad_driver_failed[driver])
         return;

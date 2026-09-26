@@ -124,6 +124,9 @@ export const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 import { clamp } from "utils.js";
 ```
 
+The QuickJS version in use (2021-03-27) has no top-level `await`: use it
+inside an `async` function.
+
 ### Editor support
 
 `bin/athena.d.ts` declares the API of every module in the build, with
@@ -188,6 +191,26 @@ while (true) {
     Screen.flip();
 }
 ```
+
+### Switching scripts
+
+`std.reload(path)` ends the running script and starts another one in a fresh
+JavaScript VM, without restarting the ELF: a title screen can start the game,
+a menu can start a level pack. Nothing after the call runs; a path that
+cannot be opened throws instead.
+
+```js
+std.reload("game/main.js");                                // switch for good
+std.reload("tests/box2d_test.js", { returnTo: "menu.js" }); // come back afterwards
+```
+
+With `returnTo`, the new script returns to that one when it ends, throws, or
+the player holds SELECT+START for a second, and `std.lastRun()` tells how it
+went: `{ script, status, error, output }` with `status` `"finished"`,
+`"error"`, `"exited"` (SELECT+START) or `"reloaded"`, and `output` the last
+16 KiB it printed with `console.log()` or `print()`. State kept by native code, such as
+loaded IOP drivers or the enabled gamepad drivers, is not reset between
+scripts.
 
 ### Paths and devices
 
@@ -285,16 +308,26 @@ Not in the default build: `node tools/modules.js configure --modules=ease,tween,
 
 ```js
 const logo = { x: 0, y: -50 };
+const camera = { x: 0 };
+const WHITE = Color.new(255, 255, 255);
 
-// Animate properties with easing, awaitable with Promises
-await Tween.to(logo, { y: 150 }, 0.8, { ease: "outBounce" });
+async function intro() {
+    // Tweens are awaitable: this resolves when the drop completes.
+    await Tween.to(logo, { y: 150 }, 0.8, { ease: "outBounce" });
+    // Then sway between x = 0 and 200 forever.
+    Tween.to(logo, { x: 200 }, 1.0, { ease: "inOutQuad", yoyo: true, repeat: Infinity });
+}
+intro();
 
-// Repeating or yoyo animations, color interpolation
-Tween.to(logo, { x: 200 }, 1.0, { ease: "inOutQuad", yoyo: true, repeat: Infinity });
-
-// Frame-rate independent follow/damping inside Loop.run(dt => { ... })
-camera.x = Ease.damp(camera.x, target.x, 8, dt);
+Loop.run(dt => {                                      // tweens advance by themselves
+    camera.x = Ease.damp(camera.x, logo.x, 8, dt);   // same follow speed at 30 and 60 FPS
+    Draw.rect(320 + logo.x - camera.x, logo.y, 32, 32, WHITE);
+});
 ```
+
+`Tween.to()` also interpolates packed colors per channel (`colors: ["tint"]`),
+and `realTime: true` keeps menu animations running while
+`Loop.setTimeScale(0)` pauses the game.
 
 ### Physics
 
@@ -511,10 +544,29 @@ source by the test runner (`tests/js/runner.c`), using a JavaScript stub for
 `Loop` (`tests/js/stub/Loop.js`) because the real `Loop` requires GS
 initialization.
 
-`bin/tests/` holds test scripts and examples to run on PCSX2 or a PS2: set
-`default_script=tests/<name>.js` in `athena.ini`. Test on real hardware
-before a release: the emulator tolerates misaligned memory accesses and
-provides the `host:` device, which a console does not.
+`bin/tests/` holds test scripts and examples to run on PCSX2 or a PS2.
+`bin/tests/index.js` is a launcher for them, and `bin/athena.ini` starts it
+(`default_script=tests/index.js`), so switching tests needs no edit:
+
+- **✕** runs the selected script, **UP/DOWN** move, **LEFT/RIGHT** turn a page.
+- A script returns to the launcher when it ends, when it throws, or when
+  **SELECT+START** is held for a second on the pad in port 1. The shortcut
+  works in every script, including `while (true)` loops and scripts that
+  never read the pad.
+- Back in the launcher, what the script printed (`console.log()`, `print()`,
+  unhandled promise rejections) and its error with the stack trace are shown
+  on screen, scrolled to the end where test summaries are: failures in red,
+  passes in green. **UP/DOWN** scroll, **LEFT/RIGHT** turn a page, **✕** or
+  **○** go back to the list, and **△** shows it again. The last 16 KiB are
+  kept; the same output still goes to the EE console (the PCSX2 log).
+
+Scripts run one after another in the same ELF, so native state that outlives
+a script (loaded IOP drivers, enabled gamepad drivers) carries over.
+Tests that check a fresh start, such as `gamepad_test.js`, are only reliable
+as the first script after boot.
+
+Test on real hardware before a release: the emulator tolerates misaligned
+memory accesses and provides the `host:` device, which a console does not.
 
 ## Contributing
 

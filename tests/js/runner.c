@@ -6,8 +6,10 @@
  * object was released. Run with tests/js/run.sh.
  *
  * Only modules without hardware dependencies can be linked here: Box2D,
- * and MemoryCard against the fake card of tests/host/fake_libmc.h. A
- * minimal setTimeout runs after the script, for awaited MemoryCard jobs.
+ * and MemoryCard against the fake card of tests/host/fake_libmc.h. The
+ * JavaScript modules (Ease, Tween) load from their sources, with a
+ * JavaScript stand-in for Loop. A minimal setTimeout runs after the script,
+ * for awaited MemoryCard jobs and the Loop stand-in's frames.
  */
 #include <math.h>
 #include <stdio.h>

@@ -71,6 +71,14 @@ AthenaGamepadResult athena_gamepad_core_init(void);
  */
 AthenaGamepadResult athena_gamepad_core_update(void);
 
+/*
+ * Buttons held right now on the pad of `port` (0 or 1, slot 0), read from
+ * libpad without touching the snapshot of athena_gamepad_core_update(), so
+ * the application's justPressed() state is unaffected. 0 when the service is
+ * not initialized or no pad is ready. For system shortcuts.
+ */
+uint16_t athena_gamepad_core_peek(int port);
+
 /* Selects the optional drivers; takes effect on the next update. */
 void athena_gamepad_core_set_drivers(AthenaGamepadDrivers enabled);
 AthenaGamepadDrivers athena_gamepad_core_drivers_enabled(void);

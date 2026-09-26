@@ -13,8 +13,11 @@
  * @example
  * ```js
  * const logo = { x: 320, y: -100, alpha: 0 };
- * await Tween.to(logo, { y: 120, alpha: 128 }, 0.6, { ease: "outBack" });
- * Tween.to(logo, { y: 130 }, 0.8, { ease: "inOutSine", yoyo: true, repeat: Infinity });
+ * async function intro() {   // no top-level await in this QuickJS
+ *     await Tween.to(logo, { y: 120, alpha: 128 }, 0.6, { ease: "outBack" });
+ *     Tween.to(logo, { y: 130 }, 0.8, { ease: "inOutSine", yoyo: true, repeat: Infinity });
+ * }
+ * intro();
  *
  * const tint = { color: Color.new(255, 255, 255) };
  * Tween.to(tint, { color: Color.new(255, 0, 0) }, 0.2, { colors: ["color"] });

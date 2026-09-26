@@ -410,27 +410,92 @@ static JSValue js_loadScript(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
+/*
+ * std.reload(script, { returnTo }): ends this script and starts `script` in a
+ * new VM. The switch unwinds the running code with an uncatchable error;
+ * run_script() then tears the VM down (module quiesce, GIL) as after any
+ * error, and main() starts the next script (athena_runtime_next_script()).
+ */
 static JSValue js_reload(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
-    const char *filename;
-    
+    const char *filename, *return_to = NULL;
+    JSValue value, error;
+    FILE *f;
+
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "std.reload expects a script path");
+    if (argc > 1 && !JS_IsUndefined(argv[1]) && !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "std.reload options must be an object");
+
     filename = JS_ToCString(ctx, argv[0]);
     if (!filename)
         return JS_EXCEPTION;
+    /* A missing script is reported here, where the caller can still catch it. */
+    f = fopen(filename, "r");
+    if (!f) {
+        JS_ThrowReferenceError(ctx, "std.reload: could not open '%s'", filename);
+        JS_FreeCString(ctx, filename);
+        return JS_EXCEPTION;
+    }
+    fclose(f);
 
-    JSValue val = JS_GetPropertyStr(ctx, this_val, "reload");
-	JS_FreeValue(ctx, val);
-    JS_FreeValue(ctx, val);
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        value = JS_GetPropertyStr(ctx, argv[1], "returnTo");
+        if (JS_IsException(value)) {
+            JS_FreeCString(ctx, filename);
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsUndefined(value)) {
+            if (!JS_IsString(value)) {
+                JS_FreeValue(ctx, value);
+                JS_FreeCString(ctx, filename);
+                return JS_ThrowTypeError(ctx, "std.reload returnTo must be a script path");
+            }
+            return_to = JS_ToCString(ctx, value);
+            JS_FreeValue(ctx, value);
+            if (!return_to) {
+                JS_FreeCString(ctx, filename);
+                return JS_EXCEPTION;
+            }
+        }
+    }
 
-    JS_FreeValue(ctx, this_val);
-    
-    set_default_script(filename);
+    athena_runtime_request_reload(filename, return_to);
     JS_FreeCString(ctx, filename);
+    JS_FreeCString(ctx, return_to);
 
-    destroy_vm(ctx);
+    JS_ThrowInternalError(ctx, "reload");
+    error = JS_GetException(ctx);
+    JS_SetUncatchableError(ctx, error, TRUE);
+    return JS_Throw(ctx, error);
+}
 
-    longjmp(*get_reset_buf(), 1);
+/* std.lastRun(): how the previous script ended, or null for the first one. */
+static JSValue js_last_run(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv)
+{
+    static const char *const names[] = {
+        [ATHENA_RUN_FINISHED] = "finished",
+        [ATHENA_RUN_ERROR] = "error",
+        [ATHENA_RUN_EXITED] = "exited",
+        [ATHENA_RUN_RELOADED] = "reloaded",
+    };
+    const char *script, *error, *output;
+    AthenaRunStatus status = athena_runtime_last_run(&script, &error, &output);
+    JSValue result;
+
+    if (status == ATHENA_RUN_NONE)
+        return JS_NULL;
+    result = JS_NewObject(ctx);
+    if (JS_IsException(result))
+        return result;
+    JS_SetPropertyStr(ctx, result, "script", JS_NewString(ctx, script));
+    JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, names[status]));
+    JS_SetPropertyStr(ctx, result, "error",
+                      error ? JS_NewString(ctx, error) : JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, result, "output", JS_NewString(ctx, output));
+    return result;
 }
 
 /* load a file as a UTF-8 encoded string */
@@ -711,7 +776,8 @@ static JSValue js_std_refcount(JSContext *ctx, JSValueConst this_val, int argc, 
 static int interrupt_handler(JSRuntime *rt, void *opaque)
 {
     return ((os_pending_signals >> SIGINT) & 1) ||
-           athena_modules_stop_requested();
+           athena_modules_stop_requested() ||
+           athena_runtime_stop_requested();
 }
 
 void js_std_set_interrupt_handler(JSRuntime *rt)
@@ -1319,7 +1385,8 @@ static const JSCFunctionListEntry js_std_funcs[] = {
     JS_CFUNC_DEF("getRefCount", 0, js_std_refcount ),
     JS_CFUNC_DEF("evalScript", 1, js_evalScript ),
     JS_CFUNC_DEF("loadScript", 1, js_loadScript ),
-    JS_CFUNC_DEF("reload", 1, js_reload ),
+    JS_CFUNC_DEF("reload", 2, js_reload ),
+    JS_CFUNC_DEF("lastRun", 0, js_last_run ),
     JS_CFUNC_DEF("getenv", 1, js_std_getenv ),
     JS_CFUNC_DEF("setenv", 1, js_std_setenv ),
     JS_CFUNC_DEF("unsetenv", 1, js_std_unsetenv ),
@@ -3521,15 +3588,20 @@ static JSValue js_print(JSContext *ctx, JSValueConst this_val,
     size_t len;
 
     for(i = 0; i < argc; i++) {
-        if (i != 0)
+        if (i != 0) {
             putchar(' ');
+            athena_runtime_output(" ", 1);
+        }
         str = JS_ToCStringLen(ctx, &len, argv[i]);
         if (!str)
             return JS_EXCEPTION;
         fwrite(str, 1, len, stdout);
+        /* kept for std.lastRun(), e.g. to show on screen */
+        athena_runtime_output(str, len);
         JS_FreeCString(ctx, str);
     }
     putchar('\n');
+    athena_runtime_output("\n", 1);
     return JS_UNDEFINED;
 }
 
@@ -3544,6 +3616,10 @@ void js_std_add_helpers(JSContext *ctx, int argc, char **argv)
     console = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, console, "log",
                       JS_NewCFunction(ctx, js_print, "log", 1));
+    JS_SetPropertyStr(ctx, console, "warn",
+                      JS_NewCFunction(ctx, js_print, "warn", 1));
+    JS_SetPropertyStr(ctx, console, "error",
+                      JS_NewCFunction(ctx, js_print, "error", 1));
     JS_SetPropertyStr(ctx, global_obj, "console", console);
 
     /* same methods as the mozilla JS shell */
@@ -3638,6 +3714,19 @@ static void js_dump_obj(JSContext *ctx, FILE *f, JSValueConst val)
     }
 }
 
+/* js_dump_obj() for std.lastRun()'s output. */
+static void js_output_obj(JSContext *ctx, JSValueConst val)
+{
+    size_t len;
+    const char *str = JS_ToCStringLen(ctx, &len, val);
+
+    if (str) {
+        athena_runtime_output(str, len);
+        athena_runtime_output("\n", 1);
+        JS_FreeCString(ctx, str);
+    }
+}
+
 static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
 {
     JSValue val;
@@ -3645,10 +3734,12 @@ static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
     
     is_error = JS_IsError(ctx, exception_val);
     js_dump_obj(ctx, stderr, exception_val);
+    js_output_obj(ctx, exception_val);
     if (is_error) {
         val = JS_GetPropertyStr(ctx, exception_val, "stack");
         if (!JS_IsUndefined(val)) {
             js_dump_obj(ctx, stderr, val);
+            js_output_obj(ctx, val);
         }
         JS_FreeValue(ctx, val);
     }
@@ -3668,7 +3759,9 @@ void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                       BOOL is_handled, void *opaque)
 {
     if (!is_handled) {
-        fprintf(stderr, "Possibly unhandled promise rejection: ");
+        static const char message[] = "Possibly unhandled promise rejection: ";
+        fputs(message, stderr);
+        athena_runtime_output(message, sizeof(message) - 1);
         js_std_dump_error1(ctx, reason);
     }
 }
@@ -3689,11 +3782,16 @@ int js_std_loop(JSContext *ctx)
     int poll_result;
 
     for(;;) {
+        /* std.reload() or SELECT+START, also while no JavaScript runs */
+        if (athena_runtime_stop_requested())
+            return -1;
+
         /* execute the pending jobs */
         for(;;) {
             err = JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx1);
             if (err <= 0) {
-                if (err < 0) {
+                /* a script switch is not an error worth printing */
+                if (err < 0 && !athena_runtime_stop_requested()) {
                     js_std_dump_error(ctx1);
                 }
                 break;

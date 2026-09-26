@@ -16,6 +16,7 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/loop/include -Isrc/modules/loop/nat
     -o "$OUT/loop_test" tests/host/loop_test.c -lm
 $CC $CFLAGS -Isrc/modules/loop/include -Isrc/modules/loop/native \
     -o "$OUT/loop_systems_test" tests/host/loop_systems_test.c
+$CC $CFLAGS -Isrc/runtime/quickjs -o "$OUT/output_test" tests/host/output_test.c
 $CC $CFLAGS -Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native \
     -o "$OUT/memcard_test" tests/host/memcard_test.c -lpthread
 $CC $CFLAGS -Isrc/readini/include -o "$OUT/readini_test" \
@@ -39,6 +40,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 
 "$OUT/loop_test"
 "$OUT/loop_systems_test"
+"$OUT/output_test"
 "$OUT/memcard_test"
 "$OUT/readini_test"
 "$OUT/sound_sfx_test"

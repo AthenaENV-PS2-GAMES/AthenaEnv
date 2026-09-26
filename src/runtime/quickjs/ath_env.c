@@ -7,7 +7,13 @@
 #include <ath_env.h>
 #include <ath_gil.h>
 #include <athena_js_module.h>
+#include <athena/config.h>
 #include <athena/memory.h>
+
+#ifdef ATHENA_MODULE_GAMEPAD
+#include <timer.h>
+#include <athena/gamepad.h>
+#endif
 
 #define TRUE 1
 #define JSFILE_NOTFOUND -5656
@@ -225,10 +231,122 @@ void destroy_vm(JSContext* ctx) {
     JS_FreeRuntime(rt);
 }
 
-static jmp_buf vm_reset_buf;
+/* ---- Script switching: std.reload() and the return to a launcher ---- */
 
-jmp_buf *get_reset_buf() {
-    return &vm_reset_buf;
+#define SCRIPT_PATH_MAX 256
+
+static char reload_script[SCRIPT_PATH_MAX];
+static char reload_return[SCRIPT_PATH_MAX];
+static volatile bool reload_pending;
+static bool reload_by_exit;
+/* Where the running script returns when it ends, or "" (it was not launched). */
+static char return_script[SCRIPT_PATH_MAX];
+
+static AthenaRunStatus last_status = ATHENA_RUN_NONE;
+static char last_script[SCRIPT_PATH_MAX];
+static char last_error[4096];
+
+/* Copies `src` (NULL is empty), cut to fit `size`. */
+static void copy_text(char *dst, size_t size, const char *src) {
+    size_t length = src ? strlen(src) : 0;
+
+    if (length >= size)
+        length = size - 1;
+    if (length)
+        memcpy(dst, src, length);
+    dst[length] = '\0';
+}
+
+void athena_runtime_request_reload(const char *script, const char *return_to) {
+    copy_text(reload_script, sizeof(reload_script), script);
+    copy_text(reload_return, sizeof(reload_return), return_to);
+    reload_by_exit = false;
+    reload_pending = true;
+}
+
+#ifdef ATHENA_MODULE_GAMEPAD
+/* SELECT + START held on the pad in port 1, polled at most every EXIT_POLL_MS. */
+#define EXIT_BUTTONS (0x0001 | 0x0008)
+#define EXIT_HOLD_MS 1000
+#define EXIT_POLL_MS 50
+
+static uint64_t exit_last_poll;
+static uint64_t exit_held_since;
+
+static uint64_t runtime_now_ms(void) {
+    return GetTimerSystemTime() / (kBUSCLK / 1000);
+}
+
+static void poll_exit_buttons(void) {
+    uint64_t now = runtime_now_ms();
+
+    if (now - exit_last_poll < EXIT_POLL_MS)
+        return;
+    exit_last_poll = now;
+    if ((athena_gamepad_core_peek(0) & EXIT_BUTTONS) != EXIT_BUTTONS) {
+        exit_held_since = 0;
+        return;
+    }
+    if (!exit_held_since) {
+        exit_held_since = now;
+    } else if (now - exit_held_since >= EXIT_HOLD_MS) {
+        dbgprintf("[AthenaCore] SELECT+START: returning to %s\n", return_script);
+        athena_runtime_request_reload(return_script, NULL);
+        reload_by_exit = true;
+        exit_held_since = 0;
+    }
+}
+#endif
+
+/* Called by QuickJS's interrupt handler and by js_std_loop(), on the script's thread. */
+int athena_runtime_stop_requested(void) {
+#ifdef ATHENA_MODULE_GAMEPAD
+    if (!reload_pending && return_script[0])
+        poll_exit_buttons();
+#endif
+    return reload_pending;
+}
+
+const char *athena_runtime_next_script(const char *script, const char *error) {
+    static char next[SCRIPT_PATH_MAX];
+
+    copy_text(last_script, sizeof(last_script), script);
+    last_error[0] = '\0';
+    athena_runtime_output_rotate();
+
+    if (reload_pending) {
+        /* The error is the interruption that unwound the script. */
+        last_status = reload_by_exit ? ATHENA_RUN_EXITED : ATHENA_RUN_RELOADED;
+        copy_text(next, sizeof(next), reload_script);
+        copy_text(return_script, sizeof(return_script), reload_return);
+        reload_pending = false;
+    } else {
+        last_status = error ? ATHENA_RUN_ERROR : ATHENA_RUN_FINISHED;
+        copy_text(last_error, sizeof(last_error), error);
+        if (!return_script[0])
+            return NULL;
+        copy_text(next, sizeof(next), return_script);
+        return_script[0] = '\0';
+    }
+
+#ifdef ATHENA_MODULE_GAMEPAD
+    /* SELECT+START reads the pad even when the script never uses Gamepad. */
+    if (return_script[0])
+        athena_gamepad_core_init();
+    exit_held_since = 0;
+#endif
+    return next;
+}
+
+AthenaRunStatus athena_runtime_last_run(const char **script, const char **error,
+                                        const char **output) {
+    if (script)
+        *script = last_script;
+    if (error)
+        *error = last_error[0] ? last_error : NULL;
+    if (output)
+        *output = athena_runtime_output_last();
+    return last_status;
 }
 
 const char* run_script(const char* script, bool isBuffer)
