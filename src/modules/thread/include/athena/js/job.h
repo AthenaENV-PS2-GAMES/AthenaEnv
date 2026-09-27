@@ -54,6 +54,13 @@ typedef struct AthenaJsJobKind {
      * cancelled, settle() getting CANCELLED. Optional.
      */
     int (*advance)(JSContext *ctx, AthenaJob *job, void *user);
+    /*
+     * Marks (JS_MarkValue) every JavaScript value `user` holds. Required when
+     * it holds any: otherwise the cycle collector takes those references for
+     * external ones, and a job kept until the script ends leaks what they
+     * reach, which JS_FreeRuntime reports as a fatal leak. Optional.
+     */
+    void (*mark_user)(JSRuntime *rt, void *user, JS_MarkFunc *mark);
 } AthenaJsJobKind;
 
 /* Registers the Job class on a new context; the thread module does it. */

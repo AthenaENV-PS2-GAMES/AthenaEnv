@@ -590,8 +590,19 @@ static void noise_job_free_user(JSRuntime *rt, void *user) {
     free(fill);
 }
 
+/* The array held in `user` must be visible to the cycle collector. */
+static void noise_job_mark_user(JSRuntime *rt, void *user, JS_MarkFunc *mark) {
+    NoiseFillUser *fill = user;
+
+    JS_MarkValue(rt, fill->array, mark);
+}
+
 static const AthenaJsJobKind noise_job_kind = {
-    "Noise", noise_job_settle, noise_job_status, noise_job_free_user,
+    .owner = "Noise",
+    .settle = noise_job_settle,
+    .status = noise_job_status,
+    .free_user = noise_job_free_user,
+    .mark_user = noise_job_mark_user,
 };
 
 static JSValue noise_fill_async(JSContext *ctx, JSValueConst this_val,

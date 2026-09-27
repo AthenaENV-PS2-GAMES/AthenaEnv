@@ -2,6 +2,8 @@
 #define DPRINTF_H
 
 #ifdef DEBUG
+/* dbgprintf and dbgputs expand to printf and puts: callers need not include it. */
+#include <stdio.h>
 #ifdef __EESIO_PRINTF
     #include <SIOCookie.h>
     #define dbginit() ee_sio_start(38400, 0, 0, 0, 0, 1)

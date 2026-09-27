@@ -6,8 +6,9 @@
  * object was released. Run with tests/js/run.sh.
  *
  * Only modules without hardware dependencies can be linked here: Box2D,
- * Random, Noise, and MemoryCard against the fake card of
- * tests/host/fake_libmc.h. The JavaScript modules (Ease, Tween) load from their sources, with a
+ * Random, Noise, MemoryCard against the fake card of
+ * tests/host/fake_libmc.h, and Debug against stubs of the GS calls it makes
+ * and of the pad (counted and set from scripts, see the __ globals). The JavaScript modules (Ease, Tween) load from their sources, with a
  * JavaScript stand-in for Loop. A minimal setTimeout runs after the script,
  * for awaited MemoryCard jobs and the Loop stand-in's frames.
  */
@@ -25,6 +26,93 @@ void athena_box2d_cleanup(JSContext *ctx);
 JSModuleDef *athena_memcard_init(JSContext *ctx);
 JSModuleDef *athena_random_init(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
+JSModuleDef *athena_debug_init(JSContext *ctx);
+#ifdef RUNNER_REAL_FONT
+/*
+ * runner_font: the real Font binding (quickjs/ath_font.c) over the native
+ * stand-in tests/js/font_host.c, for scripts that must run the console's
+ * code path (preload slices, FontRender lifetimes). The __ hooks of the Draw
+ * and pad stubs are left out, so scripts take their console branch.
+ */
+JSModuleDef *athena_font_init(JSContext *ctx);
+#endif
+
+/*
+ * Implementations of the stub headers tests/host/stubs/athena/graphics.h and
+ * tests/js/stub/athena/gamepad.h, for the Debug binding: calls are counted,
+ * the pad is set by the script.
+ */
+typedef struct GSCONTEXT GSCONTEXT;
+typedef unsigned int StubColor;   /* Color of tests/host/stubs/athena/graphics.h */
+static char stub_gs;
+static int stub_sprites, stub_lines, stub_circles, stub_line_lists;
+static float stub_first_line[2], stub_last_circle[4];
+static unsigned int stub_pad;
+GSCONTEXT *getGSGLOBAL(void) { return (GSCONTEXT *)&stub_gs; }
+void draw_sprite(float x, float y, int width, int height, StubColor color) {
+    if (width < 1 || height < 1) {
+        fprintf(stderr, "draw_sprite with an empty size %dx%d\n", width, height);
+        abort();
+    }
+    stub_sprites++;
+}
+void draw_line(float x, float y, float x2, float y2, StubColor color) {
+    if (!stub_lines++) {
+        stub_first_line[0] = x;
+        stub_first_line[1] = y;
+    }
+}
+/* prim_line of tests/host/stubs/athena/graphics.h. */
+typedef struct { float x, y, x2, y2; StubColor rgba; } StubLine;
+void draw_line_list(float x, float y, StubLine *list, int list_size) {
+    if (list_size <= 0 || list_size > 256) {
+        fprintf(stderr, "draw_line_list with %d lines\n", list_size);
+        abort();
+    }
+    stub_line_lists++;
+    for (int i = 0; i < list_size; i++)
+        draw_line(x + list[i].x, y + list[i].y, x + list[i].x2, y + list[i].y2, list[i].rgba);
+}
+void draw_circle(float x, float y, float radius, StubColor color, unsigned char filled) {
+    stub_circles++;
+    stub_last_circle[0] = x;
+    stub_last_circle[1] = y;
+    stub_last_circle[2] = radius;
+    stub_last_circle[3] = filled;
+}
+int athena_gamepad_core_init(void) { return 0; }
+unsigned short athena_gamepad_core_peek(int port) { return port == 0 ? (unsigned short)stub_pad : 0; }
+
+/*
+ * __nativeDraws(): { sprites, lines, lineLists, circles, firstLine: [x, y],
+ * lastCircle: [x, y, radius, filled] } drawn by C since the last call;
+ * `lines` counts the lines of draw_line_list() batches too.
+ */
+static JSValue js_native_draws(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue counts = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, counts, "sprites", JS_NewInt32(ctx, stub_sprites));
+    JS_SetPropertyStr(ctx, counts, "lines", JS_NewInt32(ctx, stub_lines));
+    JS_SetPropertyStr(ctx, counts, "circles", JS_NewInt32(ctx, stub_circles));
+    JS_SetPropertyStr(ctx, counts, "lineLists", JS_NewInt32(ctx, stub_line_lists));
+    JSValue first = JS_NewArray(ctx), circle = JS_NewArray(ctx);
+    for (int i = 0; i < 2; i++)
+        JS_SetPropertyUint32(ctx, first, i, JS_NewFloat64(ctx, stub_first_line[i]));
+    for (int i = 0; i < 4; i++)
+        JS_SetPropertyUint32(ctx, circle, i, JS_NewFloat64(ctx, stub_last_circle[i]));
+    JS_SetPropertyStr(ctx, counts, "firstLine", first);
+    JS_SetPropertyStr(ctx, counts, "lastCircle", circle);
+    stub_sprites = stub_lines = stub_circles = stub_line_lists = 0;
+    return counts;
+}
+
+/* __setPad(buttons): what athena_gamepad_core_peek(0) returns. */
+static JSValue js_set_pad(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    uint32_t buttons = 0;
+    if (argc > 0 && JS_ToUint32(ctx, &buttons, argv[0]))
+        return JS_EXCEPTION;
+    stub_pad = buttons;
+    return JS_UNDEFINED;
+}
 void athena_js_job_class_init(JSContext *ctx);
 void memcard_host_init(void);
 
@@ -58,11 +146,18 @@ int athena_register_class(JSContext *ctx, JSClassID *class_id, const JSClassDef 
 
 static JSValue js_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     for (int i = 0; i < argc; i++) {
-        const char *text = JS_ToCString(ctx, argv[i]);
+        size_t length = 0;
+        const char *text = JS_ToCStringLen(ctx, &length, argv[i]);
         printf("%s%s", i ? " " : "", text ? text : "<?>");
+        /* Kept like the runtime's print does, for Debug.console(). */
+        if (i)
+            athena_runtime_output(" ", 1);
+        if (text)
+            athena_runtime_output(text, length);
         JS_FreeCString(ctx, text);
     }
     printf("\n");
+    athena_runtime_output("\n", 1);
     return JS_UNDEFINED;
 }
 
@@ -124,6 +219,14 @@ static const struct {
     { "Ease", "../src/modules/ease/js/ease.js" },
     { "Tween", "../src/modules/tween/js/tween.js" },
     { "Loop", "../tests/js/stub/Loop.js" },
+    { "Debug", "../src/modules/debug/js/debug.js" },
+    { "Draw", "../tests/js/stub/Draw.js" },
+#ifndef RUNNER_REAL_FONT
+    { "Font", "../tests/js/stub/Font.js" },
+#endif
+    { "Screen", "../tests/js/stub/Screen.js" },
+    { "System", "../tests/js/stub/System.js" },
+    { "Color", "../tests/js/stub/Color.js" },
 };
 
 static JSModuleDef *load_module(JSContext *ctx, const char *name, void *opaque) {
@@ -231,7 +334,8 @@ int main(int argc, char **argv) {
         "import * as Random from 'Random'; globalThis.Random = Random;"
         "import * as Noise from 'Noise'; globalThis.Noise = Noise;"
         "import * as Ease from 'Ease'; globalThis.Ease = Ease;"
-        "import * as Tween from 'Tween'; globalThis.Tween = Tween;";
+        "import * as Tween from 'Tween'; globalThis.Tween = Tween;"
+        "import * as Debug from 'Debug'; globalThis.Debug = Debug;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -243,6 +347,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "usage: %s script.js\n", argv[0]);
         return 2;
     }
+    /* Unbuffered: an abort (a leak assertion, a sanitizer) keeps what was printed. */
+    setvbuf(stdout, NULL, _IONBF, 0);
     rt = JS_NewRuntime();
     ctx = JS_NewContext(rt);
     JS_SetModuleLoaderFunc(rt, NULL, load_module, NULL);
@@ -262,6 +368,17 @@ int main(int argc, char **argv) {
     athena_memcard_init(ctx);
     athena_random_init(ctx);
     athena_noise_init(ctx);
+    athena_debug_init(ctx);
+#ifdef RUNNER_REAL_FONT
+    athena_font_init(ctx);
+    (void)js_native_draws;
+    (void)js_set_pad;
+#else
+    global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__nativeDraws", JS_NewCFunction(ctx, js_native_draws, "__nativeDraws", 0));
+    JS_SetPropertyStr(ctx, global, "__setPad", JS_NewCFunction(ctx, js_set_pad, "__setPad", 1));
+    JS_FreeValue(ctx, global);
+#endif
     if (eval_module(ctx, bootstrap, strlen(bootstrap), "<bootstrap>") < 0)
         return 2;
     code = read_file(argv[1], &length);

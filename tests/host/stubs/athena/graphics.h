@@ -40,3 +40,24 @@ void draw_image(GSSURFACE *source, float x, float y, float width, float height,
 void draw_image_rotate(GSSURFACE *source, float x, float y, float width,
 	float height, float startx, float starty, float endx, float endy,
 	float angle, Color color);
+
+/* Primitives and the GS context, for the Debug binding in the JS runner. */
+typedef struct GSCONTEXT GSCONTEXT;
+GSCONTEXT *getGSGLOBAL(void);
+void draw_sprite(float x, float y, int width, int height, Color color);
+void draw_line(float x, float y, float x2, float y2, Color color);
+void draw_circle(float x, float y, float radius, Color color, uint8_t filled);
+
+/* Bitmap fonts and the graphics service, for the Font binding in the JS runner. */
+typedef struct gsFont GSFONT;
+GSFONT *loadFont(const char *path);
+void graphics_service_init(void);
+
+typedef struct {
+	float x;
+	float y;
+	float x2;
+	float y2;
+	Color rgba;
+} prim_line;
+void draw_line_list(float x, float y, prim_line *list, int list_size);

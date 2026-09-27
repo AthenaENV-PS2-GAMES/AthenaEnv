@@ -55,6 +55,9 @@ static void js_job_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark) {
     JS_MarkValue(rt, handle->promise, mark);
     JS_MarkValue(rt, handle->resolve, mark);
     JS_MarkValue(rt, handle->reject, mark);
+    /* JavaScript values the module keeps in `user` (athena/js/job.h). */
+    if (handle->kind->mark_user)
+        handle->kind->mark_user(rt, handle->user, mark);
 }
 
 static JSClassDef js_job_class = {

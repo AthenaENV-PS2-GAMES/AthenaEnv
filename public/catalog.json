@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-26T22:26:04.690Z",
+  "generatedAt": "2026-09-27T03:47:51.906Z",
   "modules": [
     {
       "id": "archive",
@@ -108,6 +108,34 @@
         "ee_libs": []
       },
       "global_alias": "Color",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "debug",
+      "name": "Debug",
+      "description": "On-screen diagnostics: stats overlay (FPS, CPU and frame time, RAM, JS heap, VRAM) with a frame-time graph, watches, the script's console output, shapes and text in screen or world space, and a controller shortcut. Graph and console tail in C.",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "graphics",
+          "draw",
+          "font",
+          "color",
+          "screen",
+          "system",
+          "gamepad"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Debug",
       "api": {
         "native": true,
         "quickjs": true

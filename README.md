@@ -419,6 +419,7 @@ stalling the frame: `fillAsync()` returns a `Job` (await it, `poll()` its
 | [`system`](src/modules/system/system.d.ts) | `System` | Files and folders, devices, hardware information, memory statistics, timing, garbage collection and launching ELFs. Always included. |
 | [`archive`](src/modules/archive/archive.d.ts) | `Archive` | Reads zip, tar, tar.gz and gzip; safe extraction, also on a worker thread; gzip in memory. |
 | [`iop`](src/modules/iop/iop.d.ts) | `IOP` | IOP driver discovery, loading, reset and memory statistics. |
+| [`debug`](src/modules/debug/debug.d.ts) | `Debug` | On-screen diagnostics: stats overlay (FPS, CPU and frame time, RAM, JS heap, VRAM) with a frame-time graph, watches, the script's console output, shapes and text in screen or world space for a set time, and a controller shortcut to show and hide it all. Not in the default build. |
 | [`memcard`](src/modules/memcard/memcard.d.ts) | `MemoryCard` | Memory cards on `mc0:/` and `mc1:/`: card status and swap detection, files (whole, JSON or streamed), directories, attributes and dates, atomic saves, `icon.sys`, format, and every slow call also as an awaitable background job. Also the drivers the memory card boot device needs. |
 | `usbmass` | — | USB storage drivers (`mass:/`). |
 | `mx4sio` | — | MX4SIO (SD card adapter in memory card slot 2) drivers (`mass:/`). Not in the default build; slot 2 no longer reads memory cards while it is loaded. |
@@ -426,6 +427,24 @@ stalling the frame: `fillAsync()` returns a `Job` (await it, `poll()` its
 | `ilink` | — | i.LINK (IEEE 1394) storage drivers (`mass:/`), on the consoles that have the port. Not in the default build. |
 | `cdrom` | — | Disc filesystem driver (`cdrom0:`). |
 | `poweroff` | — | IOP power-off driver. |
+
+```js
+// Debug (node tools/modules.js configure --modules=debug,...): on screen,
+// since the console has no terminal.
+Debug.overlay(true);                          // FPS, CPU, RAM, VRAM, frame graph
+Debug.console(true, { lines: 5 });            // the last lines of console.log
+Debug.watch("player", () => `${player.x | 0},${player.y | 0}`);
+Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide it all
+
+// Hitboxes of many entities: one call per frame, 4 floats per box.
+Debug.rects(boxes, Color.new(80, 220, 120));  // Float32Array of x, y, w, h
+Debug.rect(x, y, 16, 16, Color.new(255, 0, 0), { seconds: 0.5 });   // one, for half a second
+```
+
+The overlay shows its own cost (`debug x ms`, about 1.1 ms per frame on the PS2
+with the console); `{ compact: true }` keeps only the FPS line and the watches, and
+`{ heap: true }` adds the JavaScript heap, read every 5 s since it walks the heap. Everything is drawn after the game's
+`draw`, and an error inside it turns the module off instead of the game.
 
 USB, MX4SIO, the internal HDD and i.LINK all appear as `mass:/` through the
 same BDM drivers. When booting from `mass:`, the drivers of every one of

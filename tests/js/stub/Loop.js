@@ -81,3 +81,8 @@ export function setTimeScale(scale) { timeScale = scale; }
 export function getTimeScale() { return timeScale; }
 export function getDeltaTime() { return delta; }
 export function getFrameCount() { return frames; }
+
+/* Loop.getStats(): fixed figures of a 60 Hz frame; __setStats() overrides them for a test. */
+let stats = { fps: 60, frameMs: 1000 / 60, cpuMs: 5, steps: 1, alpha: 1 };
+export function getStats() { return Object.assign({}, stats); }
+export function __setStats(values) { stats = Object.assign({}, stats, values); }

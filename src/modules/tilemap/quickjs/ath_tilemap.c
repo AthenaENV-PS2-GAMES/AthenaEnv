@@ -1506,14 +1506,44 @@ static JSValue tilemap_layout_value(JSContext *ctx)
     return object;
 }
 
+/*
+ * The Image textures of a descriptor, and the descriptor and sprite buffer of
+ * an instance, are held from C: gc_mark must report them. Without it the
+ * cycle collector counts them as external references, and a map kept in a
+ * global until the script ends leaks everything they reach (the buffer's
+ * prototype holds the context, hence the globals holding the map), which
+ * JS_FreeRuntime reports as a fatal leak.
+ */
+static void descriptor_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func)
+{
+    TileMapDescriptor *descriptor = JS_GetOpaque(value, descriptor_class_id);
+
+    if (!descriptor || !descriptor->textures)
+        return;
+    for (uint32_t i = 0; i < descriptor->texture_count; ++i)
+        JS_MarkValue(rt, descriptor->textures[i], mark_func);
+}
+
+static void instance_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func)
+{
+    TileMapInstance *instance = JS_GetOpaque(value, instance_class_id);
+
+    if (!instance)
+        return;
+    JS_MarkValue(rt, instance->descriptor, mark_func);
+    JS_MarkValue(rt, instance->buffer, mark_func);
+}
+
 static JSClassDef descriptor_class = {
     "TileMapDescriptor",
     .finalizer = descriptor_finalizer,
+    .gc_mark = descriptor_mark,
 };
 
 static JSClassDef instance_class = {
     "TileMapInstance",
     .finalizer = instance_finalizer,
+    .gc_mark = instance_mark,
 };
 
 static const JSCFunctionListEntry descriptor_proto[] = {

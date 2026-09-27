@@ -16,13 +16,23 @@ static JSClassID render_class_id;
 static int font_system_initialized;
 static void font_finalizer(JSRuntime *rt, JSValue value);
 static void render_finalizer(JSRuntime *rt, JSValue value);
+static void render_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func);
 static JSClassDef font_class = {
     "Font",
     .finalizer = font_finalizer,
 };
+/*
+ * A FontRender holds its Font (font_ref) from C: gc_mark must report that
+ * edge. Without it the cycle collector counts those references as external,
+ * so the Font looks alive and keeps alive everything it reaches (its
+ * prototype's methods hold the context, which holds the globals and modules
+ * that hold the FontRender): a render kept in a global or a module until the
+ * script ends leaked, and JS_FreeRuntime aborted on the leak.
+ */
 static JSClassDef render_class = {
     "FontRender",
     .finalizer = render_finalizer,
+    .gc_mark = render_mark,
 };
 
 typedef struct {
@@ -146,6 +156,13 @@ static JSValue font_wrap(JSContext *ctx, JSValueConst new_target, AthenaFont *fo
     }
     JS_SetOpaque(object, font);
     return object;
+}
+
+static void render_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func)
+{
+    FontRenderData *data = JS_GetOpaque(value, render_class_id);
+    if (data)
+        JS_MarkValue(rt, data->font_ref, mark_func);
 }
 
 static void render_finalizer(JSRuntime *rt, JSValue value)

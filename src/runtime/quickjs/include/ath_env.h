@@ -67,6 +67,10 @@ void athena_runtime_output(const char *text, size_t length);
 void athena_runtime_output_rotate(void);
 /* Output of the previous script (its last 16 KiB), never NULL. */
 const char *athena_runtime_output_last(void);
+/* Output of the running script so far (its last 16 KiB) and its length. */
+const char *athena_runtime_output_current(size_t *length);
+/* Changes whenever the running script's output does: to rebuild views of it. */
+unsigned int athena_runtime_output_version(void);
 
 JSModuleDef *athena_push_module(JSContext* ctx, JSModuleInitFunc *func, const JSCFunctionListEntry *func_list, int len, const char* module_name);
 

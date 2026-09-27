@@ -1548,98 +1548,6 @@ declare namespace Draw {
 }
 
 
-/* === Module: Ease (ease) === */
-/**
- * Easing curves and interpolation helpers.
- *
- * A curve maps the progress `t` of an animation to a value, with `f(0) = 0`
- * and `f(1) = 1`; `back` and `elastic` curves overshoot in between. Every
- * curve clamps `t` to [0, 1] first, so a last frame past the end still gives
- * a valid value. Curves have short names (`outBack`) and the long names of
- * easings.net (`easeOutBack`); `Tween` accepts either as a string.
- *
- * @example
- * ```js
- * const y = Ease.lerp(400, 120, Ease.outBack(elapsed / 0.6));
- * camera.x = Ease.damp(camera.x, player.x, 10, dt);   // same speed at 30 and 60 FPS
- * ```
- */
-declare namespace Ease {
-    /** A curve: progress (clamped to 0..1) to eased value. */
-    type Curve = (t: number) => number;
-    /** A curve, or the name of one (`"outBack"`, `"easeOutBack"`). */
-    type Easing = Curve | string;
-
-    /** The three forms of a curve family. */
-    interface Family {
-        in: Curve;
-        out: Curve;
-        inOut: Curve;
-    }
-
-    const linear: Curve;
-    const inQuad: Curve, outQuad: Curve, inOutQuad: Curve;
-    const inCubic: Curve, outCubic: Curve, inOutCubic: Curve;
-    const inQuart: Curve, outQuart: Curve, inOutQuart: Curve;
-    const inQuint: Curve, outQuint: Curve, inOutQuint: Curve;
-    const inSine: Curve, outSine: Curve, inOutSine: Curve;
-    const inExpo: Curve, outExpo: Curve, inOutExpo: Curve;
-    const inCirc: Curve, outCirc: Curve, inOutCirc: Curve;
-    /** Overshoot of 1.70158 (times 1.525 in `inOutBack`, as easings.net); see `back()`. */
-    const inBack: Curve, outBack: Curve, inOutBack: Curve;
-    /** Amplitude 1, period 0.3; see `elastic()`. */
-    const inElastic: Curve, outElastic: Curve, inOutElastic: Curve;
-    const inBounce: Curve, outBounce: Curve, inOutBounce: Curve;
-
-    /** Long names (easings.net), the same functions as the short ones. */
-    const easeInQuad: Curve, easeOutQuad: Curve, easeInOutQuad: Curve;
-    const easeInCubic: Curve, easeOutCubic: Curve, easeInOutCubic: Curve;
-    const easeInQuart: Curve, easeOutQuart: Curve, easeInOutQuart: Curve;
-    const easeInQuint: Curve, easeOutQuint: Curve, easeInOutQuint: Curve;
-    const easeInSine: Curve, easeOutSine: Curve, easeInOutSine: Curve;
-    const easeInExpo: Curve, easeOutExpo: Curve, easeInOutExpo: Curve;
-    const easeInCirc: Curve, easeOutCirc: Curve, easeInOutCirc: Curve;
-    const easeInBack: Curve, easeOutBack: Curve, easeInOutBack: Curve;
-    const easeInElastic: Curve, easeOutElastic: Curve, easeInOutElastic: Curve;
-    const easeInBounce: Curve, easeOutBounce: Curve, easeInOutBounce: Curve;
-
-    /** Every name `get()` accepts. */
-    const names: readonly string[];
-
-    /** Returns the curve named `ease`, or `ease` itself when it is a function. Throws on unknown names. */
-    function get(ease: Easing): Curve;
-
-    /** Back curves with another overshoot (times 1.525 in `inOut`); 0 is a cubic, larger values overshoot more. */
-    function back(overshoot?: number): Family;
-    /** Elastic curves; `amplitude` >= 1 (default 1), `period` > 0 (default 0.3). */
-    function elastic(options?: { amplitude?: number; period?: number }): Family;
-    /** `count` equal jumps, for frame-by-frame motion; reaches 1 only at t = 1. */
-    function steps(count: number): Curve;
-    /** CSS `cubic-bezier(x1, y1, x2, y2)`; `x1` and `x2` within [0, 1]. */
-    function cubicBezier(x1: number, y1: number, x2: number, y2: number): Curve;
-    /** The curve played backwards: `1 - f(1 - t)`. */
-    function reverse(ease: Easing): Curve;
-    /** The curve forward then back: 0 → 1 → 0, for pulses. */
-    function mirror(ease: Easing): Curve;
-
-    /** `a + (b - a) * t`; `t` is not clamped. */
-    function lerp(a: number, b: number, t: number): number;
-    /** The `t` for which `lerp(a, b, t)` is `value`; 0 when `a === b`. */
-    function inverseLerp(a: number, b: number, value: number): number;
-    /** Maps `value` from [inMin, inMax] to [outMin, outMax], without clamping. */
-    function remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
-    function clamp(value: number, min: number, max: number): number;
-    /** 0 below `edge0`, 1 above `edge1`, a smooth S-curve in between. */
-    function smoothstep(edge0: number, edge1: number, x: number): number;
-    /**
-     * Moves `current` towards `target`, closing the same share of the gap per
-     * second at any frame rate. `lambda` is the speed (about 5 to 15 for a
-     * camera or UI follow); `dt` is the frame delta in seconds.
-     */
-    function damp(current: number, target: number, lambda: number, dt: number): number;
-}
-
-
 /* === Module: Font (font) === */
 /**
  * Font loading and text rendering.
@@ -2072,6 +1980,786 @@ declare namespace Gamepad {
 }
 
 
+/* === Module: Loop (loop) === */
+/**
+ * Game loop driven by the runtime.
+ *
+ * `Loop.run()` registers the frame handlers and returns immediately; frames
+ * start once the entry script finishes. Each frame clears the screen, runs
+ * `update` and `draw`, then flips. Timers, promises and async functions keep
+ * running between frames, and the frame rate follows VSync.
+ *
+ * Variable step: `update(dt)` runs once per frame with the time since the
+ * previous frame, in seconds.
+ * ```js
+ * let x = 0;
+ * Loop.run(dt => {
+ *     x += 120 * dt; // 120 pixels per second at any frame rate
+ *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
+ * });
+ * ```
+ *
+ * Fixed step: `update(step)` runs zero or more times per frame with the same
+ * `step`, as physics engines expect, and `draw(alpha)` once per frame.
+ * ```js
+ * Loop.run({
+ *     update(step) { world.step(step, 4); },
+ *     draw(alpha) { Box2DDraw.draw(world); },
+ * }, { fixedStep: 1 / 60 });
+ * ```
+ */
+declare namespace Loop {
+    /** Frame handlers. `this` inside them is the handlers object. */
+    interface Handlers {
+        /**
+         * Advances the game. Receives the scaled frame delta in seconds, or
+         * `fixedStep` when set; the first frame's delta is `0`.
+         */
+        update?(dt: number): void;
+        /**
+         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
+         * is the fraction of a step not simulated yet, to interpolate
+         * between the previous and the current state; otherwise it is `1`.
+         */
+        draw?(alpha: number): void;
+    }
+
+    interface Options {
+        /** Clears the screen before each frame. Defaults to `true`. */
+        clear?: boolean;
+        /** Packed RGBA color used to clear. Defaults to opaque black. */
+        clearColor?: number;
+        /**
+         * Longest real frame time counted, in seconds; longer stalls such as
+         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
+         */
+        maxDelta?: number;
+        /**
+         * Runs `update` with this constant step, in seconds, as many times as
+         * the elapsed time holds. `0`, the default, runs it once per frame
+         * with the frame delta.
+         */
+        fixedStep?: number;
+        /**
+         * Fixed steps per frame at most; the time beyond it is dropped so a
+         * slow frame cannot snowball. Defaults to `5`.
+         */
+        maxSteps?: number;
+        /**
+         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
+         * 25 FPS on PAL. Defaults to `1`.
+         */
+        vsyncInterval?: number;
+    }
+
+    interface Stats {
+        /** Frames per second, measured over the last second. */
+        fps: number;
+        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
+        frameMs: number;
+        /**
+         * Milliseconds of work in the last frame: from the previous flip up to
+         * this one, timers and promises included, without the VSync wait.
+         */
+        cpuMs: number;
+        /** `update` calls in the last frame. */
+        steps: number;
+        /** Interpolation factor passed to the last `draw`. */
+        alpha: number;
+    }
+
+    /**
+     * Starts the loop. A function is the same as `{ update: fn }`. Called
+     * again, even from a handler, it replaces the handlers and options without
+     * restarting the frame timing; the rest of the current frame is skipped.
+     * An exception thrown by a handler stops the program.
+     */
+    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
+    /**
+     * Stops the loop after the current frame; the program ends once no timers
+     * remain. Registered systems stay registered and run again with the next
+     * `Loop.run()`.
+     */
+    function stop(): void;
+    /** Returns whether the loop is running. */
+    function isRunning(): boolean;
+    /**
+     * Scales the time passed to `update`: `0.5` is slow motion and `0`
+     * pauses the game. At `0`, a variable-step `update` still runs with a
+     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
+     */
+    function setTimeScale(scale: number): void;
+    /** Returns the time scale; `1` by default. */
+    function getTimeScale(): number;
+    /** Returns the scaled delta of the current frame, in seconds. */
+    function getDeltaTime(): number;
+    /** Returns the scaled time since the loop started, in seconds. */
+    function getElapsedTime(): number;
+    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
+    function getRealElapsedTime(): number;
+    /** Returns the number of frames since the loop started. */
+    function getFrameCount(): number;
+    /** Returns the frame statistics of the last frame. */
+    function getStats(): Stats;
+
+    /**
+     * A system: per-frame work that a module or the game registers once, and
+     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
+     * long as the loop runs, surviving `Loop.run()` replacements and
+     * `Loop.stop()`. Each frame runs, in order:
+     *
+     * 1. `preUpdate(dt)` of every system, once;
+     * 2. `update(step)` of every system, then the `update` handler: once with
+     *    `dt`, or once per fixed step with `fixedStep`;
+     * 3. `postUpdate(dt)` of every system, once;
+     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
+     *    overlays such as debug information or screen transitions.
+     *
+     * Within a phase, systems run by ascending `priority`, then in the order
+     * they were added. `this` is the system object. An exception thrown by a
+     * system stops the program, as one thrown by a handler.
+     */
+    interface System {
+        /** Unique name, for `removeSystem()` and `getSystems()`. */
+        name?: string;
+        /** Lower runs first. Integer; defaults to `0`. */
+        priority?: number;
+        /**
+         * `preUpdate` and `postUpdate` receive the real delta, ignoring
+         * `setTimeScale()`: for menus and transitions that keep moving while
+         * the game is paused. Defaults to `false`.
+         */
+        realTime?: boolean;
+        preUpdate?(dt: number): void;
+        /** Same cadence and argument as the `update` handler. */
+        update?(step: number): void;
+        postUpdate?(dt: number): void;
+        preDraw?(alpha: number): void;
+        postDraw?(alpha: number): void;
+    }
+
+    /** A registered system, as listed by `getSystems()`. */
+    interface SystemInfo {
+        name: string | undefined;
+        priority: number;
+        realTime: boolean;
+        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
+        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
+        /** True for systems registered by native modules. */
+        native: boolean;
+    }
+
+    /**
+     * Registers a system and returns it. Its methods are read now: replacing
+     * them later has no effect until it is added again. A system added during
+     * a frame starts with the next phase. Throws when the object has no phase
+     * method, was already added, or its name is taken.
+     *
+     * @example
+     * ```js
+     * const flash = Loop.addSystem({
+     *     name: "flash",
+     *     priority: 100,
+     *     alpha: 128,              // 0x80 is opaque on the GS
+     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
+     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
+     * });
+     * ```
+     */
+    function addSystem<T extends System>(system: T): T;
+    /**
+     * Unregisters a system, given the object or its name. Returns whether it
+     * was registered. A system removed during a phase does not run again.
+     */
+    function removeSystem(system: System | string): boolean;
+    /** Registered systems, in run order. */
+    function getSystems(): SystemInfo[];
+}
+
+
+/* === Module: Screen (screen) === */
+/**
+ * Display, frame synchronization, VRAM statistics and GS state controls.
+ *
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
+ */
+declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
+    interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
+        mode: number;
+        /** Visible width in pixels. */
+        width: number;
+        /** Visible height in pixels. */
+        height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
+        psm: number;
+        /** Interlaced/progressive mode. */
+        interlace: number;
+        /** Field/frame timing mode. */
+        field: number;
+        /** Depth-buffer pixel storage format. */
+        psmz: number;
+        /** Enables depth buffering. */
+        zbuffering: boolean;
+        /** Enables double-buffered presentation. */
+        double_buffering: boolean;
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
+        pass_count?: number;
+    }
+
+    /** Arguments for the GS alpha blend equation. */
+    interface AlphaEquation {
+        a: number;
+        b: number;
+        c: number;
+        d: number;
+        fix: number;
+    }
+
+    /** Pixel bounds used by the GS scissor register. */
+    interface ScissorBounds {
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
+    }
+
+    /** Presents the completed draw buffer and synchronizes the frame. */
+    function flip(): void;
+    /** Clears the current draw buffer using a packed RGBA color. */
+    function clear(color?: number): void;
+    /** Blocks until the next vertical blank starts. */
+    function waitVblankStart(): void;
+    /** Enables or disables synchronization with vertical blank. */
+    function setVSync(enabled: boolean): void;
+    /** Enables or disables the on-screen frame counter. */
+    function setFrameCounter(enabled: boolean): void;
+    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
+    function getMemoryStats(mode?: number): number;
+    /** Returns currently unallocated VRAM in bytes. */
+    function getFreeVRAM(): number;
+    /** Returns the measured FPS over the requested positive frame interval. */
+    function getFPS(interval: number): number;
+    /** Returns the active video configuration. */
+    function getMode(): VideoMode;
+    /** Reconfigures the video mode and render targets; invalid modes throw. */
+    function setMode(mode: VideoMode): void;
+    /** Packs the five GS alpha-equation fields into a register value. */
+    function alphaEquation(a: number, b: number, c: number, d: number,
+        fix: number): bigint;
+    /** Reads a supported GS parameter by its `Screen` constant. */
+    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
+    /** Writes a supported GS parameter by its `Screen` constant. */
+    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
+    /** Switches the active GS context and returns its native result code. */
+    function switchContext(): number;
+    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
+    function flush(): void;
+
+    const VRAM_SIZE: number;
+    const VRAM_USED_TOTAL: number;
+    const VRAM_USED_STATIC: number;
+    const VRAM_USED_DYNAMIC: number;
+    const ALPHA_TEST_ENABLE: number;
+    const ALPHA_TEST_METHOD: number;
+    const ALPHA_TEST_REF: number;
+    const ALPHA_TEST_FAIL: number;
+    const DST_ALPHA_TEST_ENABLE: number;
+    const DST_ALPHA_TEST_METHOD: number;
+    const DEPTH_TEST_ENABLE: number;
+    const DEPTH_TEST_METHOD: number;
+    const ALPHA_BLEND_EQUATION: number;
+    const SCISSOR_BOUNDS: number;
+    const PIXEL_ALPHA_BLEND_ENABLE: number;
+    const COLOR_CLAMP_MODE: number;
+    const ALPHA_NEVER: number;
+    const ALPHA_ALWAYS: number;
+    const ALPHA_LESS: number;
+    const ALPHA_LEQUAL: number;
+    const ALPHA_EQUAL: number;
+    const ALPHA_GEQUAL: number;
+    const ALPHA_GREATER: number;
+    const ALPHA_NEQUAL: number;
+    const ALPHA_FAIL_NO_UPDATE: number;
+    const ALPHA_FAIL_FB_ONLY: number;
+    const ALPHA_FAIL_ZB_ONLY: number;
+    const ALPHA_FAIL_RGB_ONLY: number;
+    const DST_ALPHA_ZERO: number;
+    const DST_ALPHA_ONE: number;
+    const DEPTH_NEVER: number;
+    const DEPTH_ALWAYS: number;
+    const DEPTH_GEQUAL: number;
+    const DEPTH_GREATER: number;
+    const SRC_RGB: number;
+    const DST_RGB: number;
+    const ZERO_RGB: number;
+    const SRC_ALPHA: number;
+    const DST_ALPHA: number;
+    const ALPHA_FIX: number;
+    const BLEND_DEFAULT: bigint;
+    const BLEND_ADD_NOALPHA: bigint;
+    const BLEND_ADD: bigint;
+    const NTSC: number;
+    const PAL: number;
+    const DTV_480p: number;
+    const DTV_576p: number;
+    const DTV_720p: number;
+    const DTV_1080i: number;
+    const INTERLACED: number;
+    const PROGRESSIVE: number;
+    const FIELD: number;
+    const FRAME: number;
+    const CT32: number;
+    const CT24: number;
+    const CT16: number;
+    const CT16S: number;
+    const Z32: number;
+    const Z24: number;
+    const Z16: number;
+    const Z16S: number;
+    const DRAW_BUFFER: number;
+    const DISPLAY_BUFFER: number;
+    const DEPTH_BUFFER: number;
+}
+
+
+/* === Module: System Core (system) === */
+/**
+ * PS2 system, filesystem, timing and hardware helpers.
+ *
+ * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
+ * Return values from filesystem and device operations are native result codes;
+ * callers should check them before continuing.
+ *
+ * Example:
+ * ```js
+ * console.log(System.bootPath);
+ * for (const entry of System.listDir('host:/')) {
+ *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
+ * }
+ * System.sleep(16);
+ * ```
+ */
+declare namespace System {
+    /** One directory entry returned by `listDir()`. */
+    interface DirectoryEntry {
+        /** File or directory name. */
+        name: string;
+        /** File size in bytes; directory sizes may be zero. */
+        size: number;
+        /** True when this entry is a directory. */
+        dir: boolean;
+    }
+
+    /** Memory counters returned by `getMemoryStats()`. */
+    interface MemoryStats {
+        /** Core/binary footprint in bytes. */
+        core: number;
+        /** Reserved native stack in bytes. */
+        nativeStack: number;
+        /** Current native allocations in bytes. */
+        allocs: number;
+        /** Total reported usage in bytes. */
+        used: number;
+        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
+        jsHeap: number;
+        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
+        jsLimit: number;
+        /** Live JavaScript objects. */
+        jsObjects: number;
+    }
+
+    /** EE CPU information returned by `getCPUInfo()`. */
+    interface CPUInfo {
+        /** EE CPU implementation identifier. */
+        implementation: number;
+        /** EE CPU revision identifier. */
+        revision: number;
+        /** Installed EE RAM size in bytes. */
+        RAMSize: number;
+        /** EE bus clock frequency. */
+        BUSClock: number;
+        /** EE CPU clock frequency. */
+        CPUClock: number;
+        /** PS2 machine type identifier. */
+        MachineType: number;
+    }
+
+    /** Memory-card status returned by `getMCInfo()`. */
+    interface MemoryCardInfo {
+        /** Memory-card type identifier. */
+        type: number;
+        /** Free memory reported by the card driver. */
+        freemem: number;
+        /** Format/status flag reported by the card driver. */
+        format: number;
+    }
+
+    /** GS GPU information returned by `getGPUInfo()`. */
+    interface GPUInfo {
+        revision: number;
+        id: number;
+    }
+
+    /** One registered filesystem/device entry. */
+    interface DeviceInfo {
+        name: string;
+        desc: string;
+    }
+
+    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
+    const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in a directory or path relative to `bootPath`. */
+    function listDir(path?: string): DirectoryEntry[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    /** Renames a file or directory and returns the native result code. */
+    function rename(source: string, destination: string): number;
+
+    /** Returns raw EE CPU clock ticks. */
+    function getTicks(): number;
+
+    /** Returns high-resolution elapsed time in milliseconds. */
+    function getMilliseconds(): number;
+
+    /** Suspends the current EE thread for the specified milliseconds. */
+    function sleep(ms: number): void;
+
+    /** Returns currently used EE RAM in bytes. */
+    function getUsedMemory(): number;
+
+    /** Returns remaining available EE RAM in bytes. */
+    function getFreeMemory(): number;
+
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): MemoryStats;
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): CPUInfo;
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): GPUInfo;
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): MemoryCardInfo;
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): DeviceInfo[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
+    /** Forces a QuickJS garbage-collection cycle. */
+    function gc(): void;
+
+    /** Exit application to the PS2 browser/OSDSYS */
+    function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
+}
+
+
+/* === Module: Debug (debug) === */
+/**
+ * On-screen diagnostics, for the console where there is no terminal.
+ *
+ * Everything is drawn after the game's draw by a Loop system that exists only
+ * while something is on. Games with their own loop call `Debug.frame(dt)`
+ * after drawing. The overlay text refreshes 4 times per second and is laid
+ * out once per refresh; the frame-time graph, the console tail and the
+ * rects, lines and circles are computed and drawn in C, so a hitbox per
+ * entity per frame allocates nothing. The overlay shows its own cost
+ * ("debug x ms").
+ *
+ * It never takes the game down: arguments are checked at the call (a bad
+ * color throws there), and an error while drawing turns the module off and
+ * is logged once. Shapes are capped at 2048 (texts too); the oldest go and
+ * the overlay counts them.
+ *
+ * The panels stay inside the title-safe area (5% of each edge), which CRT
+ * TVs do not cut, and use the built-in font at 16 px.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=debug,...`
+ *
+ * Example:
+ * ```js
+ * Debug.overlay(true);                          // FPS, CPU, RAM, JS heap, VRAM, graph
+ * Debug.console(true, { lines: 6 });            // last lines of console.log
+ * Debug.watch("player", () => `${player.x | 0},${player.y | 0} ${player.state}`);
+ * Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide everything
+ *
+ * // In update(): hitboxes for a second, in world coordinates.
+ * Debug.rect(enemy.x, enemy.y, 16, 16, Color.new(255, 0, 0), { seconds: 1, space: "world" });
+ * Debug.text(enemy.x, enemy.y - 10, "hit!", { seconds: 0.5, space: "world" });
+ * ```
+ */
+declare namespace Debug {
+    interface ShapeOptions {
+        /** How long it stays, in real seconds (default 0: this frame only). */
+        seconds?: number;
+        /** "screen" (default) or "world", through `setView()`. */
+        space?: "screen" | "world";
+        /** Filled instead of an outline (rect and circle). */
+        filled?: boolean;
+    }
+
+    interface TextOptions extends ShapeOptions {
+        /** Text color (default white). */
+        color?: Color.Value;
+    }
+
+    interface ConsoleOptions {
+        /** Screen lines shown, 1 to 40 (default 8). */
+        lines?: number;
+    }
+
+    interface View {
+        /** World point at the top-left corner of the screen (default 0). */
+        x?: number;
+        y?: number;
+        /** Screen pixels per world unit (default 1). */
+        scale?: number;
+    }
+
+    interface Config {
+        /**
+         * Frame budget in milliseconds for the graph colors. 0 (default)
+         * derives it from the video mode (60 Hz, or 50 Hz for PAL and 576p)
+         * and `vsyncInterval`.
+         */
+        budgetMs?: number;
+        /** The `vsyncInterval` given to Loop.run(), 1 to 4 (default 1; 2 for 30 fps). */
+        vsyncInterval?: number;
+        /**
+         * Distance from the screen edges in pixels, one number or { x, y }.
+         * null (default) is the title-safe area, 5% of each side.
+         */
+        margin?: number | { x: number; y: number } | null;
+        /** Font of every text (default the built-in font at 16 px). */
+        font?: Font;
+    }
+
+    /** Figures of the frame-time graph. */
+    interface FrameStats {
+        samples: number;
+        frameAvg: number;
+        frameMax: number;
+        cpuAvg: number;
+        cpuMax: number;
+    }
+
+    /**
+     * Shows or hides the stats panel: FPS, CPU and frame time (average and
+     * peak of the last 60 frames) and the frame budget, RAM, free VRAM, the
+     * module's own cost, the watches, and a frame-time graph: green under 75% of the budget, yellow up to it, red
+     * over it, magenta for a dropped frame. Returns whether it is on.
+     * Measured on the PS2: about 1.1 ms per frame with the console (0.95 ms
+     * compact; the graph is about 0.45 ms of it). The overlay shows its own
+     * cost as "debug x ms".
+     */
+    function overlay(on?: boolean, options?: OverlayOptions): boolean;
+
+    interface OverlayOptions {
+        /** Draw the frame-time graph (default true). */
+        graph?: boolean;
+        /** Only the FPS line and the watches (default false). */
+        compact?: boolean;
+        /**
+         * Adds the JavaScript heap size and object count (default false).
+         * Reading them walks the whole heap: 6.7 ms in one frame on the PS2,
+         * so it happens every 5 seconds, and is off by default because a
+         * busy game would drop a frame each time.
+         */
+        heap?: boolean;
+    }
+
+    /**
+     * Shows or hides the last lines the script printed (console.log, print,
+     * errors), wrapped to the screen; lines that look like errors are red.
+     * Returns whether it is on.
+     */
+    function console(on?: boolean, options?: ConsoleOptions): boolean;
+
+    /**
+     * Adds `name: read()` to the overlay, evaluated 4 times per second;
+     * errors show inline and long values are cut at 48 characters.
+     */
+    function watch(name: string, read: () => unknown): void;
+    /** Removes a watch; returns whether it existed. */
+    function unwatch(name: string): boolean;
+
+    /** Rectangle outline (or filled), for this frame or `seconds`. Default color red. */
+    function rect(x: number, y: number, width: number, height: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function line(x1: number, y1: number, x2: number, y2: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function circle(x: number, y: number, radius: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    /**
+     * Many rectangles in one call, from a Float32Array of x, y, width,
+     * height groups (length a multiple of 4), checked and queued in C: for
+     * the hitboxes of many entities, far cheaper than one `rect()` each.
+     * Groups with a value that is not finite are skipped. Returns how many
+     * were queued.
+     */
+    function rects(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    /** Many lines in one call, from x1, y1, x2, y2 groups; see `rects()`. */
+    function lines(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    function text(x: number, y: number, text: unknown, options?: TextOptions): void;
+    /** Removes every shape and text still on screen. */
+    function clear(): void;
+
+    /**
+     * Shows and hides everything when the `buttons` combination is pressed
+     * on the controller of `port` (0 or 1). The pad is read without
+     * Gamepad.update(), so the game's justPressed() is unaffected. `null`
+     * removes the shortcut.
+     */
+    function toggleWith(buttons: number | null, port?: 0 | 1): void;
+    /** Shows or hides everything, like the shortcut; returns whether shown. */
+    function show(on?: boolean): boolean;
+
+    /** World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale. */
+    function setView(view: View): void;
+    function configure(options: Config): void;
+
+    /**
+     * For games that do not use Loop.run(): call after drawing, before
+     * Screen.flip(). `dt` is the frame time in seconds; `cpuMs` (optional)
+     * feeds the graph. Not needed with Loop.run(): there it does nothing and
+     * warns once.
+     */
+    function frame(dt: number, cpuMs?: number): void;
+
+    /** Figures of the graph over the last `frames` frames (default 60). */
+    function frameStats(frames?: number): FrameStats;
+}
+
+
+/* === Module: Ease (ease) === */
+/**
+ * Easing curves and interpolation helpers.
+ *
+ * A curve maps the progress `t` of an animation to a value, with `f(0) = 0`
+ * and `f(1) = 1`; `back` and `elastic` curves overshoot in between. Every
+ * curve clamps `t` to [0, 1] first, so a last frame past the end still gives
+ * a valid value. Curves have short names (`outBack`) and the long names of
+ * easings.net (`easeOutBack`); `Tween` accepts either as a string.
+ *
+ * @example
+ * ```js
+ * const y = Ease.lerp(400, 120, Ease.outBack(elapsed / 0.6));
+ * camera.x = Ease.damp(camera.x, player.x, 10, dt);   // same speed at 30 and 60 FPS
+ * ```
+ */
+declare namespace Ease {
+    /** A curve: progress (clamped to 0..1) to eased value. */
+    type Curve = (t: number) => number;
+    /** A curve, or the name of one (`"outBack"`, `"easeOutBack"`). */
+    type Easing = Curve | string;
+
+    /** The three forms of a curve family. */
+    interface Family {
+        in: Curve;
+        out: Curve;
+        inOut: Curve;
+    }
+
+    const linear: Curve;
+    const inQuad: Curve, outQuad: Curve, inOutQuad: Curve;
+    const inCubic: Curve, outCubic: Curve, inOutCubic: Curve;
+    const inQuart: Curve, outQuart: Curve, inOutQuart: Curve;
+    const inQuint: Curve, outQuint: Curve, inOutQuint: Curve;
+    const inSine: Curve, outSine: Curve, inOutSine: Curve;
+    const inExpo: Curve, outExpo: Curve, inOutExpo: Curve;
+    const inCirc: Curve, outCirc: Curve, inOutCirc: Curve;
+    /** Overshoot of 1.70158 (times 1.525 in `inOutBack`, as easings.net); see `back()`. */
+    const inBack: Curve, outBack: Curve, inOutBack: Curve;
+    /** Amplitude 1, period 0.3; see `elastic()`. */
+    const inElastic: Curve, outElastic: Curve, inOutElastic: Curve;
+    const inBounce: Curve, outBounce: Curve, inOutBounce: Curve;
+
+    /** Long names (easings.net), the same functions as the short ones. */
+    const easeInQuad: Curve, easeOutQuad: Curve, easeInOutQuad: Curve;
+    const easeInCubic: Curve, easeOutCubic: Curve, easeInOutCubic: Curve;
+    const easeInQuart: Curve, easeOutQuart: Curve, easeInOutQuart: Curve;
+    const easeInQuint: Curve, easeOutQuint: Curve, easeInOutQuint: Curve;
+    const easeInSine: Curve, easeOutSine: Curve, easeInOutSine: Curve;
+    const easeInExpo: Curve, easeOutExpo: Curve, easeInOutExpo: Curve;
+    const easeInCirc: Curve, easeOutCirc: Curve, easeInOutCirc: Curve;
+    const easeInBack: Curve, easeOutBack: Curve, easeInOutBack: Curve;
+    const easeInElastic: Curve, easeOutElastic: Curve, easeInOutElastic: Curve;
+    const easeInBounce: Curve, easeOutBounce: Curve, easeInOutBounce: Curve;
+
+    /** Every name `get()` accepts. */
+    const names: readonly string[];
+
+    /** Returns the curve named `ease`, or `ease` itself when it is a function. Throws on unknown names. */
+    function get(ease: Easing): Curve;
+
+    /** Back curves with another overshoot (times 1.525 in `inOut`); 0 is a cubic, larger values overshoot more. */
+    function back(overshoot?: number): Family;
+    /** Elastic curves; `amplitude` >= 1 (default 1), `period` > 0 (default 0.3). */
+    function elastic(options?: { amplitude?: number; period?: number }): Family;
+    /** `count` equal jumps, for frame-by-frame motion; reaches 1 only at t = 1. */
+    function steps(count: number): Curve;
+    /** CSS `cubic-bezier(x1, y1, x2, y2)`; `x1` and `x2` within [0, 1]. */
+    function cubicBezier(x1: number, y1: number, x2: number, y2: number): Curve;
+    /** The curve played backwards: `1 - f(1 - t)`. */
+    function reverse(ease: Easing): Curve;
+    /** The curve forward then back: 0 → 1 → 0, for pulses. */
+    function mirror(ease: Easing): Curve;
+
+    /** `a + (b - a) * t`; `t` is not clamped. */
+    function lerp(a: number, b: number, t: number): number;
+    /** The `t` for which `lerp(a, b, t)` is `value`; 0 when `a === b`. */
+    function inverseLerp(a: number, b: number, value: number): number;
+    /** Maps `value` from [inMin, inMax] to [outMin, outMax], without clamping. */
+    function remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
+    function clamp(value: number, min: number, max: number): number;
+    /** 0 below `edge0`, 1 above `edge1`, a smooth S-curve in between. */
+    function smoothstep(edge0: number, edge1: number, x: number): number;
+    /**
+     * Moves `current` towards `target`, closing the same share of the gap per
+     * second at any frame rate. `lambda` is the speed (about 5 to 15 for a
+     * camera or UI follow); `dt` is the frame delta in seconds.
+     */
+    function damp(current: number, target: number, lambda: number, dt: number): number;
+}
+
+
 /* === Module: Image (image) === */
 /**
  * Image loading, CPU pixel access and textured 2D drawing.
@@ -2479,203 +3167,6 @@ declare namespace IOP {
     function reset(): void;
     /** Returns free and used IOP RAM in bytes. */
     function getMemoryStats(): MemoryStats;
-}
-
-
-/* === Module: Loop (loop) === */
-/**
- * Game loop driven by the runtime.
- *
- * `Loop.run()` registers the frame handlers and returns immediately; frames
- * start once the entry script finishes. Each frame clears the screen, runs
- * `update` and `draw`, then flips. Timers, promises and async functions keep
- * running between frames, and the frame rate follows VSync.
- *
- * Variable step: `update(dt)` runs once per frame with the time since the
- * previous frame, in seconds.
- * ```js
- * let x = 0;
- * Loop.run(dt => {
- *     x += 120 * dt; // 120 pixels per second at any frame rate
- *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
- * });
- * ```
- *
- * Fixed step: `update(step)` runs zero or more times per frame with the same
- * `step`, as physics engines expect, and `draw(alpha)` once per frame.
- * ```js
- * Loop.run({
- *     update(step) { world.step(step, 4); },
- *     draw(alpha) { Box2DDraw.draw(world); },
- * }, { fixedStep: 1 / 60 });
- * ```
- */
-declare namespace Loop {
-    /** Frame handlers. `this` inside them is the handlers object. */
-    interface Handlers {
-        /**
-         * Advances the game. Receives the scaled frame delta in seconds, or
-         * `fixedStep` when set; the first frame's delta is `0`.
-         */
-        update?(dt: number): void;
-        /**
-         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
-         * is the fraction of a step not simulated yet, to interpolate
-         * between the previous and the current state; otherwise it is `1`.
-         */
-        draw?(alpha: number): void;
-    }
-
-    interface Options {
-        /** Clears the screen before each frame. Defaults to `true`. */
-        clear?: boolean;
-        /** Packed RGBA color used to clear. Defaults to opaque black. */
-        clearColor?: number;
-        /**
-         * Longest real frame time counted, in seconds; longer stalls such as
-         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
-         */
-        maxDelta?: number;
-        /**
-         * Runs `update` with this constant step, in seconds, as many times as
-         * the elapsed time holds. `0`, the default, runs it once per frame
-         * with the frame delta.
-         */
-        fixedStep?: number;
-        /**
-         * Fixed steps per frame at most; the time beyond it is dropped so a
-         * slow frame cannot snowball. Defaults to `5`.
-         */
-        maxSteps?: number;
-        /**
-         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
-         * 25 FPS on PAL. Defaults to `1`.
-         */
-        vsyncInterval?: number;
-    }
-
-    interface Stats {
-        /** Frames per second, measured over the last second. */
-        fps: number;
-        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
-        frameMs: number;
-        /**
-         * Milliseconds of work in the last frame: from the previous flip up to
-         * this one, timers and promises included, without the VSync wait.
-         */
-        cpuMs: number;
-        /** `update` calls in the last frame. */
-        steps: number;
-        /** Interpolation factor passed to the last `draw`. */
-        alpha: number;
-    }
-
-    /**
-     * Starts the loop. A function is the same as `{ update: fn }`. Called
-     * again, even from a handler, it replaces the handlers and options without
-     * restarting the frame timing; the rest of the current frame is skipped.
-     * An exception thrown by a handler stops the program.
-     */
-    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
-    /**
-     * Stops the loop after the current frame; the program ends once no timers
-     * remain. Registered systems stay registered and run again with the next
-     * `Loop.run()`.
-     */
-    function stop(): void;
-    /** Returns whether the loop is running. */
-    function isRunning(): boolean;
-    /**
-     * Scales the time passed to `update`: `0.5` is slow motion and `0`
-     * pauses the game. At `0`, a variable-step `update` still runs with a
-     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
-     */
-    function setTimeScale(scale: number): void;
-    /** Returns the time scale; `1` by default. */
-    function getTimeScale(): number;
-    /** Returns the scaled delta of the current frame, in seconds. */
-    function getDeltaTime(): number;
-    /** Returns the scaled time since the loop started, in seconds. */
-    function getElapsedTime(): number;
-    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
-    function getRealElapsedTime(): number;
-    /** Returns the number of frames since the loop started. */
-    function getFrameCount(): number;
-    /** Returns the frame statistics of the last frame. */
-    function getStats(): Stats;
-
-    /**
-     * A system: per-frame work that a module or the game registers once, and
-     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
-     * long as the loop runs, surviving `Loop.run()` replacements and
-     * `Loop.stop()`. Each frame runs, in order:
-     *
-     * 1. `preUpdate(dt)` of every system, once;
-     * 2. `update(step)` of every system, then the `update` handler: once with
-     *    `dt`, or once per fixed step with `fixedStep`;
-     * 3. `postUpdate(dt)` of every system, once;
-     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
-     *    overlays such as debug information or screen transitions.
-     *
-     * Within a phase, systems run by ascending `priority`, then in the order
-     * they were added. `this` is the system object. An exception thrown by a
-     * system stops the program, as one thrown by a handler.
-     */
-    interface System {
-        /** Unique name, for `removeSystem()` and `getSystems()`. */
-        name?: string;
-        /** Lower runs first. Integer; defaults to `0`. */
-        priority?: number;
-        /**
-         * `preUpdate` and `postUpdate` receive the real delta, ignoring
-         * `setTimeScale()`: for menus and transitions that keep moving while
-         * the game is paused. Defaults to `false`.
-         */
-        realTime?: boolean;
-        preUpdate?(dt: number): void;
-        /** Same cadence and argument as the `update` handler. */
-        update?(step: number): void;
-        postUpdate?(dt: number): void;
-        preDraw?(alpha: number): void;
-        postDraw?(alpha: number): void;
-    }
-
-    /** A registered system, as listed by `getSystems()`. */
-    interface SystemInfo {
-        name: string | undefined;
-        priority: number;
-        realTime: boolean;
-        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
-        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
-        /** True for systems registered by native modules. */
-        native: boolean;
-    }
-
-    /**
-     * Registers a system and returns it. Its methods are read now: replacing
-     * them later has no effect until it is added again. A system added during
-     * a frame starts with the next phase. Throws when the object has no phase
-     * method, was already added, or its name is taken.
-     *
-     * @example
-     * ```js
-     * const flash = Loop.addSystem({
-     *     name: "flash",
-     *     priority: 100,
-     *     alpha: 128,              // 0x80 is opaque on the GS
-     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
-     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
-     * });
-     * ```
-     */
-    function addSystem<T extends System>(system: T): T;
-    /**
-     * Unregisters a system, given the object or its name. Returns whether it
-     * was registered. A system removed during a phase does not run again.
-     */
-    function removeSystem(system: System | string): boolean;
-    /** Registered systems, in run order. */
-    function getSystems(): SystemInfo[];
 }
 
 
@@ -3487,155 +3978,6 @@ declare namespace Noise {
 }
 
 
-/* === Module: Screen (screen) === */
-/**
- * Display, frame synchronization, VRAM statistics and GS state controls.
- *
- * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
- * Most numeric constants are raw PS2 GS values and are intended to be passed
- * back to this module rather than interpreted as application-level units.
- */
-declare namespace Screen {
-    /** Current video configuration accepted by `getMode()` and `setMode()`. */
-    interface VideoMode {
-        /** Video mode identifier such as `NTSC` or `PAL`. */
-        mode: number;
-        /** Visible width in pixels. */
-        width: number;
-        /** Visible height in pixels. */
-        height: number;
-        /** Color pixel storage format such as `CT32` or `CT24`. */
-        psm: number;
-        /** Interlaced/progressive mode. */
-        interlace: number;
-        /** Field/frame timing mode. */
-        field: number;
-        /** Depth-buffer pixel storage format. */
-        psmz: number;
-        /** Enables depth buffering. */
-        zbuffering: boolean;
-        /** Enables double-buffered presentation. */
-        double_buffering: boolean;
-        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
-        pass_count?: number;
-    }
-
-    /** Arguments for the GS alpha blend equation. */
-    interface AlphaEquation {
-        a: number;
-        b: number;
-        c: number;
-        d: number;
-        fix: number;
-    }
-
-    /** Pixel bounds used by the GS scissor register. */
-    interface ScissorBounds {
-        x0: number;
-        y0: number;
-        x1: number;
-        y1: number;
-    }
-
-    /** Presents the completed draw buffer and synchronizes the frame. */
-    function flip(): void;
-    /** Clears the current draw buffer using a packed RGBA color. */
-    function clear(color?: number): void;
-    /** Blocks until the next vertical blank starts. */
-    function waitVblankStart(): void;
-    /** Enables or disables synchronization with vertical blank. */
-    function setVSync(enabled: boolean): void;
-    /** Enables or disables the on-screen frame counter. */
-    function setFrameCounter(enabled: boolean): void;
-    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
-    function getMemoryStats(mode?: number): number;
-    /** Returns currently unallocated VRAM in bytes. */
-    function getFreeVRAM(): number;
-    /** Returns the measured FPS over the requested positive frame interval. */
-    function getFPS(interval: number): number;
-    /** Returns the active video configuration. */
-    function getMode(): VideoMode;
-    /** Reconfigures the video mode and render targets; invalid modes throw. */
-    function setMode(mode: VideoMode): void;
-    /** Packs the five GS alpha-equation fields into a register value. */
-    function alphaEquation(a: number, b: number, c: number, d: number,
-        fix: number): bigint;
-    /** Reads a supported GS parameter by its `Screen` constant. */
-    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
-    /** Writes a supported GS parameter by its `Screen` constant. */
-    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
-    /** Switches the active GS context and returns its native result code. */
-    function switchContext(): number;
-    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
-    function flush(): void;
-
-    const VRAM_SIZE: number;
-    const VRAM_USED_TOTAL: number;
-    const VRAM_USED_STATIC: number;
-    const VRAM_USED_DYNAMIC: number;
-    const ALPHA_TEST_ENABLE: number;
-    const ALPHA_TEST_METHOD: number;
-    const ALPHA_TEST_REF: number;
-    const ALPHA_TEST_FAIL: number;
-    const DST_ALPHA_TEST_ENABLE: number;
-    const DST_ALPHA_TEST_METHOD: number;
-    const DEPTH_TEST_ENABLE: number;
-    const DEPTH_TEST_METHOD: number;
-    const ALPHA_BLEND_EQUATION: number;
-    const SCISSOR_BOUNDS: number;
-    const PIXEL_ALPHA_BLEND_ENABLE: number;
-    const COLOR_CLAMP_MODE: number;
-    const ALPHA_NEVER: number;
-    const ALPHA_ALWAYS: number;
-    const ALPHA_LESS: number;
-    const ALPHA_LEQUAL: number;
-    const ALPHA_EQUAL: number;
-    const ALPHA_GEQUAL: number;
-    const ALPHA_GREATER: number;
-    const ALPHA_NEQUAL: number;
-    const ALPHA_FAIL_NO_UPDATE: number;
-    const ALPHA_FAIL_FB_ONLY: number;
-    const ALPHA_FAIL_ZB_ONLY: number;
-    const ALPHA_FAIL_RGB_ONLY: number;
-    const DST_ALPHA_ZERO: number;
-    const DST_ALPHA_ONE: number;
-    const DEPTH_NEVER: number;
-    const DEPTH_ALWAYS: number;
-    const DEPTH_GEQUAL: number;
-    const DEPTH_GREATER: number;
-    const SRC_RGB: number;
-    const DST_RGB: number;
-    const ZERO_RGB: number;
-    const SRC_ALPHA: number;
-    const DST_ALPHA: number;
-    const ALPHA_FIX: number;
-    const BLEND_DEFAULT: bigint;
-    const BLEND_ADD_NOALPHA: bigint;
-    const BLEND_ADD: bigint;
-    const NTSC: number;
-    const PAL: number;
-    const DTV_480p: number;
-    const DTV_576p: number;
-    const DTV_720p: number;
-    const DTV_1080i: number;
-    const INTERLACED: number;
-    const PROGRESSIVE: number;
-    const FIELD: number;
-    const FRAME: number;
-    const CT32: number;
-    const CT24: number;
-    const CT16: number;
-    const CT16S: number;
-    const Z32: number;
-    const Z24: number;
-    const Z16: number;
-    const Z16S: number;
-    const DRAW_BUFFER: number;
-    const DISPLAY_BUFFER: number;
-    const DEPTH_BUFFER: number;
-}
-
-
 /* === Module: Sound (sound) === */
 /**
  * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
@@ -3914,171 +4256,6 @@ declare namespace Sound {
         /** Sample rate in Hz. */
         readonly rate: number;
     }
-}
-
-
-/* === Module: System Core (system) === */
-/**
- * PS2 system, filesystem, timing and hardware helpers.
- *
- * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
- * Return values from filesystem and device operations are native result codes;
- * callers should check them before continuing.
- *
- * Example:
- * ```js
- * console.log(System.bootPath);
- * for (const entry of System.listDir('host:/')) {
- *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
- * }
- * System.sleep(16);
- * ```
- */
-declare namespace System {
-    /** One directory entry returned by `listDir()`. */
-    interface DirectoryEntry {
-        /** File or directory name. */
-        name: string;
-        /** File size in bytes; directory sizes may be zero. */
-        size: number;
-        /** True when this entry is a directory. */
-        dir: boolean;
-    }
-
-    /** Memory counters returned by `getMemoryStats()`. */
-    interface MemoryStats {
-        /** Core/binary footprint in bytes. */
-        core: number;
-        /** Reserved native stack in bytes. */
-        nativeStack: number;
-        /** Current native allocations in bytes. */
-        allocs: number;
-        /** Total reported usage in bytes. */
-        used: number;
-        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
-        jsHeap: number;
-        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
-        jsLimit: number;
-        /** Live JavaScript objects. */
-        jsObjects: number;
-    }
-
-    /** EE CPU information returned by `getCPUInfo()`. */
-    interface CPUInfo {
-        /** EE CPU implementation identifier. */
-        implementation: number;
-        /** EE CPU revision identifier. */
-        revision: number;
-        /** Installed EE RAM size in bytes. */
-        RAMSize: number;
-        /** EE bus clock frequency. */
-        BUSClock: number;
-        /** EE CPU clock frequency. */
-        CPUClock: number;
-        /** PS2 machine type identifier. */
-        MachineType: number;
-    }
-
-    /** Memory-card status returned by `getMCInfo()`. */
-    interface MemoryCardInfo {
-        /** Memory-card type identifier. */
-        type: number;
-        /** Free memory reported by the card driver. */
-        freemem: number;
-        /** Format/status flag reported by the card driver. */
-        format: number;
-    }
-
-    /** GS GPU information returned by `getGPUInfo()`. */
-    interface GPUInfo {
-        revision: number;
-        id: number;
-    }
-
-    /** One registered filesystem/device entry. */
-    interface DeviceInfo {
-        name: string;
-        desc: string;
-    }
-
-    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
-    const bootPath: string;
-    /** Legacy alias for bootPath. */
-    const boot_path: string;
-
-    /** Lists entries in a directory or path relative to `bootPath`. */
-    function listDir(path?: string): DirectoryEntry[];
-
-    /** Removes an empty directory and returns the underlying system result. */
-    function removeDirectory(path: string): number;
-
-    /** Copies a file and returns zero on success. */
-    function copyFile(source: string, destination: string): number;
-
-    /** Moves or renames a file and returns zero on success. */
-    function moveFile(source: string, destination: string): number;
-    /** Renames a file or directory and returns the native result code. */
-    function rename(source: string, destination: string): number;
-
-    /** Returns raw EE CPU clock ticks. */
-    function getTicks(): number;
-
-    /** Returns high-resolution elapsed time in milliseconds. */
-    function getMilliseconds(): number;
-
-    /** Suspends the current EE thread for the specified milliseconds. */
-    function sleep(ms: number): void;
-
-    /** Returns currently used EE RAM in bytes. */
-    function getUsedMemory(): number;
-
-    /** Returns remaining available EE RAM in bytes. */
-    function getFreeMemory(): number;
-
-    /** Yields briefly to the EE scheduler. */
-    function delay(): void;
-
-    /** Returns memory counters from the legacy System API. */
-    function getMemoryStats(): MemoryStats;
-
-    /** Returns basic EE CPU and memory information. */
-    function getCPUInfo(): CPUInfo;
-
-    /** Returns basic GS GPU information. */
-    function getGPUInfo(): GPUInfo;
-
-    /** Returns the console temperature in Celsius when supported. */
-    function getTemperature(): number | undefined;
-
-    /** Returns memory-card information for a controller port (0 or 1). */
-    function getMCInfo(port?: number): MemoryCardInfo;
-
-    /** Returns information about a mass-storage block device. */
-    function getBDMInfo(device: string): { name: string; index: number } | undefined;
-
-    /** Returns currently registered file-system devices. */
-    function devices(): DeviceInfo[];
-
-    /** Mounts a block device at a file-system mount point. */
-    function mount(mountpoint: string, blockdev: string, mode?: number): number;
-
-    /** Unmounts a file-system device. */
-    function umount(device: string): number;
-
-    /** Loads an ELF using the legacy Athena loader. */
-    function loadELF(path: string, args?: string[]): number;
-
-    /** Enables or disables the legacy dark-mode flag. */
-    function setDarkMode(enabled: boolean): void;
-
-    /** Forces a QuickJS garbage-collection cycle. */
-    function gc(): void;
-
-    /** Exit application to the PS2 browser/OSDSYS */
-    function exit(): void;
-
-    /** Alias for exiting to the PS2 browser/OSDSYS. */
-    function exitToBrowser(): void;
 }
 
 

@@ -308,6 +308,33 @@ static void imagelist_finalizer(JSRuntime *rt, JSValue value)
     JS_SetOpaque(value, NULL);
 }
 
+/*
+ * The Images of pending requests and of the cache, and the onLoad/onError
+ * callbacks, are held from C: gc_mark must report them. Without it the
+ * cycle collector counts them as external references, and a list kept in a
+ * global until the script ends leaks everything they reach (a callback
+ * closing over the list, the globals through the context), which
+ * JS_FreeRuntime reports as a fatal leak.
+ */
+static void imagelist_mark(JSRuntime *rt, JSValueConst value, JS_MarkFunc *mark_func)
+{
+    AthenaImageList *list = JS_GetOpaque(value, imagelist_class_id);
+    unsigned int i, j;
+
+    if (!list)
+        return;
+    for (i = 0; i < list->count; ++i) {
+        ImageListJob *job = &list->jobs[i];
+        JS_MarkValue(rt, job->image_ref, mark_func);
+        for (j = 0; j < job->callback_count; ++j) {
+            JS_MarkValue(rt, job->callbacks[j].on_load, mark_func);
+            JS_MarkValue(rt, job->callbacks[j].on_error, mark_func);
+        }
+    }
+    for (i = 0; i < list->cache_count; ++i)
+        JS_MarkValue(rt, list->cache[i].image_ref, mark_func);
+}
+
 static int imagelist_reserve(AthenaImageList *list, unsigned int needed)
 {
     ImageListJob *jobs;
@@ -1006,6 +1033,7 @@ static JSValue imagelist_clear_cache(JSContext *ctx, JSValueConst this_val,
 static JSClassDef imagelist_class = {
     "ImageList",
     .finalizer = imagelist_finalizer,
+    .gc_mark = imagelist_mark,
 };
 
 static const JSCFunctionListEntry imagelist_proto[] = {

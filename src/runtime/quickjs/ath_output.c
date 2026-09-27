@@ -15,9 +15,13 @@ static char run_output[OUTPUT_SIZE];
 static size_t run_output_length;
 static bool run_output_dropped;
 static char last_output[OUTPUT_SIZE + sizeof(OUTPUT_DROPPED)];
+/* Changes on every write and rotation: readers rebuild only when it moves. */
+static unsigned int run_output_version;
 
 void athena_runtime_output(const char *text, size_t length) {
     size_t room = OUTPUT_SIZE - 1;
+
+    run_output_version++;
 
     if (length > room) {
         text += length - room;
@@ -50,8 +54,20 @@ void athena_runtime_output_rotate(void) {
     run_output_length = 0;
     run_output[0] = '\0';
     run_output_dropped = false;
+    run_output_version++;
 }
 
 const char *athena_runtime_output_last(void) {
     return last_output;
+}
+
+/* Output of the running script so far (its last 16 KiB), never NULL. */
+const char *athena_runtime_output_current(size_t *length) {
+    if (length)
+        *length = run_output_length;
+    return run_output;
+}
+
+unsigned int athena_runtime_output_version(void) {
+    return run_output_version;
 }
