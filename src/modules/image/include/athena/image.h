@@ -82,6 +82,20 @@ void athena_image_refresh_status(AthenaImage *image);
 void athena_image_draw(AthenaImage *image, float x, float y, float width,
 	float height, float startx, float starty, float endx, float endy,
 	float angle, uint32_t color);
+/*
+ * Sprites of this image in one packet per chunk, through the 2D view: what
+ * Image.drawList() and Sprite batches send. Nothing while not loaded.
+ */
+void athena_image_draw_list(AthenaImage *image, float x, float y,
+	prim_tex_sprite *list, int count);
+/*
+ * A textured quad from its corners (top-left, top-right, bottom-left,
+ * bottom-right) with a texture coordinate each, as two triangles through
+ * the 2D view: for texture rectangles a GS sprite cannot map (turned 90
+ * degrees in an atlas). Nothing while not loaded.
+ */
+void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[4],
+	const float u[4], const float v[4], uint32_t color);
 bool athena_image_lock(AthenaImage *image);
 /*
  * Main thread only: makes a loaded image resident in VRAM now, and locks it

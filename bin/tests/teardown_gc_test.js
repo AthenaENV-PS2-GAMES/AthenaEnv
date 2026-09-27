@@ -26,8 +26,10 @@ globalThis.title = font.render("kept until the end");
 globalThis.renders = [font.render("a"), font.render("b")];
 globalThis.moduleFont = font;
 
-// Console-only modules: the host runner has no GS, so no TileMap nor ImageList.
-if (typeof TileMap !== "undefined" && typeof Image !== "undefined") {
+// Console-only modules: the host runner has no GS, so no TileMap nor ImageList
+// (only stand-ins of Image and TileMap.Instance, for the Sprite binding).
+if (typeof TileMap !== "undefined" && typeof TileMap.Descriptor === "function" &&
+    typeof Image !== "undefined") {
     const descriptor = new TileMap.Descriptor({
         textures: [new Image("tests/texture.png")],
         materials: [{ endOffset: 8 * 8 - 1 }],

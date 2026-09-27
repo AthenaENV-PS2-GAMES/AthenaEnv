@@ -368,6 +368,34 @@ void athena_image_draw(AthenaImage *image, float x, float y, float width,
 	}
 }
 
+void athena_image_draw_list(AthenaImage *image, float x, float y,
+	prim_tex_sprite *list, int count)
+{
+	if (!athena_image_is_loaded(image) || count <= 0)
+		return;
+	if (image->delayed && image->status == ATHENA_IMAGE_STATUS_DECODED)
+		image->status = ATHENA_IMAGE_STATUS_UPLOAD_PENDING;
+	draw_image_list(image->surface, x, y, list, count);
+}
+
+void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[4],
+	const float u[4], const float v[4], uint32_t color)
+{
+	/* Top-left, top-right, bottom-left, bottom-right: two triangles. */
+	prim_tex_gouraud_triangle triangles[2] = {
+		{ x[0], y[0], u[0], v[0], color, x[1], y[1], u[1], v[1], color,
+			x[2], y[2], u[2], v[2], color },
+		{ x[1], y[1], u[1], v[1], color, x[3], y[3], u[3], v[3], color,
+			x[2], y[2], u[2], v[2], color },
+	};
+
+	if (!athena_image_is_loaded(image))
+		return;
+	if (image->delayed && image->status == ATHENA_IMAGE_STATUS_DECODED)
+		image->status = ATHENA_IMAGE_STATUS_UPLOAD_PENDING;
+	draw_tex_triangle_gouraud_list(image->surface, 0.0f, 0.0f, triangles, 2);
+}
+
 bool athena_image_lock(AthenaImage *image)
 {
 	int result;

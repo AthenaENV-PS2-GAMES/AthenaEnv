@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-27T18:10:44.391Z",
+  "generatedAt": "2026-09-27T22:36:20.791Z",
   "modules": [
     {
       "id": "archive",
@@ -636,6 +636,32 @@
         ]
       },
       "global_alias": "Sound",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "sprite",
+      "name": "Sprite",
+      "description": "Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed and rotated frames, tags and slices, loadable in the background) and animation clips (fps or per-frame durations, loop, once and pingpong, chained clips, frame events, promises), animated sprites with origin, scale, rotation and flip, batched drawing, and batch animation of TileMap sprites, all advanced in C by the Loop.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image",
+          "tilemap",
+          "loop",
+          "random",
+          "thread"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Sprite",
       "api": {
         "native": true,
         "quickjs": true

@@ -31,6 +31,10 @@ JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
 void athena_camera2d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_sprite_js_init(JSContext *ctx);
+void athena_sprite_js_cleanup(JSContext *ctx);
+/* tests/js/sprite_host.c: Image and TileMap stand-ins for the Sprite binding. */
+void sprite_host_init(JSContext *ctx);
 #ifdef RUNNER_REAL_FONT
 /*
  * runner_font: the real Font binding (quickjs/ath_font.c) over the native
@@ -165,6 +169,18 @@ bool athena_view_visible_bounds(AthenaRect2D *world) {
 bool athena_view_screen_box_visible(float x0, float y0, float x1, float y1) {
     return x1 >= stub_clip[0] && x0 <= stub_clip[0] + stub_clip[2] &&
         y1 >= stub_clip[1] && y0 <= stub_clip[1] + stub_clip[3];
+}
+/* As graphics/native/view_gs.c, over the stub clip rectangle (Sprite batches). */
+bool athena_view_culler_init(AthenaViewCuller *culler) {
+    if (athena_view_kind() == ATHENA_VIEW_IDENTITY)
+        return false;
+    culler->m = athena_view_matrix;
+    culler->rotated = athena_view_kind() == ATHENA_VIEW_ROTATED;
+    culler->clip.x0 = (float)stub_clip[0];
+    culler->clip.y0 = (float)stub_clip[1];
+    culler->clip.x1 = (float)(stub_clip[0] + stub_clip[2]);
+    culler->clip.y1 = (float)(stub_clip[1] + stub_clip[3]);
+    return true;
 }
 
 static JSValue js_view(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -429,7 +445,10 @@ int main(int argc, char **argv) {
         "import * as Ease from 'Ease'; globalThis.Ease = Ease;"
         "import * as Tween from 'Tween'; globalThis.Tween = Tween;"
         "import * as Debug from 'Debug'; globalThis.Debug = Debug;"
-        "import * as Camera2D from 'Camera2D'; globalThis.Camera2D = Camera2D;";
+        "import * as Camera2D from 'Camera2D'; globalThis.Camera2D = Camera2D;"
+        "import * as Image from 'Image'; globalThis.Image = Image.Image;"
+        "import * as TileMap from 'TileMap'; globalThis.TileMap = TileMap;"
+        "import * as Sprite from 'Sprite'; globalThis.Sprite = Sprite;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -464,6 +483,8 @@ int main(int argc, char **argv) {
     athena_noise_init(ctx);
     athena_debug_init(ctx);
     athena_camera2d_js_init(ctx);
+    sprite_host_init(ctx);
+    athena_sprite_js_init(ctx);
     global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__view", JS_NewCFunction(ctx, js_view, "__view", 0));
     JS_SetPropertyStr(ctx, global, "__setScreen", JS_NewCFunction(ctx, js_set_screen, "__setScreen", 2));
@@ -493,6 +514,7 @@ int main(int argc, char **argv) {
         ret = -1;
 
     athena_box2d_cleanup(ctx);
+    athena_sprite_js_cleanup(ctx);
     athena_camera2d_js_cleanup(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);

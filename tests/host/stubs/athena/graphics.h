@@ -27,6 +27,16 @@ struct gsSurface {
 };
 typedef struct gsSurface GSSURFACE;
 
+/* Image load errors, for athena/image.h (Sprite tests). */
+typedef enum {
+	ATHENA_IMAGE_LOAD_OK = 0,
+	ATHENA_IMAGE_LOAD_OPEN = 1,
+	ATHENA_IMAGE_LOAD_FORMAT = 2,
+	ATHENA_IMAGE_LOAD_DECODE = 3,
+	ATHENA_IMAGE_LOAD_SURFACE = 4,
+	ATHENA_IMAGE_LOAD_UPLOAD = 5
+} AthenaImageLoadError;
+
 #define GS_PSM_CT32 0x00
 #define GS_FILTER_NEAREST 0
 #define GS_FILTER_LINEAR 1
@@ -62,3 +72,18 @@ typedef struct {
 	Color rgba;
 } prim_line;
 void draw_line_list(float x, float y, prim_line *list, int list_size);
+
+/* Textured sprites of one texture, for Image.drawList and Sprite batches. */
+typedef struct {
+	float x;
+	float y;
+	float u1;
+	float v1;
+
+	float w;
+	float h;
+	float u2;
+	float v2;
+
+	Color rgba;
+} prim_tex_sprite;

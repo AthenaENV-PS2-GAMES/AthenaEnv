@@ -284,6 +284,7 @@ tables below.
 | [`font`](src/modules/font/font.d.ts) | `Font` | TrueType and bitmap fonts at any size, loaded on a worker with `Font.loadAsync()`, glyphs preloaded a slice per frame with `preload()`, and cached layouts with `render()`; multi-line text, kerning, alignment, outline and drop shadow, with square glyphs on NTSC, PAL, 480p and 16:9. |
 | [`tilemap`](src/modules/tilemap/tilemap.d.ts) | `TileMap` | VU1-accelerated batched sprites and tilemaps. |
 | [`camera2d`](src/modules/camera2d/camera2d.d.ts) | `Camera2D` | 2D cameras applied in C to `Draw`, `Image`, `Font` and `TileMap`: position, zoom, rotation and viewport (split screen); follow with smoothing, dead zone, lookahead and auto zoom; bounds, rooms, shake, parallax, culling, timed zoom and pan, fades, flashes, letterbox and transitions between cameras. |
+| [`sprite`](src/modules/sprite/sprite.d.ts) | `Sprite` | Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed frames and tags) and animation clips (fps or per-frame durations, loop, once and pingpong, frame events), animated sprites with origin, scale, rotation and flip, and batch animation of `TileMap` sprites, all advanced in C by the `Loop`. |
 | [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. See [docs/VIDEO.md](docs/VIDEO.md). |
 | `graphics` | — | GS initialization and the rendering core shared by the modules above. |
 
@@ -336,6 +337,43 @@ impacts, `realTime` cameras that keep fading while the game is paused,
 `state()`/`setState()` for saves, `cam.debug = true` to see the dead zone,
 bounds and zones, and `Camera2D.getStats().culled`.
 `bin/tests/camera2d_bench.js` measures the cost per frame on the console.
+
+Animated sprites play clips of a spritesheet, advanced in C by the `Loop`
+(so `Loop.setTimeScale()` pauses them) and drawn through the camera:
+
+```js
+const sheet = Sprite.Sheet.fromGrid(new Image("hero.png"), {
+    frameWidth: 32, frameHeight: 32,
+    clips: {
+        idle: { frames: "0-3", fps: 6 }, run: "4-11",
+        hit: { frames: "12-14", mode: "once", next: "idle" },   // back to idle when it ends
+    },
+});
+// or Sprite.Sheet.fromJSON("hero.json"): Aseprite and TexturePacker, tags become clips
+const hero = new Sprite.Instance(sheet, { clip: "idle", origin: [0.5, 1] });
+hero.on("run:3", () => footstep.play());   // position 3 of the run clip
+
+Loop.run({
+    update() { hero.play(moving ? "run" : "idle"); hero.flipX = facingLeft; },
+    draw() { hero.draw(player.x, player.y); },
+});
+
+// Many instances: one call, one GS packet per 128 sprites.
+Sprite.drawAll(enemies, positions);           // positions: Float32Array [x0, y0, ...]
+
+// Hundreds of coins on one TileMap, animated in C: one render() for all.
+Sprite.Animator.bind(coins, coinSheet, "spin", { randomStart: true });
+```
+
+`await Sprite.Sheet.fromJSONAsync("hero.json")` loads a sheet and decodes its
+texture on a worker (and `fromGridAsync` for grids), so loading screens keep
+drawing. `await hero.playAsync("die")` waits for a clip; `realTime: true` keeps menus
+animating while the game is paused; Aseprite slices become hitboxes
+(`hero.getSlice("hit")`), and `hero.debug = true` (or `Sprite.setDebug(true)`)
+draws outlines, origins and slices; TexturePacker frames rotated in the atlas
+are drawn turned back; clips can take a grid row (`{ row: 2, fps: 8 }`);
+`inset: 0.5` on a sheet stops filtering from showing neighbor frames. `bin/tests/sprite_example.js` shows the API;
+`bin/tests/sprite_bench.js` compares it with animation written in JavaScript.
 
 `image.drawList()` takes the sprite records of `TileMap.SpriteBuffer` (x, y,
 w, h, u1, v1, u2, v2, r, g, b, a): the texture state goes out once per 128

@@ -8,6 +8,7 @@
 
 #include <athena/image.h>
 #include <athena/js/image.h>
+#include <athena/js/tilemap.h>
 #include <athena/tilemap.h>
 #include "ath_tilemap.h"
 
@@ -1655,4 +1656,25 @@ JSModuleDef *athena_tilemap_init(JSContext *ctx)
     JS_AddModuleExport(ctx, module, "SpriteBuffer");
     JS_AddModuleExport(ctx, module, "layout");
     return module;
+}
+
+bool athena_tilemap_is_instance(JSValueConst value)
+{
+    return JS_GetOpaque(value, instance_class_id) != NULL;
+}
+
+AthenaTileSprite *athena_tilemap_instance_sprites(JSContext *ctx,
+    JSValueConst value, uint32_t *count)
+{
+    TileMapInstance *instance = JS_GetOpaque(value, instance_class_id);
+    AthenaTileSprite *sprites;
+
+    if (!instance || JS_IsUndefined(instance->buffer))
+        return NULL;
+    if (!tilemap_sprite_storage(ctx, instance->buffer, true,
+            &instance->buffer_kind, &sprites, count, "TileMap sprite buffer")) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return NULL;
+    }
+    return sprites;
 }
