@@ -131,6 +131,8 @@ declare namespace Loop {
      * 3. `postUpdate(dt)` of every system, once;
      * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
      *    overlays such as debug information or screen transitions.
+     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
+     *    loop, so a system can close what it opened (Camera2D's view).
      *
      * Within a phase, systems run by ascending `priority`, then in the order
      * they were added. `this` is the system object. An exception thrown by a

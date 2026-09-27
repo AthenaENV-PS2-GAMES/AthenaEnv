@@ -7,6 +7,7 @@
 #include <athena/debug_overlay.h>
 #include <athena/gamepad.h>
 #include <athena/graphics.h>
+#include <athena/graphics/view.h>
 #include "ath_debug.h"
 
 /*
@@ -417,6 +418,10 @@ static JSValue debug_shapes_age(JSContext *ctx, JSValueConst this_val,
  * shapesDraw(viewX, viewY, scale, draw?): draws the queue (unless `draw` is
  * false: hidden, the shapes still expire), world shapes through the view,
  * then drops the ones whose time is up. Returns how many remain.
+ *
+ * While a camera publishes the world view of the frame (Camera2D.current,
+ * athena/graphics/view.h), world shapes go through it instead, rotation and
+ * zoom included, and the view arguments are ignored.
  */
 static JSValue debug_shapes_draw(JSContext *ctx, JSValueConst this_val,
     int argc, JSValueConst *argv, int magic, JSValue *func_data) {
@@ -425,6 +430,10 @@ static JSValue debug_shapes_draw(JSContext *ctx, JSValueConst this_val,
     AthenaDebugShapes *shapes = debug->shapes;
     float view_x, view_y, view_scale;
     bool draw = argc < 4 || JS_ToBool(ctx, argv[3]);
+    AthenaAffine2D world_view, screen_view;
+    bool camera = athena_view_get_world(&world_view);
+    /* Which view is set: -1 none yet, 0 screen, 1 world. */
+    int applied = -1;
 
     if (argc < 3)
         return JS_ThrowTypeError(ctx, "%s expects viewX, viewY and scale", name);
@@ -438,12 +447,22 @@ static JSValue debug_shapes_draw(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowInternalError(ctx, "Graphics service is not initialized");
     if (draw && debug_lines_ready(ctx, debug) < 0)
         return JS_EXCEPTION;
+    athena_view_get(&screen_view);
 
     for (uint32_t i = 0; draw && i < shapes->count; i++) {
         const AthenaDebugShape *shape = athena_debug_shapes_at(shapes, i);
         bool world = shape->flags & ATHENA_DEBUG_SHAPE_WORLD;
-        float scale = world ? view_scale : 1.0f;
-        float ox = world ? view_x : 0.0f, oy = world ? view_y : 0.0f;
+        /* Under a camera, world shapes keep world coordinates: the view maps them. */
+        bool mapped = world && camera;
+        float scale = world && !mapped ? view_scale : 1.0f;
+        float ox = world && !mapped ? view_x : 0.0f;
+        float oy = world && !mapped ? view_y : 0.0f;
+
+        if (camera && applied != (int)mapped) {
+            debug_lines_flush(debug);
+            athena_view_set(mapped ? &world_view : &screen_view);
+            applied = mapped;
+        }
         float x = (shape->x - ox) * scale, y = (shape->y - oy) * scale;
         Color color = (Color)shape->color;
 
@@ -454,7 +473,13 @@ static JSValue debug_shapes_draw(JSContext *ctx, JSValueConst this_val,
                 /* draw_sprite takes whole, positive sizes. */
                 float left = w < 0 ? x + w : x, top = h < 0 ? y + h : y;
                 int width = (int)fabsf(w), height = (int)fabsf(h);
-                if (width >= 1 && height >= 1) {
+                if (mapped) {
+                    /* World units through the camera: fractions show once zoomed. */
+                    if (w != 0.0f && h != 0.0f) {
+                        debug_lines_flush(debug);
+                        draw_rect_f(left, top, fabsf(w), fabsf(h), color);
+                    }
+                } else if (width >= 1 && height >= 1) {
                     debug_lines_flush(debug);
                     draw_sprite(left, top, width, height, color);
                 }
@@ -482,8 +507,36 @@ static JSValue debug_shapes_draw(JSContext *ctx, JSValueConst this_val,
     }
     if (draw)
         debug_lines_flush(debug);
+    if (applied >= 0)
+        athena_view_set(&screen_view);
     athena_debug_shapes_prune(shapes);
     return JS_NewUint32(ctx, shapes->count);
+}
+
+/*
+ * worldView(): the world view the current camera published this frame, as
+ * [xx, xy, yx, yy, tx, ty], or null without one; for world-space texts.
+ */
+static JSValue debug_world_view(JSContext *ctx, JSValueConst this_val,
+    int argc, JSValueConst *argv, int magic, JSValue *func_data) {
+    AthenaAffine2D m;
+    float values[6];
+    JSValue array;
+
+    if (!athena_view_get_world(&m))
+        return JS_NULL;
+    values[0] = m.xx; values[1] = m.xy; values[2] = m.yx;
+    values[3] = m.yy; values[4] = m.tx; values[5] = m.ty;
+    array = JS_NewArray(ctx);
+    if (JS_IsException(array))
+        return array;
+    for (uint32_t i = 0; i < 6; i++) {
+        if (JS_SetPropertyUint32(ctx, array, i, JS_NewFloat64(ctx, values[i])) < 0) {
+            JS_FreeValue(ctx, array);
+            return JS_EXCEPTION;
+        }
+    }
+    return array;
 }
 
 static JSValue debug_shapes_clear(JSContext *ctx, JSValueConst this_val,
@@ -543,6 +596,7 @@ static const struct {
     { "shapesDraw", 4, debug_shapes_draw },
     { "shapesClear", 0, debug_shapes_clear },
     { "shapesDropped", 0, debug_shapes_dropped },
+    { "worldView", 0, debug_world_view },
 };
 
 static int debug_module_init(JSContext *ctx, JSModuleDef *m) {

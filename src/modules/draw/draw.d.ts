@@ -37,7 +37,11 @@ declare namespace Draw {
         x4: number, y4: number, color4: Color.Value
     ): void;
 
-    /** Draws a solid-color axis-aligned rectangle. */
+    /**
+     * Draws a solid-color rectangle. Width and height are at least 1 and
+     * whole pixels; under a Camera2D camera they are world units, any
+     * positive size (0.5 is 2 pixels at zoom 4), and turn with the camera.
+     */
     function rect(x: number, y: number, width: number, height: number,
         color: Color.Value): void;
 

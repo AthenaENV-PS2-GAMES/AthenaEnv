@@ -13,6 +13,8 @@
 #include <packet2.h>
 #include <packet2_utils.h>
 
+#include <athena/graphics/view.h>
+
 #undef GS_PSMZ_32 
 #undef GS_PSMZ_24 
 #undef GS_PSMZ_16 
@@ -539,11 +541,31 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 
 void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list, int list_size);
 
+/* A textured rectangle between two corners, texels u1,v1 to u2,v2. */
+typedef struct {
+	float x1, y1, x2, y2;
+	float u1, v1, u2, v2;
+} prim_tex_rect;
+
+/*
+ * Rectangles of one texture in one color, through the 2D view: one packet
+ * of triangles per batch instead of one per rectangle. UVs keep their
+ * 1/16 texel precision (glyphs sample half texels). Meant for rotating
+ * views, where rectangles cannot be GS sprites; any view works.
+ */
+void draw_tex_rect_list(GSSURFACE *source, const prim_tex_rect *list, int count,
+	Color color);
+
 void gs_copy_block(GSSURFACE *src, int src_x, int src_y, GSSURFACE *dst, int dst_x, int dst_y);
 
 void draw_point(float x, float y, Color color);
 void draw_line(float x, float y, float x2, float y2, Color color);
 void draw_sprite(float x, float y, int width, int height, Color color);
+/*
+ * draw_sprite() with fractional sizes: under a camera a world rectangle of
+ * 0.5 units is 2 pixels at zoom 4. Same result for whole sizes.
+ */
+void draw_rect_f(float x, float y, float width, float height, Color color);
 void draw_circle(float x, float y, float radius, u64 color, u8 filled);
 void draw_triangle(float x, float y, float x2, float y2, float x3, float y3, Color color);
 void draw_triangle_gouraud(float x, float y, float x2, float y2, float x3, float y3, Color color, Color color2, Color color3);

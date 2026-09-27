@@ -157,7 +157,11 @@ declare namespace Debug {
     /** Shows or hides everything, like the shortcut; returns whether shown. */
     function show(on?: boolean): boolean;
 
-    /** World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale. */
+    /**
+     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
+     * Used without a camera: while `Camera2D.getCurrent()` has one, world
+     * shapes and texts follow it (zoom and rotation included) instead.
+     */
     function setView(view: View): void;
     function configure(options: Config): void;
 

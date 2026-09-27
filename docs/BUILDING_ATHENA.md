@@ -40,7 +40,7 @@ If you prefer to compile on your host machine without Docker:
 * [ps2-packer](https://github.com/ps2dev/ps2-packer)
 
 ### Optional components
-* [Vector Unit Command Line](https://ps2linux.no-ip.info/playstation2-linux.com/projects/vcl.html) - P.S.: VCL is a 32bit binary and depends on [GASP](https://github.com/matrach/gasp). It is used to compile AthenaEnv VU1 microprograms. It can compile without VCL, but you can't edit AthenaEnv VU1 microprograms without it.
+* [OpenVCL](https://github.com/ps2dev/openvcl) and masp - compile the VU microprograms (`src/modules/*/vu1/*.vcl`) into the `.vsm` the build assembles. Both come with ps2dev and are in the Docker image; OpenVCL runs masp in place of GASP (`--gasp masp -g`, see `Makefile.const`). The generated `.vsm` files are committed, so a build without them works as long as no `.vcl` changed.
 
 _P.S.: Install and usage instructions are inside their pages._
 

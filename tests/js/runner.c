@@ -20,6 +20,8 @@
 #include <unistd.h>
 
 #include <ath_env.h>
+#include <athena/graphics/view.h>
+#include <athena/loop.h>
 
 JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
@@ -27,6 +29,8 @@ JSModuleDef *athena_memcard_init(JSContext *ctx);
 JSModuleDef *athena_random_init(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
+JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
+void athena_camera2d_js_cleanup(JSContext *ctx);
 #ifdef RUNNER_REAL_FONT
 /*
  * runner_font: the real Font binding (quickjs/ath_font.c) over the native
@@ -52,6 +56,13 @@ GSCONTEXT *getGSGLOBAL(void) { return (GSCONTEXT *)&stub_gs; }
 void draw_sprite(float x, float y, int width, int height, StubColor color) {
     if (width < 1 || height < 1) {
         fprintf(stderr, "draw_sprite with an empty size %dx%d\n", width, height);
+        abort();
+    }
+    stub_sprites++;
+}
+void draw_rect_f(float x, float y, float width, float height, StubColor color) {
+    if (!(width > 0.0f) || !(height > 0.0f)) {
+        fprintf(stderr, "draw_rect_f with an empty size %gx%g\n", width, height);
         abort();
     }
     stub_sprites++;
@@ -113,6 +124,88 @@ static JSValue js_set_pad(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     stub_pad = buttons;
     return JS_UNDEFINED;
 }
+/*
+ * The GS side of the 2D view (graphics/native/view_gs.c) for Camera2D: a
+ * clip rectangle within a screen the script can resize with __setScreen().
+ * __view() shows the view, clip and world view the camera left behind.
+ */
+static int stub_screen[2] = { 640, 448 };
+static int stub_clip[4] = { 0, 0, 640, 448 };
+void athena_view_screen_size(int *width, int *height) {
+    *width = stub_screen[0];
+    *height = stub_screen[1];
+}
+void athena_view_set_clip(int x, int y, int width, int height) {
+    if (width <= 0 || height <= 0) {
+        x = y = 0;
+        width = stub_screen[0];
+        height = stub_screen[1];
+    }
+    stub_clip[0] = x;
+    stub_clip[1] = y;
+    stub_clip[2] = width;
+    stub_clip[3] = height;
+}
+void athena_view_get_clip(int *x, int *y, int *width, int *height) {
+    *x = stub_clip[0];
+    *y = stub_clip[1];
+    *width = stub_clip[2];
+    *height = stub_clip[3];
+}
+bool athena_view_visible_bounds(AthenaRect2D *world) {
+    AthenaAffine2D inverse;
+    AthenaRect2D screen = { (float)stub_clip[0], (float)stub_clip[1],
+        (float)(stub_clip[0] + stub_clip[2]), (float)(stub_clip[1] + stub_clip[3]) };
+
+    if (!athena_affine_invert(&athena_view_matrix, &inverse))
+        return false;
+    athena_affine_bounds(&inverse, &screen, world);
+    return true;
+}
+bool athena_view_screen_box_visible(float x0, float y0, float x1, float y1) {
+    return x1 >= stub_clip[0] && x0 <= stub_clip[0] + stub_clip[2] &&
+        y1 >= stub_clip[1] && y0 <= stub_clip[1] + stub_clip[3];
+}
+
+static JSValue js_view(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue view = JS_NewObject(ctx), clip = JS_NewArray(ctx);
+    AthenaAffine2D world;
+    const float m[6] = { athena_view_matrix.xx, athena_view_matrix.xy, athena_view_matrix.yx,
+        athena_view_matrix.yy, athena_view_matrix.tx, athena_view_matrix.ty };
+    static const char *const names[6] = { "xx", "xy", "yx", "yy", "tx", "ty" };
+
+    for (int i = 0; i < 6; i++)
+        JS_SetPropertyStr(ctx, view, names[i], JS_NewFloat64(ctx, m[i]));
+    JS_SetPropertyStr(ctx, view, "kind", JS_NewInt32(ctx, athena_view_kind()));
+    for (int i = 0; i < 4; i++)
+        JS_SetPropertyUint32(ctx, clip, i, JS_NewInt32(ctx, stub_clip[i]));
+    JS_SetPropertyStr(ctx, view, "clip", clip);
+    JS_SetPropertyStr(ctx, view, "world", athena_view_get_world(&world) ?
+        JS_NewFloat64(ctx, world.tx) : JS_NULL);
+    return view;
+}
+
+static JSValue js_set_screen(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (argc < 2 || JS_ToInt32(ctx, &stub_screen[0], argv[0]) || JS_ToInt32(ctx, &stub_screen[1], argv[1]))
+        return JS_EXCEPTION;
+    return JS_UNDEFINED;
+}
+
+/* __runNativeSystems(phase, value, realValue): the C systems, for the Loop stand-in. */
+static JSValue js_run_native_systems(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    int32_t phase;
+    double value, real;
+
+    if (argc < 3 || JS_ToInt32(ctx, &phase, argv[0]) || JS_ToFloat64(ctx, &value, argv[1]) ||
+        JS_ToFloat64(ctx, &real, argv[2]))
+        return JS_EXCEPTION;
+    if (phase < 0 || phase >= ATHENA_LOOP_PHASE_COUNT)
+        return JS_ThrowRangeError(ctx, "bad phase %d", phase);
+    if (athena_loop_systems_run((AthenaLoopPhase)phase, (float)value, (float)real, NULL) < 0)
+        return JS_EXCEPTION;   /* the system left its exception pending */
+    return JS_UNDEFINED;
+}
+
 void athena_js_job_class_init(JSContext *ctx);
 void memcard_host_init(void);
 
@@ -335,7 +428,8 @@ int main(int argc, char **argv) {
         "import * as Noise from 'Noise'; globalThis.Noise = Noise;"
         "import * as Ease from 'Ease'; globalThis.Ease = Ease;"
         "import * as Tween from 'Tween'; globalThis.Tween = Tween;"
-        "import * as Debug from 'Debug'; globalThis.Debug = Debug;";
+        "import * as Debug from 'Debug'; globalThis.Debug = Debug;"
+        "import * as Camera2D from 'Camera2D'; globalThis.Camera2D = Camera2D;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -369,6 +463,13 @@ int main(int argc, char **argv) {
     athena_random_init(ctx);
     athena_noise_init(ctx);
     athena_debug_init(ctx);
+    athena_camera2d_js_init(ctx);
+    global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__view", JS_NewCFunction(ctx, js_view, "__view", 0));
+    JS_SetPropertyStr(ctx, global, "__setScreen", JS_NewCFunction(ctx, js_set_screen, "__setScreen", 2));
+    JS_SetPropertyStr(ctx, global, "__runNativeSystems",
+        JS_NewCFunction(ctx, js_run_native_systems, "__runNativeSystems", 3));
+    JS_FreeValue(ctx, global);
 #ifdef RUNNER_REAL_FONT
     athena_font_init(ctx);
     (void)js_native_draws;
@@ -392,6 +493,7 @@ int main(int argc, char **argv) {
         ret = -1;
 
     athena_box2d_cleanup(ctx);
+    athena_camera2d_js_cleanup(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return ret < 0 ? 1 : 0;

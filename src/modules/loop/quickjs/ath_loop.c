@@ -158,6 +158,19 @@ static int loop_systems(JSContext *ctx, AthenaLoopPhase phase, float value,
         return 0;
     if (js_system_threw)
         return -1;
+    /*
+     * A native system that called into JavaScript (a getter, a callback)
+     * may fail with that script's exception pending: keep it, it says
+     * more than the generic error below.
+     */
+    {
+        JSValue pending = JS_GetException(ctx);
+
+        if (!JS_IsNull(pending)) {
+            JS_Throw(ctx, pending);
+            return -1;
+        }
+    }
     if (!failed_id) {
         JS_ThrowOutOfMemory(ctx);
         return -1;
@@ -233,15 +246,19 @@ static int loop_frame(JSContext *ctx, void *opaque) {
         loop_systems(ctx, ATHENA_LOOP_POST_UPDATE, state->clock.delta,
             state->clock.real_delta) < 0)
         return -1;
-    if (generation == state->generation &&
-        loop_systems(ctx, ATHENA_LOOP_PRE_DRAW, state->alpha, state->alpha) < 0)
-        return -1;
-    if (generation == state->generation && !JS_IsUndefined(state->draw) &&
-        loop_call(ctx, state->draw, state->alpha) < 0)
-        return -1;
-    if (generation == state->generation &&
-        loop_systems(ctx, ATHENA_LOOP_POST_DRAW, state->alpha, state->alpha) < 0)
-        return -1;
+    if (generation == state->generation) {
+        if (loop_systems(ctx, ATHENA_LOOP_PRE_DRAW, state->alpha, state->alpha) < 0)
+            return -1;
+        if (generation == state->generation && !JS_IsUndefined(state->draw) &&
+            loop_call(ctx, state->draw, state->alpha) < 0)
+            return -1;
+        /*
+         * Once PRE_DRAW ran, POST_DRAW runs too, even if draw stopped the
+         * loop: systems close there what they opened (a camera's view).
+         */
+        if (loop_systems(ctx, ATHENA_LOOP_POST_DRAW, state->alpha, state->alpha) < 0)
+            return -1;
+    }
 
     /* Everything since the previous flip, timers and promises included. */
     state->cpu_ms = 1000.0f * (state->flip_end ?

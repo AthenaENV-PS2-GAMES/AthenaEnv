@@ -654,6 +654,9 @@ struct fnt_layout
 
     // pen position after the last glyph, relative to the origin
     int endX;
+
+    // box of every quad, relative to the origin: culls the whole text
+    float x0, y0, x1, y1;
 };
 
 /** One copy of the text: an outline or shadow offset, and its colour */
@@ -818,6 +821,15 @@ static int fntLayoutBuild(fnt_layout_t *layout, font_t *font, int id, short alig
     }
 
     fntLayoutGroup(layout, font);
+    layout->x0 = layout->y0 = layout->x1 = layout->y1 = 0.0f;
+    for (int i = 0; i < layout->count; i++) {
+        const fnt_quad_t *quad = &layout->quads[i];
+
+        if (i == 0 || quad->x1 < layout->x0) layout->x0 = quad->x1;
+        if (i == 0 || quad->y1 < layout->y0) layout->y0 = quad->y1;
+        if (i == 0 || quad->x2 > layout->x1) layout->x1 = quad->x2;
+        if (i == 0 || quad->y2 > layout->y1) layout->y1 = quad->y2;
+    }
     layout->id = id;
     layout->generation = font->generation;
     layout->aligned = aligned;
@@ -857,6 +869,47 @@ int fntLayoutMatches(const fnt_layout_t *layout, int id, short aligned, size_t w
         layout->height == height && layout->scale == scale;
 }
 
+/* Glyphs converted per draw_tex_rect_list() call under a rotating view. */
+#define FNT_ROTATED_BATCH 128
+
+/*
+ * Under a rotating view (athena/graphics/view.h) glyphs cannot stay GS
+ * sprites: they go out as triangles, one packet per batch and pass.
+ */
+static void fntEmitQuadsRotated(atlas_t *atlas, const fnt_quad_t *quads, int count,
+    const fnt_pass_t *passes, int pass_count, int x, int y)
+{
+    static prim_tex_rect rects[FNT_ROTATED_BATCH];
+    int pass, i, n;
+
+    for (pass = 0; pass < pass_count; pass++) {
+        float ox = (float)x + passes[pass].dx;
+        float oy = (float)y + passes[pass].dy;
+
+        n = 0;
+        for (i = 0; i < count; i++) {
+            const fnt_quad_t *quad = &quads[i];
+            prim_tex_rect *r = &rects[n++];
+
+            r->x1 = quad->x1 + ox;
+            r->y1 = quad->y1 + oy;
+            r->x2 = quad->x2 + ox;
+            r->y2 = quad->y2 + oy;
+            /* GS_SETREG_UV: 12.4 fixed U in bits 0..13, V in bits 16..29. */
+            r->u1 = (float)(quad->uv1 & 0x3FFF) / 16.0f;
+            r->v1 = (float)((quad->uv1 >> 16) & 0x3FFF) / 16.0f;
+            r->u2 = (float)(quad->uv2 & 0x3FFF) / 16.0f;
+            r->v2 = (float)((quad->uv2 >> 16) & 0x3FFF) / 16.0f;
+            if (n == FNT_ROTATED_BATCH) {
+                draw_tex_rect_list(&atlas->surface, rects, n, passes[pass].colour);
+                n = 0;
+            }
+        }
+        if (n)
+            draw_tex_rect_list(&atlas->surface, rects, n, passes[pass].colour);
+    }
+}
+
 /*
  * One packet for `count` quads of an atlas, drawn once per pass: the texture
  * state is sent once, then each pass is its colour and the quads moved by
@@ -868,6 +921,12 @@ static void fntEmitQuads(atlas_t *atlas, const fnt_quad_t *quads, int count,
     GSSURFACE *tex = &atlas->surface;
     int texture_id, upload, gif_size, body_size, tw, th, pass, i;
     owl_packet *packet;
+    bool view = athena_view_kind() != ATHENA_VIEW_IDENTITY;
+
+    if (athena_view_kind() == ATHENA_VIEW_ROTATED) {
+        fntEmitQuadsRotated(atlas, quads, count, passes, pass_count, x, y);
+        return;
+    }
 
     texture_id = texture_manager_bind(gsGlobal, tex, true);
     if (texture_id == GRAPHICS_BIND_ERROR)
@@ -944,13 +1003,21 @@ static void fntEmitQuads(atlas_t *atlas, const fnt_quad_t *quads, int count,
 
         for (i = 0; i < count; i++) {
             const fnt_quad_t *quad = &quads[i];
+            float x1 = quad->x1 + ox, y1 = quad->y1 + oy;
+            float x2 = quad->x2 + ox, y2 = quad->y2 + oy;
+
+            /* An axis-aligned view keeps glyphs as sprites. */
+            if (view) {
+                athena_view_apply(x1, y1, &x1, &y1);
+                athena_view_apply(x2, y2, &x2, &y2);
+            }
             owl_add_tag(packet,
-                (uint64_t)(owl_coord_transform(quad->x1 + ox, gsGlobal->OffsetX)) |
-                ((uint64_t)(owl_coord_transform(quad->y1 + oy, gsGlobal->OffsetY)) << 16),
+                (uint64_t)(owl_coord_transform(x1, gsGlobal->OffsetX)) |
+                ((uint64_t)(owl_coord_transform(y1, gsGlobal->OffsetY)) << 16),
                 quad->uv1);
             owl_add_tag(packet,
-                (uint64_t)(owl_coord_transform(quad->x2 + ox, gsGlobal->OffsetX)) |
-                ((uint64_t)(owl_coord_transform(quad->y2 + oy, gsGlobal->OffsetY)) << 16),
+                (uint64_t)(owl_coord_transform(x2, gsGlobal->OffsetX)) |
+                ((uint64_t)(owl_coord_transform(y2, gsGlobal->OffsetY)) << 16),
                 quad->uv2);
         }
     }
@@ -992,9 +1059,28 @@ void fntLayoutDraw(const fnt_layout_t *layout, int x, int y, u64 colour, float o
 {
     fnt_pass_t passes[5];
     int pass_count = 0, p;
+    AthenaViewCuller culler;
 
     if (!layout || !layout->valid || !layout->count)
         return;
+
+    /*
+     * Under a camera, text outside its viewport is skipped whole: its box,
+     * grown by the outline or shadow offset, is tested once.
+     */
+    if (athena_view_culler_init(&culler)) {
+        float margin = outline > dropshadow ? outline : dropshadow;
+
+        if (margin < 0.0f)
+            margin = 0.0f;
+        if (!athena_view_culler_visible(&culler, (float)x + layout->x0 - margin,
+                (float)y + layout->y0 - margin,
+                layout->x1 - layout->x0 + 2.0f * margin,
+                layout->y1 - layout->y0 + 2.0f * margin)) {
+            athena_view_count_culled(1);
+            return;
+        }
+    }
 
     if (outline > 0.0f) {
         const float offsets[4][2] = { {outline, outline}, {outline, -outline}, {-outline, outline}, {-outline, -outline} };

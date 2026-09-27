@@ -70,7 +70,9 @@ float athena_loop_clock_alpha(const AthenaLoopClock *clock, float step);
  *                       dt, or once per fixed step
  *     POST_UPDATE(dt)   once per frame, after the updates
  *     PRE_DRAW(alpha)   before the application draw
- *     POST_DRAW(alpha)  after the application draw (overlays)
+ *     POST_DRAW(alpha)  after the application draw (overlays); it runs
+ *                       whenever PRE_DRAW did, even if the draw stopped
+ *                       the loop, so systems can close what they opened
  *
  * Within a phase, systems run by ascending priority, then in the order they
  * were added. The JavaScript Loop runs them; a C game loop calls

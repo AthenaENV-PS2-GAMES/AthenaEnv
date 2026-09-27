@@ -144,7 +144,22 @@ GSFONT *athena_init_font(u8 type, char *path)
 	return gsFont;
 }
 
-static void render_font_char_glyph(GSFONT *gsFont, unsigned char c, owl_packet *packet, int pen_x, int pen_y, float scale)
+/*
+ * Glyphs of a string under a rotating view, drawn as triangles in batches
+ * by draw_tex_rect_list() instead of one image each.
+ */
+#define GLYPH_BATCH 128
+static prim_tex_rect glyph_batch[GLYPH_BATCH];
+static int glyph_batch_count;
+
+static void glyph_batch_flush(GSFONT *gsFont, u64 color)
+{
+	if (glyph_batch_count)
+		draw_tex_rect_list(gsFont->Texture, glyph_batch, glyph_batch_count, color);
+	glyph_batch_count = 0;
+}
+
+static void render_font_char_glyph(GSFONT *gsFont, unsigned char c, owl_packet *packet, int pen_x, int pen_y, float scale, u64 color)
 {
 	int px, py, charsiz;
 	float x1, y1, x2, y2;
@@ -172,6 +187,19 @@ static void render_font_char_glyph(GSFONT *gsFont, unsigned char c, owl_packet *
 	u2 = u1 + (float)charsiz;
 	v2 = v1 + (float)gsFont->CharHeight;
 
+	/* Under a rotating view the glyph joins the batch of triangles. */
+	if (athena_view_kind() == ATHENA_VIEW_ROTATED) {
+		glyph_batch[glyph_batch_count++] = (prim_tex_rect){ x1, y1, x2, y2, u1, v1, u2, v2 };
+		if (glyph_batch_count == GLYPH_BATCH)
+			glyph_batch_flush(gsFont, color);
+		return;
+	}
+	/* An axis-aligned view keeps it a sprite of the shared packet. */
+	if (athena_view_kind() == ATHENA_VIEW_AXIS) {
+		athena_view_apply(x1, y1, &x1, &y1);
+		athena_view_apply(x2, y2, &x2, &y2);
+	}
+
 	owl_add_tag(packet, (uint64_t)(owl_coord_transform(x1, gsGlobal->OffsetX)) | ((uint64_t)(owl_coord_transform(y1, gsGlobal->OffsetY)) << 16), GS_SETREG_UV( owl_uv_transform(u1, 1024), owl_uv_transform(v1, 1024)));
 	owl_add_tag(packet, (uint64_t)(owl_coord_transform(x2, gsGlobal->OffsetX)) | ((uint64_t)(owl_coord_transform(y2, gsGlobal->OffsetY)) << 16), GS_SETREG_UV( owl_uv_transform(u2, 1024), owl_uv_transform(v2, 1024)));
 }
@@ -193,6 +221,51 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 		int texture_id = -1;
 
 		int printable_chars = 0;
+		AthenaViewCuller culler;
+
+		/*
+		 * Under a camera, a string outside its viewport is skipped whole:
+		 * its box (widest line, every line at full height, which covers
+		 * interlaced halving) is tested once.
+		 */
+		if (athena_view_culler_init(&culler)) {
+			float line_width = 0.0f, widest = 0.0f;
+			int lines = 1;
+
+			for (const char *p = String; *p; p++) {
+				if (*p == '\n') {
+					lines++;
+					line_width = 0.0f;
+					continue;
+				}
+				line_width += (float)(int)((gsFont->Additional[(u8)*p] * scale) + 1);
+				if (line_width > widest)
+					widest = line_width;
+			}
+			if (!athena_view_culler_visible(&culler, X - 1.0f, Y - 1.0f,
+					widest + 2.0f,
+					(float)lines * ((float)gsFont->CharHeight * scale + 1.0f) + 2.0f)) {
+				athena_view_count_culled(1);
+				return;
+			}
+		}
+
+		/* No shared packet under a rotating view: each glyph is an image. */
+		if (athena_view_kind() == ATHENA_VIEW_ROTATED) {
+			for (; *text_to_render; ++text_to_render) {
+				unsigned char c = (unsigned char)*text_to_render;
+
+				if (c == '\n') {
+					pen_x = (int)X;
+					pen_y += (int)((gsFont->CharHeight * scale) + 1);
+					continue;
+				}
+				render_font_char_glyph(gsFont, c, NULL, pen_x, pen_y, scale, color);
+				pen_x += (int)((gsFont->Additional[(u8)c] * scale) + 1);
+			}
+			glyph_batch_flush(gsFont, color);
+			return;
+		}
 		for (const char *p = String; *p; p++) {
 			if (*p != '\n') printable_chars++;
 		}
@@ -278,7 +351,7 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 				continue;
 			}
 
-			render_font_char_glyph(gsFont, c, packet, pen_x, pen_y, scale);
+			render_font_char_glyph(gsFont, c, packet, pen_x, pen_y, scale, color);
 
 			pen_x += (int)((gsFont->Additional[(u8)c] * scale) + 1);
 		}

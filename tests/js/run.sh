@@ -16,7 +16,13 @@ ASAN="-fsanitize=address"
 UBSAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
 INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include \
     -Isrc/modules/random/include -Isrc/modules/noise/include \
-    -Isrc/modules/debug/include -Isrc/modules/color/include"
+    -Isrc/modules/debug/include -Isrc/modules/color/include \
+    -Isrc/modules/graphics/include -Isrc/modules/camera2d/include -Isrc/modules/loop/include"
+# Camera2D and the math of the 2D view, with the C side of Loop systems; the
+# GS side of the view (clip rectangle) is stubbed in runner.c.
+CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camera2d_gs.c \
+    src/modules/camera2d/quickjs/ath_camera2d.c src/modules/graphics/native/view.c \
+    src/modules/loop/native/loop_systems.c"
 # The EE has no SIMD for Box2D: build the same scalar path.
 B2FLAGS="-DBOX2D_DISABLE_SIMD -DB2_ENABLE_ASSERT"
 
@@ -43,7 +49,7 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c \
+    src/runtime/quickjs/ath_output.c $CAMERA \
     "$OUT"/obj/*.o -lm -lpthread
 
 # runner_font: the same runner with the real Font binding (over the native
@@ -59,7 +65,7 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c \
+    src/runtime/quickjs/ath_output.c $CAMERA \
     src/modules/font/quickjs/ath_font.c tests/js/font_host.c \
     "$OUT"/obj/*.o -lm -lpthread
 
@@ -101,5 +107,7 @@ echo "== tests/teardown_gc_test.js (real Font)"
 check "$OUT/runner_font" tests/teardown_gc_test.js "Teardown GC test done"
 echo "== tests/random_noise_test.js"
 check "$OUT/runner" tests/random_noise_test.js "Random and Noise module test passed"
+echo "== tests/camera2d_test.js"
+check "$OUT/runner" tests/camera2d_test.js "Camera2D module test passed"
 echo "== tests/memcard_test.js"
 check "$OUT/runner" tests/memcard_test.js "Result: .* 0 failed"

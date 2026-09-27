@@ -283,6 +283,7 @@ tables below.
 | [`imagelist`](src/modules/imagelist/imagelist.d.ts) | `ImageList` | Asynchronous image loading with priorities, deduplication, an LRU cache and an optional decoder thread. |
 | [`font`](src/modules/font/font.d.ts) | `Font` | TrueType and bitmap fonts at any size, loaded on a worker with `Font.loadAsync()`, glyphs preloaded a slice per frame with `preload()`, and cached layouts with `render()`; multi-line text, kerning, alignment, outline and drop shadow, with square glyphs on NTSC, PAL, 480p and 16:9. |
 | [`tilemap`](src/modules/tilemap/tilemap.d.ts) | `TileMap` | VU1-accelerated batched sprites and tilemaps. |
+| [`camera2d`](src/modules/camera2d/camera2d.d.ts) | `Camera2D` | 2D cameras applied in C to `Draw`, `Image`, `Font` and `TileMap`: position, zoom, rotation and viewport (split screen); follow with smoothing, dead zone, lookahead and auto zoom; bounds, rooms, shake, parallax, culling, timed zoom and pan, fades, flashes, letterbox and transitions between cameras. |
 | [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. See [docs/VIDEO.md](docs/VIDEO.md). |
 | `graphics` | — | GS initialization and the rendering core shared by the modules above. |
 
@@ -295,6 +296,46 @@ Loop.run(() => {
     font.print(100, 300, "Press START\nto continue");
 }, { clearColor: Color.new(20, 20, 40) });
 ```
+
+Games draw in world coordinates and let a camera place them. `Camera2D.main`
+is applied around `Loop.run()`'s `draw` from the first time it is used, and
+shows the screen unchanged until it moves:
+
+```js
+const cam = Camera2D.main;
+cam.follow(player, { lerp: 8, deadzone: { w: 64, h: 32 }, lookahead: 40 });
+cam.setBounds(0, 0, level.width, level.height);
+
+Loop.run({
+    update(dt) {
+        player.update(dt);
+        if (player.hit) cam.shake(6, 0.3);
+    },
+    draw() {
+        cam.draw(() => sky.draw(0, 0), { parallax: 0.3 });   // a slower layer
+        map.render(0, 0);                                     // TileMap, world space
+        hero.draw(player.x, player.y);                        // Image, world space
+        Camera2D.screenSpace(() => font.print(10, 10, `HP ${player.hp}`));
+    },
+});
+```
+
+For split screen, give each camera a `viewport`, call
+`Camera2D.setCurrent(null)` and draw the world once per camera with
+`cam.draw(fn)`. Smoothing is frame-rate independent; `zoomTo()`, `panTo()`,
+`fade()`, `flash()`, `letterbox()` and `Camera2D.transition()` return
+promises. Under a rotation, rectangles become two triangles (TileMaps stay on
+VU1, as triangle strips). `TileMap.setCamera()` still works and combines with
+the camera.
+`bin/tests/camera2d_example.js` shows it all, split screen included.
+
+More: `follow(p, { interpolate: true })` for `fixedStep` games that draw
+positions blended by `alpha`, `zoomBySpeed`, `addTrauma()` and `kick()` for
+impacts, `realTime` cameras that keep fading while the game is paused,
+`Camera2D.push()`/`pop()` for cutscenes, `drawRepeat()` for repeating skies,
+`state()`/`setState()` for saves, `cam.debug = true` to see the dead zone,
+bounds and zones, and `Camera2D.getStats().culled`.
+`bin/tests/camera2d_bench.js` measures the cost per frame on the console.
 
 `image.drawList()` takes the sprite records of `TileMap.SpriteBuffer` (x, y,
 w, h, u1, v1, u2, v2, r, g, b, a): the texture state goes out once per 128
@@ -630,7 +671,8 @@ make RUNTIME=native APP_SRCS=samples/native/hello/main.c   # bin/athena_native.e
 make lib RUNTIME=native                                    # lib/libathena.a for other projects
 ```
 
-See `samples/native/` and [docs/BUILDING_ATHENA.md](docs/BUILDING_ATHENA.md).
+See `samples/native/` (`camera/` follows a square with the Camera2D C API)
+and [docs/BUILDING_ATHENA.md](docs/BUILDING_ATHENA.md).
 
 ### ERL modules
 

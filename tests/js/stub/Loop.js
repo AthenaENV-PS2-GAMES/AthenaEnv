@@ -46,6 +46,9 @@ export function getSystems() {
 }
 
 function runPhase(phase, value, realValue) {
+    // Native systems (Camera2D) run first: they use negative priorities.
+    if (typeof __runNativeSystems === "function")
+        __runNativeSystems(PHASES.indexOf(phase), value, realValue);
     for (const entry of systems.slice()) {
         if (entry.removed || !entry.funcs[phase]) continue;
         const real = entry.realTime && (phase === "preUpdate" || phase === "postUpdate");
@@ -62,9 +65,12 @@ function frame() {
     if (current === generation) runPhase("update", delta, delta);
     if (current === generation && handlers.update) handlers.update.call(handlers, delta);
     if (current === generation) runPhase("postUpdate", delta, FRAME);
-    if (current === generation) runPhase("preDraw", 1, 1);
-    if (current === generation && handlers.draw) handlers.draw.call(handlers, 1);
-    if (current === generation) runPhase("postDraw", 1, 1);
+    if (current === generation) {
+        runPhase("preDraw", 1, 1);
+        if (current === generation && handlers.draw) handlers.draw.call(handlers, 1);
+        // Once preDraw ran, postDraw runs too, even if draw stopped the loop.
+        runPhase("postDraw", 1, 1);
+    }
     if (handlers) setTimeout(frame, 0);
 }
 

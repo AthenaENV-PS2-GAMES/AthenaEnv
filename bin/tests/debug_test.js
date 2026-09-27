@@ -38,17 +38,22 @@ const resetCalls = () => { if (host) { globalThis.__debugCalls = []; globalThis.
 const printed = () => calls().filter(c => c[0] === "print").map(c => c[3]).join("\n");
 const debugSystem = () => Loop.getSystems().some(s => s.name === "debug");
 
-/* Runs `count` whole frames (postDraw included), calling draw(i) in each. */
+/*
+ * Runs `count` whole frames (postDraw included), calling draw(i) in each.
+ * Stops in the update of the next frame: stopped in draw, a frame still
+ * runs its postDraw, and the overlay would draw once more.
+ */
 function frames(count, draw) {
     return new Promise(resolve => {
         let frame = 0;
         Loop.run({
-            draw() {
+            update() {
                 if (frame === count) {
                     Loop.stop();
                     resolve();
-                    return;
                 }
+            },
+            draw() {
                 if (draw) draw(frame);
                 frame++;
             },

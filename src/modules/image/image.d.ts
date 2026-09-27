@@ -123,7 +123,8 @@ declare class Image {
      * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
      * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
      * buffer serves both; the TileMap module is not required. Records with a
-     * zero width or height are skipped.
+     * zero width or height are skipped, and so are, under a Camera2D camera,
+     * records outside its viewport.
      *
      * @example
      * ```js

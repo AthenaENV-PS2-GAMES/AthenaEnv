@@ -180,6 +180,19 @@ static JSValue draw_rect(JSContext *ctx, JSValueConst this_val, int argc,
         !draw_number(ctx, argv[2], &width, "Draw.rect width") ||
         !draw_number(ctx, argv[3], &height, "Draw.rect height"))
         return JS_EXCEPTION;
+    /*
+     * Under a camera sizes are world units: fractions matter once zoomed
+     * (0.5 is 2 pixels at zoom 4), so they are kept.
+     */
+    if (athena_view_kind() != ATHENA_VIEW_IDENTITY) {
+        if (!(width > 0.0f) || !(height > 0.0f))
+            return JS_ThrowRangeError(ctx,
+                "Draw.rect width and height must be positive");
+        if (!draw_color(ctx, argv[4], &color))
+            return JS_EXCEPTION;
+        draw_rect_f(x, y, width, height, color);
+        return JS_UNDEFINED;
+    }
     if (width < 1.0f || height < 1.0f)
         return JS_ThrowRangeError(ctx,
             "Draw.rect width and height must be at least 1");

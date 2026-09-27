@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-27T03:47:51.906Z",
+  "generatedAt": "2026-09-27T18:10:44.391Z",
   "modules": [
     {
       "id": "archive",
@@ -66,6 +66,28 @@
         "ee_libs": []
       },
       "global_alias": "Box2DDraw",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "camera2d",
+      "name": "Camera2D",
+      "description": "2D cameras applied in C to Draw, Image, Font and TileMap: position, zoom, rotation and viewport (split screen), follow with smoothing, dead zone, lookahead and auto zoom, bounds and zones, shake, parallax, culling helpers, timed zoom/pan, fades, flashes, letterbox and transitions between cameras.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Camera2D",
       "api": {
         "native": true,
         "quickjs": true

@@ -36,6 +36,9 @@ $CC $CFLAGS -Isrc/modules/random/include -Isrc/modules/noise/include \
     src/modules/random/native/random.c src/modules/noise/native/noise.c -lm
 $CC $CFLAGS -Isrc/modules/debug/include -o "$OUT/debug_overlay_test" \
     tests/host/debug_overlay_test.c src/modules/debug/native/debug_overlay.c -lm
+$CC $CFLAGS -Isrc/modules/graphics/include -Isrc/modules/camera2d/include \
+    -o "$OUT/camera2d_test" tests/host/camera2d_test.c src/modules/graphics/native/view.c \
+    src/modules/camera2d/native/camera2d.c -lm
 # Box2D: the vendored library keeps upstream warnings (-w), the AthenaEnv
 # helpers and the test use the flags above. Both run under UBSan.
 B2=src/modules/box2d
@@ -58,7 +61,26 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/video_test"
 "$OUT/random_noise_test"
 "$OUT/debug_overlay_test"
+"$OUT/camera2d_test"
 "$OUT/box2d_test"
+
+# VU microprograms: each committed .vsm must be what OpenVCL makes of its
+# .vcl (the Makefile regenerates it only when the .vcl is newer). Line ends
+# are ignored: a Windows checkout may turn the .vsm into CRLF.
+if command -v openvcl > /dev/null && command -v masp > /dev/null; then
+    vcl_checks=0
+    for vcl in $(find src -name '*.vcl'); do
+        vcl_checks=$((vcl_checks + 1))
+        openvcl --gasp masp -g -o"$OUT/vcl.vsm" "$vcl"
+        if ! tr -d '\r' < "${vcl%.vcl}.vsm" | cmp -s - "$OUT/vcl.vsm"; then
+            echo "  FAIL vcl: ${vcl%.vcl}.vsm is not the output of $vcl (run make)"
+            exit 1
+        fi
+    done
+    echo "vcl: $vcl_checks programs match their .vsm"
+else
+    echo "vcl: openvcl or masp not found, .vsm check skipped"
+fi
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js
 # (references from tests/host/wav2adp/make_refs.mjs) and, for 16-bit mono,

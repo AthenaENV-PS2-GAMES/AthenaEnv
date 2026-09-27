@@ -1498,6 +1498,631 @@ declare namespace Box2DDraw {
 }
 
 
+/* === Module: Loop (loop) === */
+/**
+ * Game loop driven by the runtime.
+ *
+ * `Loop.run()` registers the frame handlers and returns immediately; frames
+ * start once the entry script finishes. Each frame clears the screen, runs
+ * `update` and `draw`, then flips. Timers, promises and async functions keep
+ * running between frames, and the frame rate follows VSync.
+ *
+ * Variable step: `update(dt)` runs once per frame with the time since the
+ * previous frame, in seconds.
+ * ```js
+ * let x = 0;
+ * Loop.run(dt => {
+ *     x += 120 * dt; // 120 pixels per second at any frame rate
+ *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
+ * });
+ * ```
+ *
+ * Fixed step: `update(step)` runs zero or more times per frame with the same
+ * `step`, as physics engines expect, and `draw(alpha)` once per frame.
+ * ```js
+ * Loop.run({
+ *     update(step) { world.step(step, 4); },
+ *     draw(alpha) { Box2DDraw.draw(world); },
+ * }, { fixedStep: 1 / 60 });
+ * ```
+ */
+declare namespace Loop {
+    /** Frame handlers. `this` inside them is the handlers object. */
+    interface Handlers {
+        /**
+         * Advances the game. Receives the scaled frame delta in seconds, or
+         * `fixedStep` when set; the first frame's delta is `0`.
+         */
+        update?(dt: number): void;
+        /**
+         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
+         * is the fraction of a step not simulated yet, to interpolate
+         * between the previous and the current state; otherwise it is `1`.
+         */
+        draw?(alpha: number): void;
+    }
+
+    interface Options {
+        /** Clears the screen before each frame. Defaults to `true`. */
+        clear?: boolean;
+        /** Packed RGBA color used to clear. Defaults to opaque black. */
+        clearColor?: number;
+        /**
+         * Longest real frame time counted, in seconds; longer stalls such as
+         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
+         */
+        maxDelta?: number;
+        /**
+         * Runs `update` with this constant step, in seconds, as many times as
+         * the elapsed time holds. `0`, the default, runs it once per frame
+         * with the frame delta.
+         */
+        fixedStep?: number;
+        /**
+         * Fixed steps per frame at most; the time beyond it is dropped so a
+         * slow frame cannot snowball. Defaults to `5`.
+         */
+        maxSteps?: number;
+        /**
+         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
+         * 25 FPS on PAL. Defaults to `1`.
+         */
+        vsyncInterval?: number;
+    }
+
+    interface Stats {
+        /** Frames per second, measured over the last second. */
+        fps: number;
+        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
+        frameMs: number;
+        /**
+         * Milliseconds of work in the last frame: from the previous flip up to
+         * this one, timers and promises included, without the VSync wait.
+         */
+        cpuMs: number;
+        /** `update` calls in the last frame. */
+        steps: number;
+        /** Interpolation factor passed to the last `draw`. */
+        alpha: number;
+    }
+
+    /**
+     * Starts the loop. A function is the same as `{ update: fn }`. Called
+     * again, even from a handler, it replaces the handlers and options without
+     * restarting the frame timing; the rest of the current frame is skipped.
+     * An exception thrown by a handler stops the program.
+     */
+    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
+    /**
+     * Stops the loop after the current frame; the program ends once no timers
+     * remain. Registered systems stay registered and run again with the next
+     * `Loop.run()`.
+     */
+    function stop(): void;
+    /** Returns whether the loop is running. */
+    function isRunning(): boolean;
+    /**
+     * Scales the time passed to `update`: `0.5` is slow motion and `0`
+     * pauses the game. At `0`, a variable-step `update` still runs with a
+     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
+     */
+    function setTimeScale(scale: number): void;
+    /** Returns the time scale; `1` by default. */
+    function getTimeScale(): number;
+    /** Returns the scaled delta of the current frame, in seconds. */
+    function getDeltaTime(): number;
+    /** Returns the scaled time since the loop started, in seconds. */
+    function getElapsedTime(): number;
+    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
+    function getRealElapsedTime(): number;
+    /** Returns the number of frames since the loop started. */
+    function getFrameCount(): number;
+    /** Returns the frame statistics of the last frame. */
+    function getStats(): Stats;
+
+    /**
+     * A system: per-frame work that a module or the game registers once, and
+     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
+     * long as the loop runs, surviving `Loop.run()` replacements and
+     * `Loop.stop()`. Each frame runs, in order:
+     *
+     * 1. `preUpdate(dt)` of every system, once;
+     * 2. `update(step)` of every system, then the `update` handler: once with
+     *    `dt`, or once per fixed step with `fixedStep`;
+     * 3. `postUpdate(dt)` of every system, once;
+     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
+     *    overlays such as debug information or screen transitions.
+     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
+     *    loop, so a system can close what it opened (Camera2D's view).
+     *
+     * Within a phase, systems run by ascending `priority`, then in the order
+     * they were added. `this` is the system object. An exception thrown by a
+     * system stops the program, as one thrown by a handler.
+     */
+    interface System {
+        /** Unique name, for `removeSystem()` and `getSystems()`. */
+        name?: string;
+        /** Lower runs first. Integer; defaults to `0`. */
+        priority?: number;
+        /**
+         * `preUpdate` and `postUpdate` receive the real delta, ignoring
+         * `setTimeScale()`: for menus and transitions that keep moving while
+         * the game is paused. Defaults to `false`.
+         */
+        realTime?: boolean;
+        preUpdate?(dt: number): void;
+        /** Same cadence and argument as the `update` handler. */
+        update?(step: number): void;
+        postUpdate?(dt: number): void;
+        preDraw?(alpha: number): void;
+        postDraw?(alpha: number): void;
+    }
+
+    /** A registered system, as listed by `getSystems()`. */
+    interface SystemInfo {
+        name: string | undefined;
+        priority: number;
+        realTime: boolean;
+        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
+        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
+        /** True for systems registered by native modules. */
+        native: boolean;
+    }
+
+    /**
+     * Registers a system and returns it. Its methods are read now: replacing
+     * them later has no effect until it is added again. A system added during
+     * a frame starts with the next phase. Throws when the object has no phase
+     * method, was already added, or its name is taken.
+     *
+     * @example
+     * ```js
+     * const flash = Loop.addSystem({
+     *     name: "flash",
+     *     priority: 100,
+     *     alpha: 128,              // 0x80 is opaque on the GS
+     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
+     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
+     * });
+     * ```
+     */
+    function addSystem<T extends System>(system: T): T;
+    /**
+     * Unregisters a system, given the object or its name. Returns whether it
+     * was registered. A system removed during a phase does not run again.
+     */
+    function removeSystem(system: System | string): boolean;
+    /** Registered systems, in run order. */
+    function getSystems(): SystemInfo[];
+}
+
+
+/* === Module: Camera2D (camera2d) === */
+/**
+ * 2D cameras, applied in C by every 2D draw: `Draw`, `Image`, `Font` and
+ * `TileMap` go through the camera's transform before reaching the GS, so the
+ * game draws in world coordinates and never subtracts the camera by hand.
+ *
+ * `Camera2D.main` is the current camera from the start. It shows the world
+ * from (0, 0) at zoom 1, exactly like the screen, so nothing changes until
+ * it moves. While `Loop.run()` runs, the current camera is updated after the
+ * game's `update` and applied around its `draw`; `Camera2D.screenSpace()`
+ * draws the HUD without it. Cameras use the scaled time of the Loop.
+ *
+ * A camera's position is the world point shown at its anchor (the center of
+ * its viewport by default). Zoom is screen pixels per world unit, rotation is
+ * in radians (clockwise on screen) and smoothing speeds are rates per second
+ * (frame-rate independent: `1 - exp(-rate * dt)` of the distance each frame;
+ * 0 means rigid).
+ *
+ * Example:
+ * ```js
+ * const cam = Camera2D.main;
+ * cam.follow(player, { lerp: 8, deadzone: { w: 64, h: 32 }, lookahead: 40 });
+ * cam.setBounds(0, 0, mapWidth, mapHeight);   // centered if the map is smaller
+ * cam.zoom = 1.5;
+ *
+ * Loop.run({
+ *     update(dt) { player.update(dt); if (hit) cam.shake(6, 0.3); },
+ *     draw() {
+ *         cam.draw(() => sky.draw(0, 0), { parallax: 0.3 });   // slower layer
+ *         level.render(0, 0);                    // TileMap, in world space
+ *         heroImage.draw(player.x, player.y);    // Image, in world space
+ *         Camera2D.screenSpace(() => font.print(10, 10, `HP ${hp}`));
+ *     },
+ * });
+ *
+ * // Split screen: one camera per viewport, no current camera.
+ * const left = new Camera2D.Camera({ viewport: { x: 0, y: 0, w: 320, h: 448 } });
+ * const right = new Camera2D.Camera({ viewport: { x: 320, y: 0, w: 320, h: 448 } });
+ * left.follow(p1); right.follow(p2);
+ * Camera2D.setCurrent(null);
+ * // in draw(): left.draw(drawWorld); right.draw(drawWorld);
+ * ```
+ *
+ * Under a rotation, rectangles (images, glyphs, TileMap sprites) are drawn as
+ * two triangles (TileMap sprites, on VU1, as triangle strips). While a camera
+ * is applied, what lies entirely outside its viewport is skipped in C before
+ * reaching the GS: images, rectangles, circles, each sprite of
+ * `Image.drawList()`, whole texts, and the cells of `TileMap` grids.
+ */
+declare namespace Camera2D {
+    interface Point {
+        x: number;
+        y: number;
+    }
+
+    interface Rect {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    }
+
+    /** A number for both axes, `[x, y]`, `{ x, y }` or `{ w, h }`. */
+    type Pair = number | [number, number] | { x: number; y: number } | { w: number; h: number };
+
+    /** Anything with a position in world space: a player, an enemy, a point. */
+    interface Target {
+        x: number;
+        y: number;
+    }
+
+    interface CameraOptions {
+        /** World point at the anchor; defaults to half the viewport (the identity view). */
+        x?: number;
+        y?: number;
+        /** Both axes; `zoomX`/`zoomY` override one. Default 1. */
+        zoom?: number;
+        zoomX?: number;
+        zoomY?: number;
+        /** Radians, clockwise on screen. */
+        rotation?: number;
+        /** Screen rectangle the camera draws into; null (default) is the whole screen. */
+        viewport?: Rect | null;
+        /** Point of the viewport the position is shown at, 0..1. Default [0.5, 0.5]. */
+        anchor?: Pair;
+        /** Round the translation to whole pixels (no shimmer on pixel art). Default true. */
+        pixelSnap?: boolean;
+        /** World bounds the camera never shows past. */
+        bounds?: Rect | null;
+        /** See `Camera.boundsIgnoreRotation`. Default false. */
+        boundsIgnoreRotation?: boolean;
+        /** Make it the current camera. */
+        current?: boolean;
+        /** See `Camera.realTime`. Default false. */
+        realTime?: boolean;
+        /** See `Camera.debug`. Default false. */
+        debug?: boolean;
+    }
+
+    interface FollowOptions {
+        /** Smoothing rate per axis, per second; 0 (default) follows rigidly. Try 5-10. */
+        lerp?: Pair;
+        /**
+         * Screen pixels around the anchor where the target moves without
+         * moving the camera: a box of the screen, whatever the zoom and
+         * rotation. The target may rest anywhere in it, off the center.
+         */
+        deadzone?: Pair;
+        /**
+         * Screen pixels to look ahead of the target's motion, kept once it
+         * stops (so the target rests that far off the center, less the dead
+         * zone). Same distance on screen at any zoom.
+         */
+        lookahead?: Pair;
+        /** How fast the lookahead turns around, per second. Default 4. */
+        lookaheadLerp?: number;
+        /** World offset added to the target (e.g. to look a bit above the player). */
+        offset?: Pair;
+        /**
+         * With several targets: zoom to keep them all in view. `margin` is in
+         * screen pixels (default 32), `min`/`max` limit the zoom (0.5 and 2),
+         * `lerp` smooths it (4 per second).
+         */
+        autoZoom?: boolean | { min?: number; max?: number; margin?: number; lerp?: number };
+        /** Jump to the target now instead of easing from the current position. Default true. */
+        snap?: boolean;
+        /**
+         * For `Loop.run()` with `fixedStep`, when the game draws positions
+         * blended by `alpha`: the camera follows the target blended the
+         * same way (sampled before each step and after the last), so the
+         * target does not jitter against the scenery. Default false.
+         */
+        interpolate?: boolean;
+        /**
+         * Zooms out as the target speeds up: `max` (default 1) at rest,
+         * `min` (0.8) at `speed` world units per second (300) or faster.
+         * In a zone with a zoom, that zoom takes the place of `max`.
+         * `lerp` smooths the zoom (4 per second). `autoZoom` wins over it.
+         */
+        zoomBySpeed?: boolean | { min?: number; max?: number; speed?: number; lerp?: number };
+    }
+
+    interface Zone extends Rect {
+        /** Zoom while the target is in this zone. */
+        zoom?: number;
+        /** Follow smoothing while the target is in this zone. */
+        lerp?: Pair;
+        /** Target offset (world units) while the target is in this zone. */
+        offset?: Pair;
+    }
+
+    interface ZoneOptions {
+        /** Seconds to glide from one zone to the next (0: cut). */
+        transition?: number;
+        /** Called when the target enters a zone: its index and the previous one (-1 for none). */
+        onChange?: (this: Camera, zone: number, previous: number) => void;
+    }
+
+    interface TraumaOptions {
+        /** Pixels at full trauma. Default 16. */
+        intensity?: number;
+        /** Radians at full trauma. Default 0. */
+        rotation?: number;
+        /** Trauma lost per second. Default 1. */
+        decay?: number;
+        /** Oscillations per second. Default 25. */
+        frequency?: number;
+    }
+
+    interface RepeatOptions extends DrawOptions {
+        /** Where one copy sits in the layer. Default (0, 0). */
+        x?: number;
+        y?: number;
+        /** Repeat along each axis. Default true. */
+        repeatX?: boolean;
+        repeatY?: boolean;
+    }
+
+    /** What `state()` returns and `setState()` takes: JSON-friendly. */
+    interface State {
+        x: number;
+        y: number;
+        zoomX: number;
+        zoomY: number;
+        rotation: number;
+        anchor: Point;
+        /** null: the whole screen. */
+        viewport: Rect | null;
+        bounds: Rect | null;
+        boundsIgnoreRotation: boolean;
+        pixelSnap: boolean;
+        realTime: boolean;
+    }
+
+    interface TransitionOptions {
+        /** Maps 0..1 to the blend. Default smoothstep; e.g. `Ease.inOutCubic`. */
+        ease?: (t: number) => number;
+        /** Runs on real time, also while the game is paused. */
+        realTime?: boolean;
+    }
+
+    interface StackOptions extends TransitionOptions {
+        /** Seconds of the transition; 0 (default) cuts. */
+        duration?: number;
+    }
+
+    interface ShakeOptions {
+        /** Oscillations per second. Default 25. */
+        frequency?: number;
+        /** Largest rotation, in radians. Default 0. */
+        rotation?: number;
+    }
+
+    interface DrawOptions {
+        /**
+         * 1 (default) draws the world; 0 draws in the viewport at zoom 1 like
+         * the screen; between them, a background layer that scrolls (and
+         * zooms) slower than the world. Per axis with `[x, y]`.
+         */
+        parallax?: Pair;
+    }
+
+    /** The world-to-screen transform: screen = (xx*x + xy*y + tx, yx*x + yy*y + ty). */
+    interface Matrix {
+        xx: number;
+        xy: number;
+        yx: number;
+        yy: number;
+        tx: number;
+        ty: number;
+    }
+
+    class Camera {
+        constructor(options?: CameraOptions);
+
+        /** World point shown at the anchor. Setting it stops a pan. */
+        x: number;
+        y: number;
+        /** Uniform zoom (reads `zoomX`). Setting it stops a `zoomTo()`. */
+        zoom: number;
+        zoomX: number;
+        zoomY: number;
+        /** Radians, clockwise on screen. */
+        rotation: number;
+        pixelSnap: boolean;
+        /** Reads as `{ x, y }`; set with any `Pair`. */
+        anchor: Point;
+        /** The viewport in screen pixels (the whole screen when none was set); null resets it. */
+        viewport: Rect | null;
+        /** World bounds, or null. */
+        bounds: Rect | null;
+        /**
+         * Bounds and zones clamp the view as if it were not turned: the
+         * camera stays on its target near the edges, and the corners of a
+         * turned view may show past the bounds. Default false: nothing past
+         * the bounds ever shows, so a turned camera is pushed inward.
+         */
+        boundsIgnoreRotation: boolean;
+        /** Index of the zone in force, or -1. */
+        readonly zone: number;
+        readonly following: boolean;
+        readonly shaking: boolean;
+        /** Letterbox bar height, as a fraction of the viewport. */
+        readonly letterboxAmount: number;
+        /** Opacity of the fade overlay, 0..128. */
+        readonly fadeAlpha: number;
+        /** Whether this is `Camera2D.getCurrent()`. */
+        readonly isCurrent: boolean;
+        /**
+         * Runs on the real (unscaled) time of the Loop: follows, shakes and
+         * fades keep going while `Loop.setTimeScale(0)` pauses the game
+         * (pause menus that fade the screen).
+         */
+        realTime: boolean;
+        /**
+         * Draws what drives the camera over its viewport: dead zone (cyan),
+         * anchor (white), target (green), goal (blue), lookahead (orange),
+         * bounds (red) and zones (magenta, the active one brighter).
+         */
+        debug: boolean;
+        /** Current trauma, 0..1 (`addTrauma()`). */
+        readonly trauma: number;
+
+        setPosition(x: number, y: number): this;
+        /** Moves by (dx, dy), within the bounds. */
+        move(dx: number, dy: number): this;
+        setZoom(zoomX: number, zoomY?: number): this;
+        setViewport(x: number, y: number, w: number, h: number): this;
+        setViewport(rect: Rect | null): this;
+        /**
+         * The camera never shows past these bounds; a smaller area is
+         * centered. Turned, the view covers more of the world (its bounding
+         * box), so near an edge a rotation pushes the camera inward and a
+         * followed target rests off the center (see `boundsIgnoreRotation`).
+         */
+        setBounds(x: number, y: number, w: number, h: number): this;
+        setBounds(rect: Rect | null): this;
+
+        /**
+         * Follows a target (read every frame, so moving the object is
+         * enough), or several: their center, with `autoZoom` to fit them all.
+         * A single target needs numeric x and y now (TypeError otherwise); later
+         * frames keep the last position if one goes missing. In an array,
+         * targets whose x or y is not a number are skipped that frame.
+         */
+        follow(target: Target | Target[], options?: FollowOptions): this;
+        unfollow(): this;
+        /** Jumps to the follow target now: no smoothing. */
+        snap(): this;
+
+        /**
+         * Rooms: while the target is inside a zone, that zone is the camera's
+         * bounds (and zoom). The last zone stays in force between zones.
+         * `null` removes them. At most 32.
+         */
+        setZones(zones: Zone[] | null, options?: ZoneOptions): this;
+
+        /** Shakes by up to `intensity` pixels, fading out over `duration` seconds. */
+        shake(intensity: number, duration: number, options?: ShakeOptions): this;
+        /**
+         * Adds trauma (clamped to 0..1): impacts add up, the view shakes by
+         * its square and it decays over time. The options are kept for
+         * later calls.
+         */
+        addTrauma(amount: number, options?: TraumaOptions): this;
+        /** Pushes the view by (dx, dy) screen pixels, springing back (default 0.15 s). */
+        kick(dx: number, dy: number, duration?: number): this;
+        /** Stops the shake, the trauma and the kick. */
+        stopShake(): this;
+
+        /*
+         * Timed changes. Each promise resolves with true when the change ends
+         * and false if another one of the same kind replaced it.
+         */
+        /** Eases the zoom (geometrically: 1 to 4 looks as steady as 4 to 1). */
+        zoomTo(zoom: number, duration: number): Promise<boolean>;
+        /** Eases to a point; suspends the follow until it arrives. */
+        panTo(x: number, y: number, duration: number): Promise<boolean>;
+        /**
+         * Fades the viewport overlay to `color` (its alpha, 0..128, is the
+         * final opacity): `Color.new(0, 0, 0, 128)` fades out to black,
+         * `Color.new(0, 0, 0, 0)` fades back in.
+         */
+        fade(color: number, duration: number): Promise<boolean>;
+        /** Shows `color` over the viewport and fades it out (default 0.2 s). */
+        flash(color: number, duration?: number): Promise<boolean>;
+        /** Black bars, each `amount` (0..0.5) of the viewport's height. */
+        letterbox(amount: number, duration?: number): Promise<boolean>;
+
+        worldToScreen(x: number, y: number): Point;
+        screenToWorld(x: number, y: number): Point;
+        /** World box the viewport shows (its bounding box when rotated), for culling. */
+        visibleRect(): Rect;
+        isVisible(x: number, y: number, w?: number, h?: number): boolean;
+        /**
+         * Culls many boxes in one call: `rects` holds (x, y, w, h) per box;
+         * `out` gets 1 for each visible box and 0 otherwise. Returns how many
+         * are visible.
+         */
+        cull(rects: Float32Array, out?: Uint8Array): number;
+
+        /** Draws in this camera's world space and viewport until `end()`. Pairs nest (8 deep). */
+        begin(options?: DrawOptions): void;
+        /** Draws the camera's fade, flash and letterbox, and restores the previous view. */
+        end(): void;
+        /**
+         * `begin()`, `fn()`, `end()`, even if `fn` throws or leaves pairs of
+         * its own open (they are closed too). Returns what `fn` returns.
+         */
+        draw<T>(fn: () => T, options?: DrawOptions): T;
+        /** Draws with (0, 0) at the viewport's corner, clipped to it: per-player HUDs. */
+        viewportSpace<T>(fn: () => T): T;
+
+        makeCurrent(): this;
+        /** Advances this camera alone (without `Loop.run()`, use `Camera2D.update()`). */
+        update(dt: number): this;
+        getMatrix(options?: DrawOptions): Matrix;
+        /**
+         * Draws `image` repeated to cover what the camera shows of a layer
+         * (`parallax`, as `draw()`): skies, far hills. Returns how many
+         * copies were drawn (at most 1024).
+         */
+        drawRepeat(image: Image, options?: RepeatOptions): number;
+        /** The pose and settings (not targets, zones or running effects), for saves. */
+        state(): State;
+        /** Applies what `state()` returned; missing keys are left as they are. */
+        setState(state: Partial<State>): this;
+    }
+
+    /** The default camera: current from the start, showing the screen as before. */
+    const main: Camera;
+
+    /** The camera applied around `Loop.run()`'s draw, or null for none. */
+    function getCurrent(): Camera | null;
+    /** Changes it at once (null: draw without a camera, e.g. in split screen). */
+    function setCurrent(camera: Camera | null): void;
+    /**
+     * Makes `camera` current, gliding from the current one's position, zoom,
+     * rotation and viewport over `duration` seconds. `ease` maps 0..1 to the
+     * blend (default smoothstep; e.g. `Ease.inOutCubic`).
+     */
+    function transition(camera: Camera, duration: number,
+        options?: TransitionOptions): Promise<boolean>;
+    /**
+     * Makes `camera` current and remembers the one it replaces (or none),
+     * so `pop()` goes back to it: cutscenes, map screens. 8 deep.
+     */
+    function push(camera: Camera, options?: StackOptions): Promise<boolean>;
+    /** Goes back to the camera the last `push()` replaced. */
+    function pop(options?: StackOptions): Promise<boolean>;
+    /**
+     * `culled`: draws skipped by culling in the last frame drawn under
+     * `Loop.run()` (images, rectangles, circles, drawList sprites, texts,
+     * TileMap grid cells); `pushed`: depth of `push()`.
+     */
+    function getStats(): { culled: number; pushed: number };
+
+    /** Draws with no camera and the whole screen: HUD, menus. */
+    function screenSpace<T>(fn: () => T): T;
+    /** Updates every camera: for games that do not use `Loop.run()`. */
+    function update(dt: number): void;
+    /** Drops any open camera: the identity view and the whole screen. */
+    function reset(): void;
+}
+
+
 /* === Module: Draw (draw) === */
 /**
  * Immediate-mode 2D primitives rendered by the PS2 GS.
@@ -1538,7 +2163,11 @@ declare namespace Draw {
         x4: number, y4: number, color4: Color.Value
     ): void;
 
-    /** Draws a solid-color axis-aligned rectangle. */
+    /**
+     * Draws a solid-color rectangle. Width and height are at least 1 and
+     * whole pixels; under a Camera2D camera they are world units, any
+     * positive size (0.5 is 2 pixels at zoom 4), and turn with the camera.
+     */
     function rect(x: number, y: number, width: number, height: number,
         color: Color.Value): void;
 
@@ -1977,203 +2606,6 @@ declare namespace Gamepad {
         typeof TYPE_DIGITAL | typeof TYPE_ANALOG | typeof TYPE_NAMCOGUN |
         typeof TYPE_DUALSHOCK | typeof TYPE_JOGCON | typeof TYPE_DUALSHOCK3 |
         typeof TYPE_DUALSHOCK4;
-}
-
-
-/* === Module: Loop (loop) === */
-/**
- * Game loop driven by the runtime.
- *
- * `Loop.run()` registers the frame handlers and returns immediately; frames
- * start once the entry script finishes. Each frame clears the screen, runs
- * `update` and `draw`, then flips. Timers, promises and async functions keep
- * running between frames, and the frame rate follows VSync.
- *
- * Variable step: `update(dt)` runs once per frame with the time since the
- * previous frame, in seconds.
- * ```js
- * let x = 0;
- * Loop.run(dt => {
- *     x += 120 * dt; // 120 pixels per second at any frame rate
- *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
- * });
- * ```
- *
- * Fixed step: `update(step)` runs zero or more times per frame with the same
- * `step`, as physics engines expect, and `draw(alpha)` once per frame.
- * ```js
- * Loop.run({
- *     update(step) { world.step(step, 4); },
- *     draw(alpha) { Box2DDraw.draw(world); },
- * }, { fixedStep: 1 / 60 });
- * ```
- */
-declare namespace Loop {
-    /** Frame handlers. `this` inside them is the handlers object. */
-    interface Handlers {
-        /**
-         * Advances the game. Receives the scaled frame delta in seconds, or
-         * `fixedStep` when set; the first frame's delta is `0`.
-         */
-        update?(dt: number): void;
-        /**
-         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
-         * is the fraction of a step not simulated yet, to interpolate
-         * between the previous and the current state; otherwise it is `1`.
-         */
-        draw?(alpha: number): void;
-    }
-
-    interface Options {
-        /** Clears the screen before each frame. Defaults to `true`. */
-        clear?: boolean;
-        /** Packed RGBA color used to clear. Defaults to opaque black. */
-        clearColor?: number;
-        /**
-         * Longest real frame time counted, in seconds; longer stalls such as
-         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
-         */
-        maxDelta?: number;
-        /**
-         * Runs `update` with this constant step, in seconds, as many times as
-         * the elapsed time holds. `0`, the default, runs it once per frame
-         * with the frame delta.
-         */
-        fixedStep?: number;
-        /**
-         * Fixed steps per frame at most; the time beyond it is dropped so a
-         * slow frame cannot snowball. Defaults to `5`.
-         */
-        maxSteps?: number;
-        /**
-         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
-         * 25 FPS on PAL. Defaults to `1`.
-         */
-        vsyncInterval?: number;
-    }
-
-    interface Stats {
-        /** Frames per second, measured over the last second. */
-        fps: number;
-        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
-        frameMs: number;
-        /**
-         * Milliseconds of work in the last frame: from the previous flip up to
-         * this one, timers and promises included, without the VSync wait.
-         */
-        cpuMs: number;
-        /** `update` calls in the last frame. */
-        steps: number;
-        /** Interpolation factor passed to the last `draw`. */
-        alpha: number;
-    }
-
-    /**
-     * Starts the loop. A function is the same as `{ update: fn }`. Called
-     * again, even from a handler, it replaces the handlers and options without
-     * restarting the frame timing; the rest of the current frame is skipped.
-     * An exception thrown by a handler stops the program.
-     */
-    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
-    /**
-     * Stops the loop after the current frame; the program ends once no timers
-     * remain. Registered systems stay registered and run again with the next
-     * `Loop.run()`.
-     */
-    function stop(): void;
-    /** Returns whether the loop is running. */
-    function isRunning(): boolean;
-    /**
-     * Scales the time passed to `update`: `0.5` is slow motion and `0`
-     * pauses the game. At `0`, a variable-step `update` still runs with a
-     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
-     */
-    function setTimeScale(scale: number): void;
-    /** Returns the time scale; `1` by default. */
-    function getTimeScale(): number;
-    /** Returns the scaled delta of the current frame, in seconds. */
-    function getDeltaTime(): number;
-    /** Returns the scaled time since the loop started, in seconds. */
-    function getElapsedTime(): number;
-    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
-    function getRealElapsedTime(): number;
-    /** Returns the number of frames since the loop started. */
-    function getFrameCount(): number;
-    /** Returns the frame statistics of the last frame. */
-    function getStats(): Stats;
-
-    /**
-     * A system: per-frame work that a module or the game registers once, and
-     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
-     * long as the loop runs, surviving `Loop.run()` replacements and
-     * `Loop.stop()`. Each frame runs, in order:
-     *
-     * 1. `preUpdate(dt)` of every system, once;
-     * 2. `update(step)` of every system, then the `update` handler: once with
-     *    `dt`, or once per fixed step with `fixedStep`;
-     * 3. `postUpdate(dt)` of every system, once;
-     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
-     *    overlays such as debug information or screen transitions.
-     *
-     * Within a phase, systems run by ascending `priority`, then in the order
-     * they were added. `this` is the system object. An exception thrown by a
-     * system stops the program, as one thrown by a handler.
-     */
-    interface System {
-        /** Unique name, for `removeSystem()` and `getSystems()`. */
-        name?: string;
-        /** Lower runs first. Integer; defaults to `0`. */
-        priority?: number;
-        /**
-         * `preUpdate` and `postUpdate` receive the real delta, ignoring
-         * `setTimeScale()`: for menus and transitions that keep moving while
-         * the game is paused. Defaults to `false`.
-         */
-        realTime?: boolean;
-        preUpdate?(dt: number): void;
-        /** Same cadence and argument as the `update` handler. */
-        update?(step: number): void;
-        postUpdate?(dt: number): void;
-        preDraw?(alpha: number): void;
-        postDraw?(alpha: number): void;
-    }
-
-    /** A registered system, as listed by `getSystems()`. */
-    interface SystemInfo {
-        name: string | undefined;
-        priority: number;
-        realTime: boolean;
-        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
-        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
-        /** True for systems registered by native modules. */
-        native: boolean;
-    }
-
-    /**
-     * Registers a system and returns it. Its methods are read now: replacing
-     * them later has no effect until it is added again. A system added during
-     * a frame starts with the next phase. Throws when the object has no phase
-     * method, was already added, or its name is taken.
-     *
-     * @example
-     * ```js
-     * const flash = Loop.addSystem({
-     *     name: "flash",
-     *     priority: 100,
-     *     alpha: 128,              // 0x80 is opaque on the GS
-     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
-     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
-     * });
-     * ```
-     */
-    function addSystem<T extends System>(system: T): T;
-    /**
-     * Unregisters a system, given the object or its name. Returns whether it
-     * was registered. A system removed during a phase does not run again.
-     */
-    function removeSystem(system: System | string): boolean;
-    /** Registered systems, in run order. */
-    function getSystems(): SystemInfo[];
 }
 
 
@@ -2651,7 +3083,11 @@ declare namespace Debug {
     /** Shows or hides everything, like the shortcut; returns whether shown. */
     function show(on?: boolean): boolean;
 
-    /** World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale. */
+    /**
+     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
+     * Used without a camera: while `Camera2D.getCurrent()` has one, world
+     * shapes and texts follow it (zoom and rotation included) instead.
+     */
     function setView(view: View): void;
     function configure(options: Config): void;
 
@@ -2886,7 +3322,8 @@ declare class Image {
      * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
      * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
      * buffer serves both; the TileMap module is not required. Records with a
-     * zero width or height are skipped.
+     * zero width or height are skipped, and so are, under a Camera2D camera,
+     * records outside its viewport.
      *
      * @example
      * ```js
@@ -4394,8 +4831,9 @@ declare namespace TileMap {
         /**
          * Builds a row-major grid in native code: cell (column, row) is
          * sprite `row * columns + column` at (column * tileWidth,
-         * row * tileHeight). Grid instances cull to the screen in
-         * `render()`. Culling assumes cells stay near their position: a
+         * row * tileHeight). Grid instances cull to what the current camera
+         * shows in `render()` (the screen without one). Culling assumes
+         * cells stay near their position: a
          * sprite moved more than one cell away may be skipped.
          */
         static fromGrid(options: GridOptions): Instance;
@@ -4408,7 +4846,9 @@ declare namespace TileMap {
         readonly grid: { columns: number; rows: number;
             tileWidth: number; tileHeight: number } | undefined;
         /**
-         * Queues sprites at (x, y) plus the camera offset. Sprites are read
+         * Queues sprites at (x, y) plus the camera offset, through the current
+         * camera (Camera2D), on VU1: zoomed, and under a rotation each sprite
+         * becomes a triangle strip (in batches of 36). Sprites are read
          * when the frame is sent, so writes made to the buffer after
          * `render()` and before `Screen.flip()` may or may not be shown this
          * frame.
@@ -4502,15 +4942,24 @@ declare namespace TileMap {
         flushEachBatch: boolean;
         /** Write back the whole data cache instead of the sprite range. */
         fullCacheFlush: boolean;
-        /** Sprites per VU1 batch, 1-50 (default 50). */
+        /** Sprites per VU1 batch, 1-50 (default 50; under a rotating camera at most 36). */
         batchSize: number;
+        /**
+         * Under a rotating camera, triangles made by the EE instead of the
+         * rotated VU1 program. The EE path ignores zindex.
+         */
+        rotatedOnEE: boolean;
     }
 
     /** Changes the given switches; the others keep their current value. */
     function setDiagnostics(options: Partial<Diagnostics>): void;
     function getDiagnostics(): Diagnostics;
 
-    /** Offsets every instance drawn afterwards; defaults to (0, 0). */
+    /**
+     * Offsets every instance drawn afterwards; defaults to (0, 0). Kept for
+     * existing code: `Camera2D` moves (and zooms and turns) TileMaps along
+     * with every other draw. Both combine: this offset applies first.
+     */
     function setCamera(x: number, y: number): void;
     function getCamera(): { x: number; y: number };
 }

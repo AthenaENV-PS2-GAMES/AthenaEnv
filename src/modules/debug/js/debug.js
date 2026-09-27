@@ -351,10 +351,18 @@ function printRender(render, x, y, color, f) {
 
 function drawTexts() {
     const view = state.view, f = font();
+    // The current camera's transform, when there is one, replaces setView().
+    const m = state.texts.length ? Native.worldView() : null;
     for (const text of state.texts) {
         const world = text.world;
-        const x = world ? (text.x - view.x) * view.scale : text.x;
-        const y = world ? (text.y - view.y) * view.scale : text.y;
+        let x = text.x, y = text.y;
+        if (world && m) {
+            x = m[0] * text.x + m[1] * text.y + m[4];
+            y = m[2] * text.x + m[3] * text.y + m[5];
+        } else if (world) {
+            x = (text.x - view.x) * view.scale;
+            y = (text.y - view.y) * view.scale;
+        }
         const previous = f.color;
         f.color = text.color;
         f.print(x, y, text.value);
@@ -562,7 +570,8 @@ export function show(on) {
 
 /**
  * World space for shapes drawn with `space: "world"`: screen = (world - {x, y})
- * * scale. A camera can call this every frame.
+ * * scale. Only without a camera: the current Camera2D, when there is one,
+ * maps world shapes and texts itself (DebugNative.worldView()).
  */
 export function setView(view) {
     if (view === null || typeof view !== "object") throw new TypeError("Debug.setView expects an object");

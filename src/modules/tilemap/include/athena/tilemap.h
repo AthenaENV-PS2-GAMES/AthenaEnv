@@ -128,9 +128,10 @@ void athena_tilemap_fill_grid(AthenaTileSprite *sprites,
 	const AthenaTileGrid *grid, const uint16_t *tiles,
 	const AthenaTileAtlas *atlas, float zindex);
 /*
- * Computes the cells of `grid` visible on screen when it is drawn at (x, y)
- * with the current camera, plus a one-tile margin. Writes at most
- * grid->rows ascending ranges and returns how many.
+ * Computes the cells of `grid` visible when it is drawn at (x, y): those
+ * the current 2D view (athena/graphics/view.h) shows inside its clip
+ * rectangle, after the TileMap camera offset, plus a one-tile margin.
+ * Writes at most grid->rows ascending ranges and returns how many.
  */
 uint32_t athena_tilemap_visible_ranges(const AthenaTileGrid *grid,
 	float x, float y, AthenaTileRange *ranges);
@@ -146,6 +147,11 @@ typedef struct {
 	bool full_cache_flush;
 	/* Sprites per VU1 batch, 1..ATHENA_TILEMAP_MAX_BATCH. */
 	uint32_t batch_size;
+	/*
+	 * Under a rotating view, triangles made by the EE instead of the
+	 * rotated VU1 program (which also draws zindex).
+	 */
+	bool rotated_on_ee;
 } AthenaTileDiagnostics;
 
 #define ATHENA_TILEMAP_MAX_BATCH 50
@@ -153,6 +159,10 @@ typedef struct {
 void athena_tilemap_set_diagnostics(const AthenaTileDiagnostics *diagnostics);
 void athena_tilemap_get_diagnostics(AthenaTileDiagnostics *diagnostics);
 
+/*
+ * Offset added to every draw origin, before the 2D view. It predates the
+ * view: Camera2D moves every kind of draw, this only moves TileMaps.
+ */
 void athena_tilemap_set_camera(float x, float y);
 void athena_tilemap_get_camera(float *x, float *y);
 
@@ -166,8 +176,12 @@ void athena_tilemap_sync(void);
 AthenaTileSprite *athena_tilemap_buffer_alloc(uint32_t sprite_count);
 
 /*
- * Queues `sprites` for drawing at (x, y) plus the camera offset. Depth comes
- * only from each sprite's zindex: the VU program ignores an origin z.
+ * Queues `sprites` for drawing at (x, y) plus the camera offset, through the
+ * 2D view: VU1 scales them when it zooms, and when it rotates a second VU1
+ * program sends each sprite as a triangle strip (the rotated_on_ee
+ * diagnostic makes the EE send triangles instead, without zindex). Depth
+ * comes only
+ * from each sprite's zindex: the VU program ignores an origin z.
  * `textures[i]` may be NULL for a texture that is not available, in which
  * case the sprites of materials using it are skipped. Sprites past
  * `sprite_count` are never read, even if a material's end is larger.

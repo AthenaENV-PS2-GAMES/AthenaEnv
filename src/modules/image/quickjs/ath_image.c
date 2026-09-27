@@ -702,6 +702,8 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 	float x = 0.0f, y = 0.0f;
 	uint32_t first = 0, count;
 	int queued = 0;
+	AthenaViewCuller culler;
+	bool cull;
 
 	if (!image_argc(ctx, argc, 1, 2, "Image.drawList"))
 		return JS_EXCEPTION;
@@ -751,6 +753,9 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 	if (image->delayed && image->status == ATHENA_IMAGE_STATUS_DECODED)
 		image->status = ATHENA_IMAGE_STATUS_UPLOAD_PENDING;
 
+	/* Under a camera, sprites outside its viewport never reach the GS. */
+	cull = athena_view_culler_init(&culler);
+
 	for (uint32_t i = first; i < first + count; i++) {
 		ImageSpriteRecord record;
 		prim_tex_sprite *sprite;
@@ -759,6 +764,11 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 		memcpy(&record, data + (size_t)i * sizeof(record), sizeof(record));
 		if (record.w == 0.0f || record.h == 0.0f)
 			continue;   /* TileMap.EMPTY and unused records */
+		if (cull && !athena_view_culler_visible(&culler, x + record.x,
+				y + record.y, record.w, record.h)) {
+			athena_view_count_culled(1);
+			continue;
+		}
 
 		sprite = &image_list_chunk[queued++];
 		sprite->x = record.x;

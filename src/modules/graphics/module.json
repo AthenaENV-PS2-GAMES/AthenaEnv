@@ -9,6 +9,8 @@
   "sources": [
     "native/graphics.c",
     "native/owl_draw.c",
+    "native/view.c",
+    "native/view_gs.c",
     "native/owl_packet.c",
     "native/texture_manager.c",
     "native/vif.c",

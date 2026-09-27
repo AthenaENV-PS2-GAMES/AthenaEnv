@@ -8,7 +8,8 @@
   "default": true,
   "sources": [
     "native/tilemap.c",
-    "vu1/draw_2D_tile_list.vsm"
+    "vu1/draw_2D_tile_list.vsm",
+    "vu1/draw_2D_tile_list_rotated.vsm"
   ],
   "dependencies": {
     "modules": [

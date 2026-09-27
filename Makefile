@@ -114,7 +114,8 @@ INI_READER = readini/src/readini.o
 # modules (MODULE_EMBED).
 CORE_IRX = iomanx.o filexio.o
 
-# Modules may ship C sources, assembly (.s) and prebuilt VU microprograms (.vsm).
+# Modules may ship C sources, assembly (.s) and VU microprograms (.vsm,
+# generated from a .vcl next to it when there is one).
 src_to_obj = $(patsubst src/%.s,%.o,$(patsubst src/%.vsm,%.o,$(patsubst src/%.c,%.o,$(1))))
 
 MODULE_OBJS = $(call src_to_obj,$(MODULE_SRCS))
@@ -271,7 +272,13 @@ $(EE_OBJ_DIR)%.o: $(EE_SRC_DIR)%.S
 	@mkdir -p $(@D)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
 
-# Prebuilt VU microprograms; vcl is not part of the toolchain image.
+# VU microprograms: a module lists the .vsm, generated from its .vcl source
+# by OpenVCL whenever the .vcl changes. The generated .vsm is committed too,
+# so it can be reviewed and diffed; tests/host/run.sh checks they match.
+$(EE_SRC_DIR)%.vsm: $(EE_SRC_DIR)%.vcl
+	@echo VCL - $<
+	$(EE_VCL) $(EE_VCLFLAGS) -o$@ $<
+
 $(EE_OBJ_DIR)%.o: $(EE_SRC_DIR)%.vsm
 	@echo DVP - $<
 	@mkdir -p $(@D)

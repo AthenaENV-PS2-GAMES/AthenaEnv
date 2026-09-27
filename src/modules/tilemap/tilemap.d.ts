@@ -132,8 +132,9 @@ declare namespace TileMap {
         /**
          * Builds a row-major grid in native code: cell (column, row) is
          * sprite `row * columns + column` at (column * tileWidth,
-         * row * tileHeight). Grid instances cull to the screen in
-         * `render()`. Culling assumes cells stay near their position: a
+         * row * tileHeight). Grid instances cull to what the current camera
+         * shows in `render()` (the screen without one). Culling assumes
+         * cells stay near their position: a
          * sprite moved more than one cell away may be skipped.
          */
         static fromGrid(options: GridOptions): Instance;
@@ -146,7 +147,9 @@ declare namespace TileMap {
         readonly grid: { columns: number; rows: number;
             tileWidth: number; tileHeight: number } | undefined;
         /**
-         * Queues sprites at (x, y) plus the camera offset. Sprites are read
+         * Queues sprites at (x, y) plus the camera offset, through the current
+         * camera (Camera2D), on VU1: zoomed, and under a rotation each sprite
+         * becomes a triangle strip (in batches of 36). Sprites are read
          * when the frame is sent, so writes made to the buffer after
          * `render()` and before `Screen.flip()` may or may not be shown this
          * frame.
@@ -240,15 +243,24 @@ declare namespace TileMap {
         flushEachBatch: boolean;
         /** Write back the whole data cache instead of the sprite range. */
         fullCacheFlush: boolean;
-        /** Sprites per VU1 batch, 1-50 (default 50). */
+        /** Sprites per VU1 batch, 1-50 (default 50; under a rotating camera at most 36). */
         batchSize: number;
+        /**
+         * Under a rotating camera, triangles made by the EE instead of the
+         * rotated VU1 program. The EE path ignores zindex.
+         */
+        rotatedOnEE: boolean;
     }
 
     /** Changes the given switches; the others keep their current value. */
     function setDiagnostics(options: Partial<Diagnostics>): void;
     function getDiagnostics(): Diagnostics;
 
-    /** Offsets every instance drawn afterwards; defaults to (0, 0). */
+    /**
+     * Offsets every instance drawn afterwards; defaults to (0, 0). Kept for
+     * existing code: `Camera2D` moves (and zooms and turns) TileMaps along
+     * with every other draw. Both combine: this offset applies first.
+     */
     function setCamera(x: number, y: number): void;
     function getCamera(): { x: number; y: number };
 }

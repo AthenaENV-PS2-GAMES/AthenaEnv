@@ -45,6 +45,7 @@ void draw_image_rotate(GSSURFACE *source, float x, float y, float width,
 typedef struct GSCONTEXT GSCONTEXT;
 GSCONTEXT *getGSGLOBAL(void);
 void draw_sprite(float x, float y, int width, int height, Color color);
+void draw_rect_f(float x, float y, float width, float height, Color color);
 void draw_line(float x, float y, float x2, float y2, Color color);
 void draw_circle(float x, float y, float radius, Color color, uint8_t filled);
 

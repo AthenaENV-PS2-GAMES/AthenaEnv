@@ -799,6 +799,15 @@ static JSValue instance_render(JSContext *ctx, JSValueConst this_val,
     } else if (instance->has_grid && cull) {
         range_count = athena_tilemap_visible_ranges(&instance->grid, x, y,
             instance->ranges);
+        /* Under a camera, the cells left out count as culled (Camera2D.getStats). */
+        if (athena_view_kind() != ATHENA_VIEW_IDENTITY) {
+            uint32_t covered = 0;
+
+            for (uint32_t r = 0; r < range_count; ++r)
+                covered += instance->ranges[r].count;
+            athena_view_count_culled(instance->grid.columns *
+                instance->grid.rows - covered);
+        }
         if (range_count == 0)
             return JS_UNDEFINED;
         ranges = instance->ranges;
@@ -1418,7 +1427,9 @@ static JSValue tilemap_set_diagnostics(JSContext *ctx, JSValueConst this_val,
     if (!tilemap_bool_option(ctx, argv[0], "flushEachBatch",
             &diagnostics.flush_each_batch) ||
         !tilemap_bool_option(ctx, argv[0], "fullCacheFlush",
-            &diagnostics.full_cache_flush))
+            &diagnostics.full_cache_flush) ||
+        !tilemap_bool_option(ctx, argv[0], "rotatedOnEE",
+            &diagnostics.rotated_on_ee))
         return JS_EXCEPTION;
     value = JS_GetPropertyStr(ctx, argv[0], "batchSize");
     if (JS_IsException(value))
@@ -1459,6 +1470,8 @@ static JSValue tilemap_get_diagnostics(JSContext *ctx, JSValueConst this_val,
         JS_NewBool(ctx, diagnostics.full_cache_flush), JS_PROP_C_W_E);
     JS_DefinePropertyValueStr(ctx, object, "batchSize",
         JS_NewUint32(ctx, diagnostics.batch_size), JS_PROP_C_W_E);
+    JS_DefinePropertyValueStr(ctx, object, "rotatedOnEE",
+        JS_NewBool(ctx, diagnostics.rotated_on_ee), JS_PROP_C_W_E);
     return object;
 }
 

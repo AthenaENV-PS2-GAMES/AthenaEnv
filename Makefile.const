@@ -9,5 +9,8 @@ VU0_MPGS_DIR = vu0/
 
 BIN2S = $(PS2SDK)/bin/bin2c
 EE_DVP = dvp-as
-EE_VCL = vcl
-EE_VCLPP = vclpp
+# VU microprograms (.vcl) are compiled with OpenVCL, the open replacement of
+# Sony's vcl in the toolchain image. Its -g preprocessing runs gasp, which
+# the image does not ship: masp takes its place.
+EE_VCL = openvcl
+EE_VCLFLAGS = --gasp masp -g

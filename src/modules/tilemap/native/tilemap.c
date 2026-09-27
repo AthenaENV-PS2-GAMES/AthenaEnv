@@ -13,15 +13,21 @@
 #include <athena/tilemap.h>
 
 /*
- * VU1 program built from old/src/vu1/draw_2D_tile_list.vcl. Only the
- * generated .vsm is part of the module because vcl is not in the toolchain.
+ * VU1 program from vu1/draw_2D_tile_list.vcl, compiled to the .vsm by
+ * OpenVCL (the Makefile's %.vsm rule): edit the .vcl, not the .vsm.
  */
 register_vu_program(VU1Draw2D_TileList);
+/*
+ * Under a rotating view: vu1/draw_2D_tile_list_rotated.vcl turns each
+ * sprite into a triangle strip of its four corners.
+ */
+register_vu_program(VU1Draw2D_TileListRotated);
 
 /* Sprites per VU1 batch; each sprite unpacks to four quadwords. */
 #define TILEMAP_BATCH_SIZE ATHENA_TILEMAP_MAX_BATCH
 /*
- * VU1 data memory. Quadwords 0..1 hold the camera and origin. Each batch
+ * VU1 data memory. Quadwords 0..1 hold the view scale and the screen origin
+ * of the sprites (see vu1/draw_2D_tile_list.vsm). Each batch
  * buffer, relative to TOP, holds the GIF tag at +0, 200 input quadwords at
  * +1..+200, the output GIF tag at +202 and 250 output quadwords at
  * +203..+452: 453 quadwords. The buffers must not overlap. With OFFSET 452
@@ -35,11 +41,27 @@ register_vu_program(VU1Draw2D_TileList);
 _Static_assert(TILEMAP_VU1_BASE + 2 * TILEMAP_VU1_BUFFER_QWC <= 1024,
 	"TileMap VU1 buffers exceed VU1 data memory");
 
+/*
+ * The rotated program writes 9 quadwords per sprite, so batches are
+ * smaller: 3 static quadwords (the view's columns and origin), then
+ * buffers of the GIF tag, 144 input quadwords (+1..+144), the output tag at
+ * +146 and 324 output quadwords: 471.
+ */
+#define TILEMAP_ROTATED_BATCH_SIZE 36
+#define TILEMAP_VU1_ROTATED_BASE 3
+#define TILEMAP_VU1_ROTATED_BUFFER_QWC 471
+_Static_assert(TILEMAP_VU1_ROTATED_BASE + 2 * TILEMAP_VU1_ROTATED_BUFFER_QWC <= 1024,
+	"TileMap rotated VU1 buffers exceed VU1 data memory");
+
 static vu_mpg *tile_program;
-/* GS drawing-area origin in .xy, camera offset in .zw; loaded with lq. */
-static float tile_camera[4] __attribute__((aligned(16))) = {
-	2047.35f, 2047.35f, 0.0f, 0.0f
-};
+static vu_mpg *tile_program_rotated;
+/*
+ * TileMap.setCamera() offset, added to every draw origin before the 2D view
+ * (athena/graphics/view.h). Kept for existing code; Camera2D sets the view.
+ */
+static float tile_camera_x, tile_camera_y;
+/* GS drawing-area origin the program adds, as the original renderer did. */
+#define TILEMAP_GS_ORIGIN 2047.35f
 
 static AthenaTileDiagnostics tile_diagnostics = {
 	.flush_each_batch = false,
@@ -87,16 +109,16 @@ const AthenaTileLayout *athena_tilemap_layout(void)
 
 void athena_tilemap_set_camera(float x, float y)
 {
-	tile_camera[2] = x;
-	tile_camera[3] = y;
+	tile_camera_x = x;
+	tile_camera_y = y;
 }
 
 void athena_tilemap_get_camera(float *x, float *y)
 {
 	if (x)
-		*x = tile_camera[2];
+		*x = tile_camera_x;
 	if (y)
-		*y = tile_camera[3];
+		*y = tile_camera_y;
 }
 
 AthenaTileSprite *athena_tilemap_buffer_alloc(uint32_t sprite_count)
@@ -128,11 +150,22 @@ void athena_tilemap_sync(void)
 #define TILEMAP_GIF_REGS (((u64)GS_RGBAQ) << 0 | ((u64)GS_UV) << 4 | \
 	((u64)GS_XYZ2) << 8 | ((u64)GS_UV) << 12 | ((u64)GS_XYZ2) << 16)
 
+/*
+ * Rotated program: color, then UV with XYZ3 for the first two corners
+ * (queued without drawing) and UV with XYZ2 for the last two (each draws
+ * a triangle of the strip).
+ */
+#define TILEMAP_GIF_REGS_ROTATED (((u64)GS_RGBAQ) << 0 | \
+	((u64)GS_UV) << 4 | ((u64)GS_XYZ3) << 8 | \
+	((u64)GS_UV) << 12 | ((u64)GS_XYZ3) << 16 | \
+	((u64)GS_UV) << 20 | ((u64)GS_XYZ2) << 24 | \
+	((u64)GS_UV) << 28 | ((u64)GS_XYZ2) << 32)
+
 /* GIF tag the VU program copies in front of each batch's output. */
-static uint64_t tilemap_giftag(bool texture_mapping)
+static uint64_t tilemap_giftag(bool texture_mapping, bool rotated)
 {
 	prim_reg_t prim_data = {
-		.PRIM = GS_PRIM_PRIM_SPRITE,
+		.PRIM = rotated ? GS_PRIM_PRIM_TRISTRIP : GS_PRIM_PRIM_SPRITE,
 		.IIP = 0,
 		.TME = texture_mapping,
 		.FGE = gsGlobal->PrimFogEnable,
@@ -149,7 +182,7 @@ static uint64_t tilemap_giftag(bool texture_mapping)
 		.PRE = 1,
 		.PRIM = prim_data.data,
 		.FLG = 0,
-		.NREG = 5
+		.NREG = rotated ? 9 : 5
 	};
 
 	return prim_tag.data;
@@ -367,6 +400,7 @@ uint32_t athena_tilemap_visible_ranges(const AthenaTileGrid *grid,
 {
 	double left;
 	double top;
+	AthenaRect2D visible;
 	int first_column, last_column, first_row, last_row;
 	int row;
 	uint32_t count = 0;
@@ -374,17 +408,20 @@ uint32_t athena_tilemap_visible_ranges(const AthenaTileGrid *grid,
 	if (!grid || grid->columns == 0 || grid->rows == 0 ||
 		grid->tile_width <= 0.0f || grid->tile_height <= 0.0f || !gsGlobal)
 		return 0;
-	/* Screen position of the grid's top-left corner. */
-	left = (double)x + tile_camera[2];
-	top = (double)y + tile_camera[3];
+	/* World area the view shows in the clip rectangle: the screen by default. */
+	if (!athena_view_visible_bounds(&visible))
+		return 0;
+	/* World position of the grid's top-left corner. */
+	left = (double)x + tile_camera_x;
+	top = (double)y + tile_camera_y;
 	/* One extra cell on each side covers sprites nudged off their cell. */
-	first_column = tilemap_clamp_cell(-left / grid->tile_width - 1.0,
+	first_column = tilemap_clamp_cell((visible.x0 - left) / grid->tile_width - 1.0,
 		0, (int)grid->columns);
-	last_column = tilemap_clamp_cell((gsGlobal->Width - left) /
+	last_column = tilemap_clamp_cell((visible.x1 - left) /
 		grid->tile_width + 1.0, -1, (int)grid->columns - 1);
-	first_row = tilemap_clamp_cell(-top / grid->tile_height - 1.0,
+	first_row = tilemap_clamp_cell((visible.y0 - top) / grid->tile_height - 1.0,
 		0, (int)grid->rows);
-	last_row = tilemap_clamp_cell((gsGlobal->Height - top) /
+	last_row = tilemap_clamp_cell((visible.y1 - top) /
 		grid->tile_height + 1.0, -1, (int)grid->rows - 1);
 	if (first_column > last_column || first_row > last_row)
 		return 0;
@@ -419,7 +456,81 @@ typedef struct {
 	bool started;
 	int mpg_addr;
 	uint32_t drawn;
+	/*
+	 * Rotating view with the rotatedOnEE diagnostic: sprites go out as
+	 * triangles made by the EE, without VU1.
+	 */
+	bool rotated;
+	float origin_x, origin_y;
+	/* Of the VU program in use: sprites per batch and registers per sprite. */
+	uint32_t batch_max;
+	uint64_t gif_regs;
 } TileRenderState;
+
+/* Sprites converted per call under a rotating view. */
+#define TILEMAP_ROTATED_BATCH 64
+
+/*
+ * Under a rotating view the GS sprites of the VU program cannot turn: each
+ * sprite becomes two triangles drawn through the view by the EE. Depth
+ * (zindex) is not written on this path.
+ */
+static uint32_t tilemap_draw_rotated(GSSURFACE *texture,
+	const AthenaTileSprite *sprites, uint32_t first, uint32_t last,
+	float origin_x, float origin_y)
+{
+	static prim_tex_gouraud_triangle textured[TILEMAP_ROTATED_BATCH * 2];
+	static prim_gouraud_triangle flat[TILEMAP_ROTATED_BATCH * 2];
+	uint32_t drawn = 0;
+	int count = 0;
+	uint32_t i;
+
+	for (i = first; i <= last; i++) {
+		const AthenaTileSprite *s = &sprites[i];
+		float x2 = s->x + s->w, y2 = s->y + s->h;
+		Color color = (Color)(s->r & 0xFF) | ((Color)(s->g & 0xFF) << 8) |
+			((Color)(s->b & 0xFF) << 16) | ((Color)(s->a & 0xFF) << 24);
+
+		if (s->w == 0.0f || s->h == 0.0f)
+			continue;
+		if (texture) {
+			textured[count++] = (prim_tex_gouraud_triangle){
+				s->x, s->y, s->u1, s->v1, color,
+				s->x, y2, s->u1, s->v2, color,
+				x2, s->y, s->u2, s->v1, color,
+			};
+			textured[count++] = (prim_tex_gouraud_triangle){
+				x2, s->y, s->u2, s->v1, color,
+				s->x, y2, s->u1, s->v2, color,
+				x2, y2, s->u2, s->v2, color,
+			};
+		} else {
+			flat[count++] = (prim_gouraud_triangle){
+				s->x, s->y, color, s->x, y2, color, x2, s->y, color,
+			};
+			flat[count++] = (prim_gouraud_triangle){
+				x2, s->y, color, s->x, y2, color, x2, y2, color,
+			};
+		}
+		drawn++;
+		if (count == TILEMAP_ROTATED_BATCH * 2) {
+			if (texture)
+				draw_tex_triangle_gouraud_list(texture, origin_x, origin_y,
+					textured, count);
+			else
+				draw_triangle_gouraud_list(origin_x, origin_y, flat, count);
+			count = 0;
+		}
+	}
+	if (count) {
+		if (texture)
+			draw_tex_triangle_gouraud_list(texture, origin_x, origin_y,
+				textured, count);
+		else
+			draw_triangle_gouraud_list(origin_x, origin_y, flat, count);
+	}
+	return drawn;
+}
 
 /* Queues sprites [first, last] with `material`, unless it must be skipped. */
 static void tilemap_draw_span(TileRenderState *state,
@@ -433,6 +544,27 @@ static void tilemap_draw_span(TileRenderState *state,
 	bool texture_mapping =
 		material->texture_index != ATHENA_TILEMAP_NO_TEXTURE;
 	bool upload_pending = false;
+
+	if (state->rotated) {
+		GSSURFACE *current = NULL;
+
+		if (texture_mapping) {
+			if (textures && material->texture_index >= 0 &&
+				(uint32_t)material->texture_index < texture_count)
+				current = textures[material->texture_index];
+			if (!current)
+				return;
+		}
+		material_alpha = material->has_blend_mode ?
+			material->blend_mode : state->old_alpha;
+		if (material_alpha != state->alpha) {
+			set_screen_param(ALPHA_BLEND_EQUATION, material_alpha);
+			state->alpha = material_alpha;
+		}
+		state->drawn += tilemap_draw_rotated(current, sprites, first, last,
+			state->origin_x, state->origin_y);
+		return;
+	}
 
 	if (texture_mapping) {
 		GSSURFACE *current = NULL;
@@ -465,8 +597,9 @@ static void tilemap_draw_span(TileRenderState *state,
 	}
 
 	while (remaining > 0) {
-		uint32_t count = remaining < tile_diagnostics.batch_size ?
-			remaining : tile_diagnostics.batch_size;
+		uint32_t limit = tile_diagnostics.batch_size < state->batch_max ?
+			tile_diagnostics.batch_size : state->batch_max;
+		uint32_t count = remaining < limit ? remaining : limit;
 		/* Upload marker 5, texture registers 5, batch 4 (+1) quadwords. */
 		owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 15);
 
@@ -483,7 +616,7 @@ static void tilemap_draw_span(TileRenderState *state,
 
 		owl_add_unpack_data_cnt(packet, 0, 1, 1);
 		owl_add_ulong(packet, state->giftags[texture_mapping]);
-		owl_add_ulong(packet, TILEMAP_GIF_REGS);
+		owl_add_ulong(packet, state->gif_regs);
 
 		owl_add_unpack_data_ref(packet, 1,
 			(void *)&sprites[first + drawn], count * 4, 1);
@@ -523,7 +656,12 @@ uint32_t athena_tilemap_render(const AthenaTileMaterial *materials,
 	uint32_t sprite_count, const AthenaTileRange *ranges,
 	uint32_t range_count, float x, float y)
 {
-	float origin[4] __attribute__((aligned(16))) = { x, y, 0.0f, 0.0f };
+	float scale[4] __attribute__((aligned(16)));
+	float origin[4] __attribute__((aligned(16)));
+	float column_y[4] __attribute__((aligned(16)));
+	bool turned;
+	vu_mpg **program;
+	AthenaAffine2D view;
 	AthenaTileRange whole;
 	TileRenderState state;
 	owl_packet *packet;
@@ -543,11 +681,26 @@ uint32_t athena_tilemap_render(const AthenaTileMaterial *materials,
 	if (range_count == 0)
 		return 0;
 	graphics_service_init();
-	if (!tile_program) {
-		tile_program = vu_mpg_load_buffer(
-			embed_vu_code_ptr(VU1Draw2D_TileList),
-			embed_vu_code_size(VU1Draw2D_TileList), VECTOR_UNIT_1, false);
-		if (!tile_program)
+
+	memset(&state, 0, sizeof(state));
+	state.old_alpha = get_screen_param(ALPHA_BLEND_EQUATION);
+	state.alpha = state.old_alpha;
+	/* World position of the sprites' origin. */
+	state.origin_x = x + tile_camera_x;
+	state.origin_y = y + tile_camera_y;
+	turned = athena_view_kind() == ATHENA_VIEW_ROTATED;
+	state.rotated = turned && tile_diagnostics.rotated_on_ee;
+	if (state.rotated)
+		goto spans;
+
+	program = turned ? &tile_program_rotated : &tile_program;
+	if (!*program) {
+		*program = turned ?
+			vu_mpg_load_buffer(embed_vu_code_ptr(VU1Draw2D_TileListRotated),
+				embed_vu_code_size(VU1Draw2D_TileListRotated), VECTOR_UNIT_1, false) :
+			vu_mpg_load_buffer(embed_vu_code_ptr(VU1Draw2D_TileList),
+				embed_vu_code_size(VU1Draw2D_TileList), VECTOR_UNIT_1, false);
+		if (!*program)
 			return 0;
 	}
 
@@ -561,24 +714,59 @@ uint32_t athena_tilemap_render(const AthenaTileMaterial *materials,
 	else
 		SyncDCache((void *)sprites, (void *)(sprites + sprite_count));
 
-	memset(&state, 0, sizeof(state));
-	vu1_set_double_buffer_settings(TILEMAP_VU1_BASE, TILEMAP_VU1_OFFSET);
-	state.mpg_addr = vu_mpg_preload(tile_program, true);
-	state.old_alpha = get_screen_param(ALPHA_BLEND_EQUATION);
-	state.alpha = state.old_alpha;
+	if (turned)
+		vu1_set_double_buffer_settings(TILEMAP_VU1_ROTATED_BASE,
+			TILEMAP_VU1_ROTATED_BUFFER_QWC);
+	else
+		vu1_set_double_buffer_settings(TILEMAP_VU1_BASE, TILEMAP_VU1_OFFSET);
+	state.mpg_addr = vu_mpg_preload(*program, true);
 	state.texture_id = GRAPHICS_BIND_RESIDENT;
-	state.giftags[0] = tilemap_giftag(false);
-	state.giftags[1] = tilemap_giftag(true);
+	state.giftags[0] = tilemap_giftag(false, turned);
+	state.giftags[1] = tilemap_giftag(true, turned);
+	state.batch_max = turned ? TILEMAP_ROTATED_BATCH_SIZE : TILEMAP_BATCH_SIZE;
+	state.gif_regs = turned ? TILEMAP_GIF_REGS_ROTATED : TILEMAP_GIF_REGS;
+
+	athena_view_get(&view);
+	/* The screen position of the origin, plus the GS offset. */
+	origin[0] = view.xx * state.origin_x + view.xy * state.origin_y + view.tx +
+		TILEMAP_GS_ORIGIN;
+	origin[1] = view.yx * state.origin_x + view.yy * state.origin_y + view.ty +
+		TILEMAP_GS_ORIGIN;
+	origin[2] = 0.0f;
+	origin[3] = 0.0f;
 
 	/*
-	 * VU1 static addresses 0..1 now hold the tile camera and origin; other
-	 * renderers that cache constants there must upload them again.
+	 * VU1 static addresses 0..2 now hold the view; other renderers that
+	 * cache constants there must upload them again.
 	 */
 	vu1_invalidate_static_data();
-	packet = owl_query_packet(CHANNEL_VIF1, 3);
-	owl_add_unpack_data_cnt(packet, 0, 2, 0);
-	owl_add_uquad_ptr(packet, (__uint128_t *)tile_camera);
-	owl_add_uquad_ptr(packet, (__uint128_t *)origin);
+	if (turned) {
+		/* The view's columns: what one world unit of x, and of y, moves. */
+		scale[0] = view.xx;
+		scale[1] = view.yx;
+		scale[2] = scale[3] = 0.0f;
+		column_y[0] = view.xy;
+		column_y[1] = view.yy;
+		column_y[2] = column_y[3] = 0.0f;
+		packet = owl_query_packet(CHANNEL_VIF1, 4);
+		owl_add_unpack_data_cnt(packet, 0, 3, 0);
+		owl_add_uquad_ptr(packet, (__uint128_t *)scale);
+		owl_add_uquad_ptr(packet, (__uint128_t *)column_y);
+		owl_add_uquad_ptr(packet, (__uint128_t *)origin);
+	} else {
+		/*
+		 * Without rotation the view is screen = S * world + T: the program
+		 * scales positions and sizes by S and adds the origin.
+		 */
+		scale[0] = scale[2] = view.xx;
+		scale[1] = scale[3] = view.yy;
+		packet = owl_query_packet(CHANNEL_VIF1, 3);
+		owl_add_unpack_data_cnt(packet, 0, 2, 0);
+		owl_add_uquad_ptr(packet, (__uint128_t *)scale);
+		owl_add_uquad_ptr(packet, (__uint128_t *)origin);
+	}
+
+spans:
 
 	/* Ranges ascend, so one pass over the materials serves all of them. */
 	for (r = 0; r < range_count && material < material_count; ++r) {
@@ -614,9 +802,11 @@ uint32_t athena_tilemap_render(const AthenaTileMaterial *materials,
 		}
 	}
 
-	packet = owl_query_packet(CHANNEL_VIF1, 1);
-	owl_add_cnt_tag(packet, 0, owl_vif_code_double(
-		VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+	if (!state.rotated) {
+		packet = owl_query_packet(CHANNEL_VIF1, 1);
+		owl_add_cnt_tag(packet, 0, owl_vif_code_double(
+			VIF_CODE(0, 0, VIF_FLUSH, 0), VIF_CODE(0, 0, VIF_FLUSH, 0)));
+	}
 
 	if (state.alpha != state.old_alpha)
 		set_screen_param(ALPHA_BLEND_EQUATION, state.old_alpha);
