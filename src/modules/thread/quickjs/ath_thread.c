@@ -6,6 +6,7 @@
 #include <ath_gil.h>
 #include <athena/js/job.h>
 #include <athena/thread.h>
+#include "ath_thread.h"
 
 static JSClassID athena_thread_class_id;
 
@@ -410,6 +411,7 @@ static const JSCFunctionListEntry thread_module_funcs[] = {
     JS_CFUNC_DEF("destroy", 1, athena_thread_destroy),
     JS_CFUNC_DEF("list", 0, athena_thread_list),
     JS_CFUNC_DEF("kill", 1, athena_thread_kill),
+    JS_CFUNC_DEF("readFileAsync", 2, athena_thread_read_file_async),
 };
 
 static int athena_thread_module_init(JSContext *ctx, JSModuleDef *m) {

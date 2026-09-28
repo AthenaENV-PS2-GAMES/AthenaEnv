@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-27T22:36:20.791Z",
+  "generatedAt": "2026-09-28T00:43:33.926Z",
   "modules": [
     {
       "id": "archive",
@@ -587,6 +587,30 @@
       "global_alias": "Random",
       "api": {
         "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "scene",
+      "name": "Scene",
+      "description": "Scenes with a lifecycle (enter, update, draw, pause, resume, exit), a stack for pause menus and dialogs, fade transitions, a loading screen, and reference-counted assets loaded in the background (images, sprite sheets, sound effects, music, fonts, JSON), kept while two scenes share them. Written in JavaScript.",
+      "category": "Game",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "draw",
+          "screen",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Scene",
+      "api": {
+        "native": false,
         "quickjs": true
       }
     },

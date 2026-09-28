@@ -49,6 +49,7 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     -o "$OUT/runner" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
     tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
     src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
+    src/modules/thread/native/file_job.c src/modules/thread/quickjs/ath_file_job.c \
     src/modules/memcard/quickjs/ath_memcard.c \
     src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
@@ -65,6 +66,7 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     -o "$OUT/runner_font" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
     tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
     src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
+    src/modules/thread/native/file_job.c src/modules/thread/quickjs/ath_file_job.c \
     src/modules/memcard/quickjs/ath_memcard.c \
     src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
@@ -116,5 +118,7 @@ echo "== tests/camera2d_test.js"
 check "$OUT/runner" tests/camera2d_test.js "Camera2D module test passed"
 echo "== tests/sprite_test.js"
 check "$OUT/runner" tests/sprite_test.js "Sprite module test passed"
+echo "== tests/scene_test.js"
+check "$OUT/runner" tests/scene_test.js "Scene module test passed"
 echo "== tests/memcard_test.js"
 check "$OUT/runner" tests/memcard_test.js "Result: .* 0 failed"

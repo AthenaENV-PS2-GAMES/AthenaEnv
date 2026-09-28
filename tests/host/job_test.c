@@ -2,6 +2,7 @@
 #include "host_runtime.h"
 
 #include "job.c"
+#include "file_job.c"
 
 #define ERR_FAILED (-5)
 #define ERR_CANCELLED (-9)
@@ -126,6 +127,45 @@ int main(void) {
     CHECK(athena_job_wait(job, 5000) && athena_job_state(job, &result) == ATHENA_JOB_DONE && result == 3,
         "queued job ran");
     athena_job_release(job);
+
+    /* Whole-file reads (file_job.c): data with a NUL after it, progress, errors. */
+    {
+        const char *path = "/tmp/athena_file_job_test.bin";
+        FILE *file = fopen(path, "wb");
+        size_t size = 3 * ATHENA_FILE_READ_CHUNK + 17, got, done, total, i;
+        uint8_t *data;
+
+        for (i = 0; file && i < size; i++)
+            fputc((int)(i * 7 & 255), file);
+        if (file)
+            fclose(file);
+        job = athena_file_read_submit(path, 0);
+        CHECK(job && athena_job_wait(job, 5000) &&
+            athena_job_state(job, &result) == ATHENA_JOB_DONE && result == ATHENA_FILE_READ_OK,
+            "file read %d", result);
+        athena_file_read_progress(job, &done, &total);
+        CHECK(done == size && total == size, "file progress %u / %u", (unsigned)done, (unsigned)total);
+        data = athena_file_read_take(job, &got);
+        CHECK(data && got == size && data[size] == 0 && data[5] == 35 && data[size - 1] == (uint8_t)((size - 1) * 7),
+            "file data");
+        CHECK(!athena_file_read_take(job, &got), "data taken once");
+        free(data);
+        athena_job_release(job);
+
+        job = athena_file_read_submit(path, 100);
+        athena_job_wait(job, 5000);
+        CHECK(athena_job_state(job, &result) == ATHENA_JOB_FAILED && result == ATHENA_FILE_READ_TOO_LARGE,
+            "file over max %d", result);
+        athena_job_release(job);
+
+        job = athena_file_read_submit("/tmp/athena_no_such_file", 0);
+        athena_job_wait(job, 5000);
+        CHECK(athena_job_state(job, &result) == ATHENA_JOB_FAILED && result == ATHENA_FILE_READ_OPEN,
+            "missing file %d", result);
+        athena_job_release(job);
+        CHECK(!athena_file_read_submit(NULL, 0), "no path");
+        remove(path);
+    }
 
     /* Stopping the pool: queued jobs cancelled, running ones asked to stop, workers joined. */
     blocker1 = work_new(0, 0, NULL);

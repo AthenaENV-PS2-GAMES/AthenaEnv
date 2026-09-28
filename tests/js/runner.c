@@ -35,6 +35,8 @@ JSModuleDef *athena_sprite_js_init(JSContext *ctx);
 void athena_sprite_js_cleanup(JSContext *ctx);
 /* tests/js/sprite_host.c: Image and TileMap stand-ins for the Sprite binding. */
 void sprite_host_init(JSContext *ctx);
+/* Thread.readFileAsync() (thread/quickjs/ath_file_job.c), without the rest of Thread. */
+JSValue athena_thread_read_file_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 #ifdef RUNNER_REAL_FONT
 /*
  * runner_font: the real Font binding (quickjs/ath_font.c) over the native
@@ -253,6 +255,26 @@ int athena_register_class(JSContext *ctx, JSClassID *class_id, const JSClassDef 
     return JS_NewClass(rt, *class_id, class_def) < 0 ? -1 : 0;
 }
 
+static char *read_file(const char *path, size_t *length);
+
+/* std.loadFile(path): the file's text, or null (Scene.Assets data). */
+static JSValue js_load_file(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    const char *path = argc > 0 ? JS_ToCString(ctx, argv[0]) : NULL;
+    size_t length = 0;
+    char *text;
+    JSValue result;
+
+    if (!path)
+        return JS_EXCEPTION;
+    text = read_file(path, &length);
+    JS_FreeCString(ctx, path);
+    if (!text)
+        return JS_NULL;
+    result = JS_NewStringLen(ctx, text, length);
+    free(text);
+    return result;
+}
+
 static JSValue js_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     for (int i = 0; i < argc; i++) {
         size_t length = 0;
@@ -329,6 +351,7 @@ static const struct {
     { "Tween", "../src/modules/tween/js/tween.js" },
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },
+    { "Scene", "../src/modules/scene/js/scene.js" },
     { "Draw", "../tests/js/stub/Draw.js" },
 #ifndef RUNNER_REAL_FONT
     { "Font", "../tests/js/stub/Font.js" },
@@ -448,7 +471,8 @@ int main(int argc, char **argv) {
         "import * as Camera2D from 'Camera2D'; globalThis.Camera2D = Camera2D;"
         "import * as Image from 'Image'; globalThis.Image = Image.Image;"
         "import * as TileMap from 'TileMap'; globalThis.TileMap = TileMap;"
-        "import * as Sprite from 'Sprite'; globalThis.Sprite = Sprite;";
+        "import * as Sprite from 'Sprite'; globalThis.Sprite = Sprite;"
+        "import * as Scene from 'Scene'; globalThis.Scene = Scene.Scene;";
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, console, std;
@@ -471,6 +495,7 @@ int main(int argc, char **argv) {
     JS_SetPropertyStr(ctx, console, "log", JS_NewCFunction(ctx, js_log, "log", 1));
     JS_SetPropertyStr(ctx, global, "console", console);
     JS_SetPropertyStr(ctx, std, "gc", JS_NewCFunction(ctx, js_gc, "gc", 0));
+    JS_SetPropertyStr(ctx, std, "loadFile", JS_NewCFunction(ctx, js_load_file, "loadFile", 1));
     JS_SetPropertyStr(ctx, global, "std", std);
     JS_SetPropertyStr(ctx, global, "setTimeout", JS_NewCFunction(ctx, js_set_timeout, "setTimeout", 2));
     JS_FreeValue(ctx, global);
@@ -478,6 +503,14 @@ int main(int argc, char **argv) {
     athena_box2d_init(ctx);
     memcard_host_init();
     athena_js_job_class_init(ctx);   /* as the Thread module does */
+    {
+        JSValue thread = JS_NewObject(ctx), global_object = JS_GetGlobalObject(ctx);
+
+        JS_SetPropertyStr(ctx, thread, "readFileAsync",
+            JS_NewCFunction(ctx, athena_thread_read_file_async, "readFileAsync", 2));
+        JS_SetPropertyStr(ctx, global_object, "Thread", thread);
+        JS_FreeValue(ctx, global_object);
+    }
     athena_memcard_init(ctx);
     athena_random_init(ctx);
     athena_noise_init(ctx);

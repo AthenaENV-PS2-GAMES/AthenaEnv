@@ -75,6 +75,36 @@ declare namespace Thread {
 
     /** Force-terminates a native thread by ID. */
     function kill(id: number): number;
+
+    interface ReadFileOptions {
+        /** Decode the file as UTF-8 text and resolve with a string. Default false (ArrayBuffer). */
+        text?: boolean;
+        /** Refuse files larger than this many bytes. Default 16 MiB. */
+        maxBytes?: number;
+    }
+
+    /** `poll()` of a read: bytes read so far and the file's size (0 until known). */
+    interface ReadFileStatus<T> extends AthenaJobStatus<T> {
+        bytesDone: number;
+        bytesTotal: number;
+    }
+
+    /**
+     * Reads a whole file on the shared job pool, in 64 KiB chunks, while
+     * frames keep coming: large data files, or files on slow storage (disc,
+     * USB). Resolves with an ArrayBuffer (no copy of the bytes read), or a
+     * string with `text: true`. Rejects with an error that has `path` when
+     * the file cannot be opened or read, or is larger than `maxBytes`.
+     *
+     * @example
+     * ```js
+     * const level = JSON.parse(await Thread.readFileAsync("levels/1.json", { text: true }));
+     * ```
+     */
+    function readFileAsync(path: string, options: ReadFileOptions & { text: true }):
+        AthenaJob<string, ReadFileStatus<string>>;
+    function readFileAsync(path: string, options?: ReadFileOptions):
+        AthenaJob<ArrayBuffer, ReadFileStatus<ArrayBuffer>>;
 }
 
 /**

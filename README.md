@@ -451,6 +451,48 @@ Loop.run(dt => {                                      // tweens advance by thems
 and `realTime: true` keeps menu animations running while
 `Loop.setTimeScale(0)` pauses the game.
 
+### Game structure
+
+Not in the default build: `node tools/modules.js configure --modules=scene,...`
+
+| Module | Global | Description |
+|---|---|---|
+| [`scene`](src/modules/scene/scene.d.ts) | `Scene` | Scenes with a lifecycle, a stack for pause menus, fade transitions and a loading screen; reference-counted assets (images, sprite sheets, sounds, music, fonts, JSON) loaded in the background and kept while two scenes share them. Written in JavaScript. |
+
+```js
+class Level1 extends Scene {
+    static root = "assets/level1";
+    static assets = {
+        images: { tiles: { path: "tiles.png", upload: "lock" } },
+        sheets: { hero: "hero.json" },
+        sfx:    { jump: "jump.adp" },
+        fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
+    };
+    enter(assets) { this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" }); }
+    update(dt) { if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu); }
+    draw() { this.hero.draw(this.x, this.y); }
+}
+
+Scene.run(Title);                                          // starts the Loop
+// from a scene:
+Scene.go(Level1, { transition: "fade", duration: 0.5 });
+```
+
+`Scene.go()` loads the next scene's assets while the current one fades out,
+and releases only what no other scene holds; a loading screen shows when
+loading outlasts the fade. `Scene.push()`/`pop({ result })` stack scenes
+(`pause()`/`resume(result)`) and `Scene.replace()` swaps only the top one.
+Transitions are `"fade"`, `"wipe"` (with a `direction`), or your own
+(`Scene.defineTransition()`, `{ draw(amount, info) }`). Data files (`data`,
+`text`, `binary`) are read on the job pool with `Thread.readFileAsync()`.
+`Scene.preload(Level)` loads the next scene while the current one runs;
+`Scene.loadTimeout`/`timeout` fail a scene that does not load in time, and
+`Scene.slowLoadWarning` logs which asset is still loading;
+`this.defer(fn)` and `this.acquire(manifest)` tie clean-ups and extra assets
+to a scene's lifetime. `Scene.Assets.stats()` shows what is held (for finding
+VRAM leaks), and `Scene.Assets.define()` adds asset kinds.
+`bin/tests/scene_example.js` shows it all.
+
 ### Physics
 
 Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
