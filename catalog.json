@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-09-28T00:43:33.926Z",
+  "generatedAt": "2026-09-28T13:46:09.106Z",
   "modules": [
     {
       "id": "archive",
@@ -112,6 +112,28 @@
       "api": {
         "native": true,
         "quickjs": false
+      }
+    },
+    {
+      "id": "collision",
+      "name": "Collision",
+      "description": "Light 2D collision and simple physics in C, next to Box2D: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce and moving platforms that carry riders, layers and masks, queries, overlapping pairs and raycasts, stepped by the Loop.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Collision",
+      "api": {
+        "native": true,
+        "quickjs": true
       }
     },
     {

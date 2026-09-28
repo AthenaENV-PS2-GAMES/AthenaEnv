@@ -35,6 +35,8 @@ JSModuleDef *athena_sprite_js_init(JSContext *ctx);
 void athena_sprite_js_cleanup(JSContext *ctx);
 /* tests/js/sprite_host.c: Image and TileMap stand-ins for the Sprite binding. */
 void sprite_host_init(JSContext *ctx);
+JSModuleDef *athena_collision_js_init(JSContext *ctx);
+void athena_collision_js_cleanup(JSContext *ctx);
 /* Thread.readFileAsync() (thread/quickjs/ath_file_job.c), without the rest of Thread. */
 JSValue athena_thread_read_file_async(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv);
 #ifdef RUNNER_REAL_FONT
@@ -472,6 +474,7 @@ int main(int argc, char **argv) {
         "import * as Image from 'Image'; globalThis.Image = Image.Image;"
         "import * as TileMap from 'TileMap'; globalThis.TileMap = TileMap;"
         "import * as Sprite from 'Sprite'; globalThis.Sprite = Sprite;"
+        "import * as Collision from 'Collision'; globalThis.Collision = Collision;"
         "import * as Scene from 'Scene'; globalThis.Scene = Scene.Scene;";
     JSRuntime *rt;
     JSContext *ctx;
@@ -518,6 +521,7 @@ int main(int argc, char **argv) {
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);
+    athena_collision_js_init(ctx);
     global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__view", JS_NewCFunction(ctx, js_view, "__view", 0));
     JS_SetPropertyStr(ctx, global, "__setScreen", JS_NewCFunction(ctx, js_set_screen, "__setScreen", 2));
@@ -547,6 +551,7 @@ int main(int argc, char **argv) {
         ret = -1;
 
     athena_box2d_cleanup(ctx);
+    athena_collision_js_cleanup(ctx);
     athena_sprite_js_cleanup(ctx);
     athena_camera2d_js_cleanup(ctx);
     JS_FreeContext(ctx);

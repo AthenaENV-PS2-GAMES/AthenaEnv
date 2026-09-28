@@ -42,6 +42,8 @@ $CC $CFLAGS -Isrc/modules/graphics/include -Isrc/modules/camera2d/include \
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/image/include -Isrc/modules/tilemap/include \
     -Isrc/modules/graphics/include -Isrc/modules/sprite/include -o "$OUT/sprite_test" tests/host/sprite_test.c \
     src/modules/sprite/native/sprite.c -lm
+$CC $CFLAGS -Isrc/modules/collision/include -o "$OUT/collision_test" tests/host/collision_test.c \
+    src/modules/collision/native/collision.c -lm
 # Box2D: the vendored library keeps upstream warnings (-w), the AthenaEnv
 # helpers and the test use the flags above. Both run under UBSan.
 B2=src/modules/box2d
@@ -66,6 +68,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/debug_overlay_test"
 "$OUT/camera2d_test"
 "$OUT/sprite_test"
+"$OUT/collision_test"
 "$OUT/box2d_test"
 
 # VU microprograms: each committed .vsm must be what OpenVCL makes of its

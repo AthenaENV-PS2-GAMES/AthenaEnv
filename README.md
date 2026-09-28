@@ -495,12 +495,52 @@ VRAM leaks), and `Scene.Assets.define()` adds asset kinds.
 
 ### Physics
 
-Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md).
-
 | Module | Global | Description |
 |---|---|---|
-| [`box2d`](src/modules/box2d/box2d.d.ts) | `Box2D` | Box2D 3.2: worlds, bodies, five shape types, chains, seven joint types, ray and shape casts, overlap queries, character movers, events and snapshots. |
-| [`box2ddraw`](src/modules/box2ddraw/box2ddraw.d.ts) | `Box2DDraw` | Debug drawing of a Box2D world. |
+| [`collision`](src/modules/collision/collision.d.ts) | `Collision` | Light collision and simple physics in C: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce, moving platforms that carry riders, layers and masks, queries, pairs and raycasts. |
+| [`box2d`](src/modules/box2d/box2d.d.ts) | `Box2D` | Box2D 3.2: worlds, bodies, five shape types, chains, seven joint types, ray and shape casts, overlap queries, character movers, events and snapshots. Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md). |
+| [`box2ddraw`](src/modules/box2ddraw/box2ddraw.d.ts) | `Box2DDraw` | Debug drawing of a Box2D world. Not in the default build. |
+
+`Collision` is for platformers, top-down games and shooters that want
+predictable, tile-friendly movement; Box2D is for rigid bodies, joints and
+polygons. Worlds step themselves with the Loop, before the game's `update`.
+
+```js
+const SOLID = 1, PLAYER = 2, COIN = 4;
+const world = new Collision.World({ gravity: { x: 0, y: 900 } });
+world.setGrid({
+    columns: 40, rows: 15, tileWidth: 16, tileHeight: 16,
+    tiles: levelIds,                                   // the ids given to TileMap
+    solid: [1, 2, 3], oneWay: [4], slopes: { 5: "45r", 6: "45l" },
+});
+const player = world.add({ type: "dynamic", x: 32, y: 32, w: 12, h: 24,
+    layer: PLAYER, mask: SOLID | COIN });
+const lift = world.add({ type: "kinematic", x: 200, y: 160, w: 48, h: 8 });
+Tween.to(lift, { x: 320 }, 2, { yoyo: true, repeat: Infinity });   // carries the player
+world.add({ x: 300, y: 100, r: 6, sensor: true, layer: COIN });
+world.onEnter = (sensor, body) => { if (sensor.layer === COIN) sensor.remove(); };
+const pad = Gamepad.player(0);
+
+Loop.run({
+    update() {
+        Gamepad.update();
+        player.vx = pad.pressed(Gamepad.RIGHT) ? 120 : pad.pressed(Gamepad.LEFT) ? -120 : 0;
+        if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = -330;
+    },
+    draw() { world.drawDebug(); },                    // outlines, through the camera
+});
+```
+
+`world.move(body, dx, dy)` moves any body with collisions, like a character
+controller, and tells what stopped it (pass a result object to reuse it and
+allocate nothing); `world.raycast()`, `query()`, `overlapping()` and
+`solidAt()` answer line-of-sight, area and "is there floor ahead?" questions
+without a loop over every body in JavaScript. Sensors report
+`world.onEnter(sensor, body)` and `onExit()` for pickups and triggers.
+Kinematic bodies moved by setting `x`/`y` (a `Tween`, a path) carry their
+riders and push what is in their way; a body caught against a wall is
+`crushed`. `bin/tests/collision_example.js` is a playable
+level, and `samples/native/collision` the same from C.
 
 ### Math
 

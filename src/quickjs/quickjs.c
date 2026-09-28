@@ -42027,7 +42027,11 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
                                        BOOL *pdone, int magic)
 {
     JSArrayIteratorData *it;
-    uint32_t idx, c, start;
+    /* int, not uint32_t: string_getc() takes an int *, and on the EE
+       uint32_t is unsigned long; through a cast, GCC drops the store of idx
+       (strict aliasing) and string_getc() reads garbage. */
+    int idx;
+    uint32_t c, start;
     JSString *p;
 
     it = JS_GetOpaque2(ctx, this_val, JS_CLASS_STRING_ITERATOR);
@@ -42039,7 +42043,7 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
         goto done;
     p = JS_VALUE_GET_STRING(it->obj);
     idx = it->idx;
-    if (idx >= p->len) {
+    if (idx >= (int)p->len) {
         JS_FreeValue(ctx, it->obj);
         it->obj = JS_UNDEFINED;
     done:
@@ -42048,7 +42052,7 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
     }
 
     start = idx;
-    c = string_getc(p, (int *)&idx);
+    c = string_getc(p, &idx);
     it->idx = idx;
     *pdone = FALSE;
     if (c <= 0xffff) {

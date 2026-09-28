@@ -18,7 +18,8 @@ INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/includ
     -Isrc/modules/random/include -Isrc/modules/noise/include \
     -Isrc/modules/debug/include -Isrc/modules/color/include \
     -Isrc/modules/graphics/include -Isrc/modules/camera2d/include -Isrc/modules/loop/include \
-    -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include"
+    -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include \
+    -Isrc/modules/collision/include"
 # Camera2D and the math of the 2D view, with the C side of Loop systems; the
 # GS side of the view (clip rectangle) is stubbed in runner.c.
 CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camera2d_gs.c \
@@ -28,6 +29,9 @@ CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camer
 SPRITE="src/modules/sprite/native/sprite.c src/modules/sprite/native/sprite_gs.c \
     src/modules/sprite/native/sprite_job.c \
     src/modules/sprite/quickjs/ath_sprite.c tests/js/sprite_host.c"
+# Collision; its debug drawing goes to the Draw stubs of runner.c.
+COLLISION="src/modules/collision/native/collision.c src/modules/collision/native/collision_gs.c \
+    src/modules/collision/quickjs/ath_collision.c"
 # The EE has no SIMD for Box2D: build the same scalar path.
 B2FLAGS="-DBOX2D_DISABLE_SIMD -DB2_ENABLE_ASSERT"
 
@@ -55,7 +59,7 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION \
     "$OUT"/obj/*.o -lm -lpthread
 
 # runner_font: the same runner with the real Font binding (over the native
@@ -72,7 +76,7 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION \
     src/modules/font/quickjs/ath_font.c tests/js/font_host.c \
     "$OUT"/obj/*.o -lm -lpthread
 
@@ -118,6 +122,8 @@ echo "== tests/camera2d_test.js"
 check "$OUT/runner" tests/camera2d_test.js "Camera2D module test passed"
 echo "== tests/sprite_test.js"
 check "$OUT/runner" tests/sprite_test.js "Sprite module test passed"
+echo "== tests/collision_test.js"
+check "$OUT/runner" tests/collision_test.js "Collision module test passed"
 echo "== tests/scene_test.js"
 check "$OUT/runner" tests/scene_test.js "Scene module test passed"
 echo "== tests/memcard_test.js"

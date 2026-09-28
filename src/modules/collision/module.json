@@ -1,0 +1,31 @@
+{
+  "id": "collision",
+  "name": "Collision",
+  "description": "Light 2D collision and simple physics in C, next to Box2D: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce and moving platforms that carry riders, layers and masks, queries, overlapping pairs and raycasts, stepped by the Loop.",
+  "category": "Physics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/collision.c",
+    "native/collision_gs.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "loop"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "cleanup_func": "athena_collision_js_cleanup",
+    "sources": [
+      "quickjs/ath_collision.c"
+    ],
+    "module_name": "Collision",
+    "global_alias": "Collision",
+    "init_func": "athena_collision_js_init"
+  },
+  "types": "collision.d.ts"
+}
