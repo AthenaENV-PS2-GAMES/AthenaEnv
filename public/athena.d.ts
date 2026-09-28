@@ -4534,9 +4534,10 @@ declare class Scene<A = any, P = any> {
     defer<F extends () => void>(fn: F): F;
     /**
      * More assets while the scene runs (the next area of a level): a group,
-     * released when the scene leaves. Paths are relative to the class's root.
+     * released when the scene leaves. Paths are relative to the class's root
+     * unless `options` gives another (a string is the root).
      */
-    acquire(manifest: Scene.Manifest, root?: string): Scene.AssetGroup;
+    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
 
     /**
      * The assets this scene needs: a manifest, or a function of the params
@@ -4615,6 +4616,18 @@ declare class Scene<A = any, P = any> {
     /** Seconds a loading screen that showed stays at least. Default 0.3. */
     static minLoadingTime: number;
     /**
+     * Seconds of loading after which the scene's pending assets are logged
+     * once, each named: the file that hangs. Default 10; 0 never.
+     */
+    static slowLoadWarning: number;
+    /**
+     * Seconds after which a scene that has not loaded fails like a missing
+     * file (`onError`, or thrown from the next update) with a
+     * `Scene.TimeoutError` listing what was still loading. `timeout` in
+     * the request's options overrides it. Default 0: never.
+     */
+    static loadTimeout: number;
+    /**
      * Called when a scene cannot load (a missing file): the current scene
      * stays. The error names the request and scene (`"Scene.go(Level1):
      * cannot load image 'x.png'"`), with the original as `cause`. Without
@@ -4647,6 +4660,8 @@ declare namespace Scene {
      * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
      *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
      *   (`data` and `text` fall back to `std.loadFile()` without Thread).
+     *   JSON is parsed on the script thread (objects can only be built
+     *   there): keep data files small, or split a large level.
      * `Scene.Assets.define()` adds kinds.
      */
     interface Manifest {
@@ -4689,7 +4704,12 @@ declare namespace Scene {
         direction?: "left" | "right" | "up" | "down";
     }
 
-    interface GoOptions extends TransitionOptions {
+    interface RequestOptions {
+        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
+        timeout?: number;
+    }
+
+    interface GoOptions extends TransitionOptions, RequestOptions {
         /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
         params?: any;
         /**
@@ -4699,7 +4719,7 @@ declare namespace Scene {
         unloadFirst?: boolean;
     }
 
-    interface PushOptions extends TransitionOptions {
+    interface PushOptions extends TransitionOptions, RequestOptions {
         params?: any;
         /** The scenes below keep being drawn. Default true. */
         drawBelow?: boolean;
@@ -4718,8 +4738,28 @@ declare namespace Scene {
         total: number;
     }
 
+    interface LoadOptions {
+        /** Directory the paths are relative to. */
+        root?: string;
+        /**
+         * Seconds to wait: past it the group fails (or `load()` rejects) with
+         * a `TimeoutError`. The loads themselves go on, and are freed when
+         * they end if nobody holds them.
+         */
+        timeout?: number;
+    }
+
+    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
+    interface TimeoutError extends Error {
+        code: "TIMEOUT";
+        /** What was still loading. */
+        pending: { kind: string; name: string; path: string; state: string }[];
+    }
+
     /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
     interface AssetGroup {
+        /** What is still loading. */
+        pending(): { kind: string; name: string; path: string; state: string }[];
         /** The manifest's names with the loaded values. */
         readonly assets: any;
         readonly loaded: number;
@@ -4758,10 +4798,10 @@ declare namespace Scene {
          * thread (and its stack) closes; it opens again when needed. Default 5.
          */
         let imageListIdleTime: number;
-        /** Acquires every asset of a manifest; release the group when done. */
-        function acquire(manifest: Manifest, root?: string): AssetGroup;
-        /** One asset; release it with `release(asset)`. */
-        function load<T = any>(kind: string, spec: Spec<any>, root?: string): Promise<T>;
+        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
+        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
+        /** One asset; release it with `release(asset)`. A string option is the root. */
+        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
         /**
          * Releases one hold of an asset from `load()`; false if it is not
          * held. A load released before it ends keeps running and is reused if
