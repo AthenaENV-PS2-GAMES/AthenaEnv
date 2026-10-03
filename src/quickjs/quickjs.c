@@ -9796,6 +9796,20 @@ void JS_SetOpaque(JSValue obj, void *opaque)
 }
 
 /* return NULL if not an object of class class_id */
+JSClassID JS_GetClassID(JSValueConst obj)
+{
+    if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
+        return 0;
+    return JS_VALUE_GET_OBJ(obj)->class_id;
+}
+
+int JS_IsSharedArrayBuffer(JSValueConst obj)
+{
+    return JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT &&
+        JS_VALUE_GET_OBJ(obj)->class_id == JS_CLASS_SHARED_ARRAY_BUFFER;
+}
+
+/* return NULL if not an object of class class_id */
 void *JS_GetOpaque(JSValueConst obj, JSClassID class_id)
 {
     JSObject *p;

@@ -18,6 +18,7 @@ void ath_matrix4_copy(AthenaMatrix4 *out, const AthenaMatrix4 *in) {
 void ath_matrix4_multiply(AthenaMatrix4 *out, const AthenaMatrix4 *a,
     const AthenaMatrix4 *b) {
     AthenaMatrix4 result;
+#if defined(__mips__)
     __asm__ __volatile__(
         "lqc2 $vf1, 0x00(%1)\n"
         "lqc2 $vf2, 0x10(%1)\n"
@@ -47,12 +48,21 @@ void ath_matrix4_multiply(AthenaMatrix4 *out, const AthenaMatrix4 *a,
         "sqc2 $vf2, 0x10(%0)\n"
         "sqc2 $vf3, 0x20(%0)\n"
         "sqc2 $vf4, 0x30(%0)\n"
-        : : "r"(&result), "r"(a), "r"(b) : "memory");
+        : : "r"(&result), "r"(b), "r"(a) : "memory");
+#else
+    for (int column=0; column<4; column++)
+        for (int row=0; row<4; row++) {
+            float value=0;
+            for(int k=0;k<4;k++) value += a->value[k*4+row]*b->value[column*4+k];
+            result.value[column*4+row]=value;
+        }
+#endif
     *out = result;
 }
 
 void ath_matrix4_apply(AthenaVector4 *out, const AthenaMatrix4 *matrix,
     const AthenaVector4 *vector) {
+#if defined(__mips__)
     __asm__ __volatile__(
         "lqc2 $vf4, 0x00(%1)\n"
         "lqc2 $vf5, 0x10(%1)\n"
@@ -65,6 +75,14 @@ void ath_matrix4_apply(AthenaVector4 *out, const AthenaMatrix4 *matrix,
         "vmaddw.xyzw $vf9, $vf7, $vf8\n"
         "sqc2 $vf9, 0x00(%0)\n"
         : : "r"(out), "r"(matrix), "r"(vector) : "memory");
+#else
+    float input[4]={vector->x,vector->y,vector->z,vector->w}, result[4];
+    for(int row=0;row<4;row++) {
+        result[row]=0;
+        for(int k=0;k<4;k++) result[row] += matrix->value[k*4+row]*input[k];
+    }
+    *out=(AthenaVector4){result[0],result[1],result[2],result[3]};
+#endif
 }
 
 void ath_matrix4_transpose(AthenaMatrix4 *out, const AthenaMatrix4 *in) {
@@ -177,7 +195,7 @@ int ath_matrix4_equals(const AthenaMatrix4 *a, const AthenaMatrix4 *b) {
 
 int ath_matrix4_equals_epsilon(const AthenaMatrix4 *a,
     const AthenaMatrix4 *b, float epsilon) {
-    if (epsilon < 0.0f) return 0;
+    if (!isfinite(epsilon) || epsilon < 0.0f) return 0;
     for (int i = 0; i < 16; i++)
         if (fabsf(a->value[i] - b->value[i]) > epsilon) return 0;
     return 1;

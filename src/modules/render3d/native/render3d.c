@@ -1,0 +1,33 @@
+#include <stdlib.h>
+#include <string.h>
+#include <athena/render3d.h>
+struct AthenaBatch3D { AthenaInstance3D **items; uint32_t count,capacity; };
+AthenaBatch3D *athena_batch3d_create(void) { return calloc(1,sizeof(AthenaBatch3D)); }
+void athena_batch3d_clear(AthenaBatch3D *b) {
+    if(!b) return;
+    for(uint32_t i=0;i<b->count;i++) athena_instance3d_release(b->items[i]);
+    b->count=0;
+}
+void athena_batch3d_destroy(AthenaBatch3D *b) {
+    if(!b) return;
+    athena_batch3d_clear(b); free(b->items); free(b);
+}
+int athena_batch3d_add(AthenaBatch3D *b,AthenaInstance3D *i) {
+    if(!b||!i||b->count>=ATHENA_MODEL3D_MAX_VERTICES) return -1;
+    if(b->count==b->capacity) {
+        uint32_t next=b->capacity?b->capacity*2:16;
+        void *items=realloc(b->items,next*sizeof(*b->items)); if(!items) return -2;
+        b->items=items; b->capacity=next;
+    }
+    b->items[b->count++]=i; athena_instance3d_retain(i); return 0;
+}
+uint32_t athena_batch3d_size(const AthenaBatch3D *b) { return b?b->count:0; }
+int athena_batch3d_draw(AthenaBatch3D *b,AthenaCamera3D *c,AthenaRender3DCull cull,AthenaRender3DStats *s) {
+    if(!b||!c||!s||(cull!=0&&cull!=1&&cull!=-1)) return -1;
+    memset(s,0,sizeof(*s));
+    for(uint32_t n=0;n<b->count;n++) {
+        int result=athena_render3d_draw(b->items[n],c,cull,s);
+        if(result<0) return result;
+    }
+    return 0;
+}

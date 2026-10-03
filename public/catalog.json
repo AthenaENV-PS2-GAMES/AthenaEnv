@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-03T15:42:06.746Z",
+  "generatedAt": "2026-10-03T19:15:04.993Z",
   "modules": [
     {
       "id": "archive",
@@ -88,6 +88,27 @@
         "ee_libs": []
       },
       "global_alias": "Camera2D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "camera3d",
+      "name": "Camera3D",
+      "description": "Independent 3D cameras, validated right-handed projection, reusable matrix outputs and native frustum tests.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "matrix4"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Camera3D",
       "api": {
         "native": true,
         "quickjs": true
@@ -508,6 +529,27 @@
       }
     },
     {
+      "id": "model3d",
+      "name": "Model3D",
+      "description": "Immutable copied triangle meshes, compact colors and independent reference-counted instances. Static OBJ/glTF geometry with explicit unsupported-feature errors.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "quaternion"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Model3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "mutex",
       "name": "Mutex",
       "description": "Binary mutual-exclusion primitives backed by EE semaphores.",
@@ -594,6 +636,27 @@
       }
     },
     {
+      "id": "quaternion",
+      "name": "Quaternion",
+      "description": "Owned xyzw quaternions, shortest-path slerp and right-handed TRS in native code.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "matrix4"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Quaternion",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "random",
       "name": "Random",
       "description": "Seedable random generators (xoshiro128**): integers, floats, booleans, gaussian, pick, shuffle, weighted choice and savable state.",
@@ -607,6 +670,29 @@
         "ee_libs": []
       },
       "global_alias": "Random",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "render3d",
+      "name": "Render3D",
+      "description": "Experimental opaque color renderer with precise native clipping, VU1 interior path, retained batches and inline DMA geometry.",
+      "category": "Graphics",
+      "version": "1.1.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "model3d",
+          "camera3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Render3D",
       "api": {
         "native": true,
         "quickjs": true

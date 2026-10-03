@@ -80,6 +80,14 @@ owl_packet *owl_query_packet(owl_channel channel, size_t size);
 // flush a requested packet
 void owl_flush_packet();
 
+/* Tickets cover the shared owl stream, not standalone owl_send_packet().
+ * A ticket identifies the currently authored chain. Wait flushes it if needed
+ * and drains every DMA channel that may still read referenced memory through
+ * that ticket. Main thread only. This is DMA-read completion, not GS finish. */
+uint64_t owl_flush_generation(void);
+int owl_generation_read(uint64_t generation);
+void owl_wait_generation(uint64_t generation);
+
 owl_controller *owl_get_controller();
 
 void vu1_set_double_buffer_settings(uint32_t base, uint32_t offset);

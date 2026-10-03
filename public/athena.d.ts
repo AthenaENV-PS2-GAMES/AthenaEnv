@@ -2155,6 +2155,191 @@ declare namespace Camera2D {
 }
 
 
+/* === Module: Vector (vector) === */
+/**
+ * PS2-aligned vector types.
+ *
+ * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
+ * by the `Vector` module. Arithmetic methods return new vectors and do not
+ * mutate their operands. `div()` rejects zero components.
+ *
+ * Example:
+ * ```js
+ * import * as Vector from 'Vector';
+ * const direction = new Vector.Vector3(3, 4, 0);
+ * console.log(direction.norm());
+ * const right = direction.cross(new Vector.Vector3(0, 0, 1));
+ * ```
+ */
+declare class Vector2 {
+    /** Creates a two-component vector. */
+    constructor(x: number, y: number);
+    /** Horizontal component. */
+    x: number;
+    /** Vertical component. */
+    y: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector2): number;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector2): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector2): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector2): Vector2;
+    /** Returns the component-wise difference. */
+    sub(value: Vector2): Vector2;
+    /** Returns the component-wise product. */
+    mul(value: Vector2): Vector2;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector2): Vector2;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector3 {
+    /** Creates a three-component vector. */
+    constructor(x: number, y: number, z: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector3): number;
+    /** Returns the 3D cross product. */
+    cross(value: Vector3): Vector3;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector3): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector3): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector3): Vector3;
+    /** Returns the component-wise difference. */
+    sub(value: Vector3): Vector3;
+    /** Returns the component-wise product. */
+    mul(value: Vector3): Vector3;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector3): Vector3;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector4 {
+    /** Creates a homogeneous four-component vector. */
+    constructor(x: number, y: number, z: number, w: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Homogeneous component: commonly 1 for points and 0 for directions. */
+    w: number;
+    /** Returns four-dimensional Euclidean length. */
+    norm(): number;
+    /** Returns the four-component dot product. */
+    dot(value: Vector4): number;
+    /** Returns the cross product with homogeneous component cleared. */
+    cross(value: Vector4): Vector4;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector4): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector4): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector4): Vector4;
+    /** Returns the component-wise difference. */
+    sub(value: Vector4): Vector4;
+    /** Returns the component-wise product. */
+    mul(value: Vector4): Vector4;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector4): Vector4;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+
+/* === Module: Matrix4 (matrix4) === */
+/**
+ * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
+ *
+ * Values are stored in column-major order. Translation components are at
+ * indices 12, 13 and 14; index 15 is the homogeneous component.
+ *
+ * Example:
+ * ```js
+ * const transform = new Matrix4();
+ * transform.set(12, 10).set(13, 20).set(14, 30);
+ * const inverse = transform.clone().invert();
+ * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
+ * ```
+ */
+declare class Matrix4 {
+    /** Creates identity matrix, or initializes all 16 values when supplied. */
+    constructor();
+    constructor(
+        m00: number, m01: number, m02: number, m03: number,
+        m10: number, m11: number, m12: number, m13: number,
+        m20: number, m21: number, m22: number, m23: number,
+        m30: number, m31: number, m32: number, m33: number
+    );
+    /** Number of scalar components in the matrix. */
+    readonly length: 16;
+    /** Reads a scalar component at index 0..15. */
+    get(index: number): number;
+    /** Writes a scalar component at index 0..15 and returns this matrix. */
+    set(index: number, value: number): this;
+    /** Compares all 16 components exactly. */
+    equals(value: Matrix4): boolean;
+    /** Compares all components using an absolute epsilon tolerance. */
+    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
+    /** Returns the 16 components as a new array. */
+    toArray(): number[];
+    /** Copies 16 values from an array-like object into this matrix. */
+    fromArray(values: ArrayLike<number>): this;
+    /** Returns an independent copy of this matrix. */
+    clone(): Matrix4;
+    /** Copies another matrix into this matrix. */
+    copy(value: Matrix4): this;
+    /** Returns this * value (column vectors); neither operand is mutated. */
+    multiply(value: Matrix4): Matrix4;
+    /** Replaces this matrix with identity. */
+    identity(): this;
+    /** Transposes this matrix in place. */
+    transpose(): this;
+    /** Inverts this matrix in place; throws for a singular matrix. */
+    invert(): this;
+    /** Returns a readable 16-value representation. */
+    toString(): string;
+}
+
+
+/* === Module: Camera3D (camera3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=camera3d,... */
+/** Independent cameras; right-handed, facing -Z. Projection has reversed depth.
+ * Matrix getters return an owned snapshot, or overwrite and return out. */
+declare namespace Camera3D {
+    interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
+    class Camera {
+        /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
+        constructor(options?: Projection);
+        setProjection(options: Projection): this;
+        setPosition(x: number, y: number, z: number): this;
+        lookAt(x: number, y: number, z: number): this;
+        setUp(x: number, y: number, z: number): this;
+        getView(out?: Matrix4): Matrix4;
+        getProjection(out?: Matrix4): Matrix4;
+        getViewProjection(out?: Matrix4): Matrix4;
+        /** Idempotent; other operations reject a disposed camera. */
+        dispose(): void;
+    }
+}
+
+
 /* === Module: Collision (collision) === */
 /**
  * Light 2D collision and simple physics, in C. For platformers, top-down
@@ -4032,169 +4217,6 @@ declare namespace IOP {
 }
 
 
-/* === Module: Vector (vector) === */
-/**
- * PS2-aligned vector types.
- *
- * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
- * by the `Vector` module. Arithmetic methods return new vectors and do not
- * mutate their operands. `div()` rejects zero components.
- *
- * Example:
- * ```js
- * import * as Vector from 'Vector';
- * const direction = new Vector.Vector3(3, 4, 0);
- * console.log(direction.norm());
- * const right = direction.cross(new Vector.Vector3(0, 0, 1));
- * ```
- */
-declare class Vector2 {
-    /** Creates a two-component vector. */
-    constructor(x: number, y: number);
-    /** Horizontal component. */
-    x: number;
-    /** Vertical component. */
-    y: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector2): number;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector2): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector2): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector2): Vector2;
-    /** Returns the component-wise difference. */
-    sub(value: Vector2): Vector2;
-    /** Returns the component-wise product. */
-    mul(value: Vector2): Vector2;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector2): Vector2;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector3 {
-    /** Creates a three-component vector. */
-    constructor(x: number, y: number, z: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector3): number;
-    /** Returns the 3D cross product. */
-    cross(value: Vector3): Vector3;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector3): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector3): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector3): Vector3;
-    /** Returns the component-wise difference. */
-    sub(value: Vector3): Vector3;
-    /** Returns the component-wise product. */
-    mul(value: Vector3): Vector3;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector3): Vector3;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector4 {
-    /** Creates a homogeneous four-component vector. */
-    constructor(x: number, y: number, z: number, w: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Homogeneous component: commonly 1 for points and 0 for directions. */
-    w: number;
-    /** Returns four-dimensional Euclidean length. */
-    norm(): number;
-    /** Returns the four-component dot product. */
-    dot(value: Vector4): number;
-    /** Returns the cross product with homogeneous component cleared. */
-    cross(value: Vector4): Vector4;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector4): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector4): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector4): Vector4;
-    /** Returns the component-wise difference. */
-    sub(value: Vector4): Vector4;
-    /** Returns the component-wise product. */
-    mul(value: Vector4): Vector4;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector4): Vector4;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-
-/* === Module: Matrix4 (matrix4) === */
-/**
- * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
- *
- * Values are stored in column-major order. Translation components are at
- * indices 12, 13 and 14; index 15 is the homogeneous component.
- *
- * Example:
- * ```js
- * const transform = new Matrix4();
- * transform.set(12, 10).set(13, 20).set(14, 30);
- * const inverse = transform.clone().invert();
- * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
- * ```
- */
-declare class Matrix4 {
-    /** Creates identity matrix, or initializes all 16 values when supplied. */
-    constructor();
-    constructor(
-        m00: number, m01: number, m02: number, m03: number,
-        m10: number, m11: number, m12: number, m13: number,
-        m20: number, m21: number, m22: number, m23: number,
-        m30: number, m31: number, m32: number, m33: number
-    );
-    /** Number of scalar components in the matrix. */
-    readonly length: 16;
-    /** Reads a scalar component at index 0..15. */
-    get(index: number): number;
-    /** Writes a scalar component at index 0..15 and returns this matrix. */
-    set(index: number, value: number): this;
-    /** Compares all 16 components exactly. */
-    equals(value: Matrix4): boolean;
-    /** Compares all components using an absolute epsilon tolerance. */
-    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
-    /** Returns the 16 components as a new array. */
-    toArray(): number[];
-    /** Copies 16 values from an array-like object into this matrix. */
-    fromArray(values: ArrayLike<number>): this;
-    /** Returns an independent copy of this matrix. */
-    clone(): Matrix4;
-    /** Copies another matrix into this matrix. */
-    copy(value: Matrix4): this;
-    /** Returns the product of this matrix and `value`. */
-    multiply(value: Matrix4): Matrix4;
-    /** Replaces this matrix with identity. */
-    identity(): this;
-    /** Transposes this matrix in place. */
-    transpose(): this;
-    /** Inverts this matrix in place; throws for a singular matrix. */
-    invert(): this;
-    /** Returns a readable 16-value representation. */
-    toString(): string;
-}
-
-
 /* === Module: Memory Card (memcard) === */
 /**
  * Memory Card access on mc0: (port 0) and mc1: (port 1).
@@ -4529,6 +4551,59 @@ declare namespace MemoryCard {
 }
 
 
+/* === Module: Quaternion (quaternion) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=quaternion,... */
+/** Right-handed, normalized xyzw rotation. Angles are radians.
+ * Mutating methods return this; operands are unchanged; dispose is idempotent. */
+declare namespace Quaternion {
+    class Quaternion {
+        constructor();
+        constructor(x: number, y: number, z: number, w: number);
+        setAxisAngle(x: number, y: number, z: number, radians: number): this;
+        /** Sets this = this * other. */
+        multiply(other: Quaternion): this;
+        /** Shortest path toward other, t in [0,1]. */
+        slerp(other: Quaternion, t: number): this;
+        /** Independent snapshot. */
+        toArray(): [number, number, number, number];
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Model3D (model3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=model3d,... */
+/** Stage 1: immutable static triangle meshes with colors; native resources are retained by instances/batches.
+ * Geometry is copied. No mutation/freeze, textures, skins or async loader in this stage. */
+declare namespace Model3D {
+    const MAX_VERTICES: number;
+    interface Geometry { positions: Float32Array; colors?: Float32Array; indices?: Uint32Array; }
+    class Mesh {
+        private constructor();
+        /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
+        static fromGeometry(geometry: Geometry): Mesh;
+        /** Expanded triangle vertex count, at most MAX_VERTICES. */
+        readonly vertexCount: number;
+        createInstance(): Instance;
+        /** Drops this handle; existing instances retain the native mesh. */
+        dispose(): void;
+    }
+    class Instance {
+        private constructor();
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Owned snapshot, or fills and returns out; never a borrowed matrix. */
+        getTransform(out?: Matrix4): Matrix4;
+        dispose(): void;
+    }
+    /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset. */
+    function load(path: string): Mesh;
+}
+
+
 /* === Module: Random (random) === */
 /**
  * Seedable pseudo-random numbers (xoshiro128**, computed in C).
@@ -4837,6 +4912,38 @@ declare namespace Noise {
      */
     function toTiles(out: Uint16Array, values: Float32Array,
         thresholds: number[] | Float32Array, tiles: number[] | Uint16Array): Uint16Array;
+}
+
+
+/* === Module: Render3D (render3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=render3d,... */
+/** Native opaque color triangles with precise homogeneous clipping in C for
+ * objects crossing the frustum; VU1 transforms fully contained objects.
+ * Draw never advances animation/physics. Enable Screen zbuffering. */
+declare namespace Render3D {
+    const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
+    type CullMode = 0 | 1 | -1;
+    interface Stats {
+        submittedObjects: number; culledObjects: number; drawPasses: number;
+        /** Triangle list sent to VU1 after native clipping; not rasterized count. */
+        triangles: number; vuBatches: number;
+        /** Source triangles of objects retained by AABB culling. */
+        sourceTriangles: number;
+        /** Source triangles partially clipped and producing visible polygons. */
+        clippedTriangles: number;
+        /** Source triangles rejected by precise clipping. */
+        rejectedTriangles: number;
+    }
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode): Stats;
+    class Batch {
+        constructor();
+        readonly size: number;
+        /** Retains the native instance, independently of its JS handle. */
+        add(instance: Model3D.Instance): this;
+        clear(): this;
+        draw(camera: Camera3D.Camera, cullMode?: CullMode): Stats;
+        dispose(): void;
+    }
 }
 
 

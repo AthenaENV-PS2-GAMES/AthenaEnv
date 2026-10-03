@@ -1,0 +1,8 @@
+{
+  "id": "camera3d", "name": "Camera3D", "description": "Independent 3D cameras, validated right-handed projection, reusable matrix outputs and native frustum tests.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/camera3d.c"],
+  "dependencies": {"modules": ["matrix4"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_camera3d.c"], "module_name": "Camera3D", "global_alias": "Camera3D", "init_func": "athena_camera3d_js_init"},
+  "types": "camera3d.d.ts"
+}

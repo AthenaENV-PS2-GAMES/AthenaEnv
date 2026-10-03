@@ -27,6 +27,11 @@ JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
 JSModuleDef *athena_memcard_init(JSContext *ctx);
 JSModuleDef *athena_random_init(JSContext *ctx);
+JSModuleDef *athena_matrix4_init(JSContext *ctx);
+JSModuleDef *athena_quaternion_js_init(JSContext *ctx);
+JSModuleDef *athena_camera3d_js_init(JSContext *ctx);
+JSModuleDef *athena_model3d_js_init(JSContext *ctx);
+JSModuleDef *athena_render3d_js_init(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
@@ -461,7 +466,7 @@ static int run_timers(JSContext *ctx) {
     return ret;
 }
 
-int main(int argc, char **argv) {
+static int run_script(int argc, char **argv) {
     /* As generated in src/generated/js_registry.c. */
     static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;"
         "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;"
@@ -516,6 +521,11 @@ int main(int argc, char **argv) {
     }
     athena_memcard_init(ctx);
     athena_random_init(ctx);
+    athena_matrix4_init(ctx);
+    athena_quaternion_js_init(ctx);
+    athena_camera3d_js_init(ctx);
+    athena_model3d_js_init(ctx);
+    athena_render3d_js_init(ctx);
     athena_noise_init(ctx);
     athena_debug_init(ctx);
     athena_camera2d_js_init(ctx);
@@ -557,4 +567,16 @@ int main(int argc, char **argv) {
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return ret < 0 ? 1 : 0;
+}
+
+/* Repeat with a fresh runtime to exercise process-wide JSClassID reuse. */
+int main(int argc, char **argv) {
+    const char *repeat = getenv("ATHENA_TEST_REPEAT");
+    int count = repeat ? atoi(repeat) : 1;
+    if (count < 1 || count > 10) return 2;
+    for (int i = 0; i < count; i++) {
+        int result = run_script(argc, argv);
+        if (result) return result;
+    }
+    return 0;
 }

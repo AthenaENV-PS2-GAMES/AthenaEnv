@@ -891,6 +891,9 @@ int JS_DefinePropertyGetSet(JSContext *ctx, JSValueConst this_obj,
                             JSAtom prop, JSValue getter, JSValue setter,
                             int flags);
 void JS_SetOpaque(JSValue obj, void *opaque);
+/* AthenaEnv: class identity remains available after an opaque is cleared. */
+JSClassID JS_GetClassID(JSValueConst obj);
+int JS_IsSharedArrayBuffer(JSValueConst obj);
 void *JS_GetOpaque(JSValueConst obj, JSClassID class_id);
 void *JS_GetOpaque2(JSContext *ctx, JSValueConst obj, JSClassID class_id);
 

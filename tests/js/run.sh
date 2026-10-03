@@ -7,6 +7,7 @@
 # under ASan, as it has known benign UBSan reports.
 set -e
 cd "$(dirname "$0")/../.."
+ATHENA_3D_SANITIZERS=address,undefined sh tests/host/run_3d.sh
 
 CC=${CC:-gcc}
 OUT=${TMPDIR:-/tmp}/athena-js-tests
@@ -19,7 +20,15 @@ INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/includ
     -Isrc/modules/debug/include -Isrc/modules/color/include \
     -Isrc/modules/graphics/include -Isrc/modules/camera2d/include -Isrc/modules/loop/include \
     -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include \
-    -Isrc/modules/collision/include"
+    -Isrc/modules/collision/include -Isrc/runtime/quickjs/include \
+    -Isrc/modules/vector/include -Isrc/modules/matrix4/include -Isrc/modules/quaternion/include \
+    -Isrc/modules/camera3d/include -Isrc/modules/model3d/include -Isrc/modules/render3d/include -Isrc/modules/render3d/native"
+THREE_D="src/modules/matrix4/native/matrix4.c src/modules/matrix4/quickjs/ath_matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/quaternion/quickjs/ath_quaternion.c \
+    src/modules/camera3d/native/camera3d.c src/modules/camera3d/quickjs/ath_camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/quickjs/ath_model3d.c \
+    src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c src/modules/render3d/quickjs/ath_render3d.c \
+    tests/host/render3d_host.c"
 # Camera2D and the math of the 2D view, with the C side of Loop systems; the
 # GS side of the view (clip rectangle) is stubbed in runner.c.
 CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camera2d_gs.c \
@@ -37,12 +46,22 @@ B2FLAGS="-DBOX2D_DISABLE_SIMD -DB2_ENABLE_ASSERT"
 
 build() { # object source flags...
     obj=$1; src=$2; shift 2
-    [ "$obj" -nt "$src" ] || $CC $BASE "$@" $INC -c "$src" -o "$obj"
+    rebuild=0
+    [ "$obj" -nt "$src" ] || rebuild=1
+    case "$src" in src/quickjs/*)
+        for header in src/quickjs/*.h; do
+            [ "$obj" -nt "$header" ] || rebuild=1
+        done
+        ;;
+    esac
+    [ "$rebuild" = 0 ] || $CC $BASE "$@" $INC -c "$src" -o "$obj"
 }
 
 for f in cutils libbf libregexp libunicode quickjs; do
     build "$OUT/obj/$f.o" "src/quickjs/$f.c" $ASAN -w
 done
+build "$OUT/obj/model3d_load.o" src/modules/model3d/native/model3d_load.c $UBSAN -w
+build "$OUT/obj/fast_obj.o" src/modules/model3d/native/fast_obj/fast_obj.c $UBSAN -w
 for f in src/modules/box2d/native/box2d/*.c; do
     build "$OUT/obj/b2_$(basename "$f" .c).o" "$f" $UBSAN $B2FLAGS -w
 done
@@ -59,7 +78,7 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
     "$OUT"/obj/*.o -lm -lpthread
 
 # runner_font: the same runner with the real Font binding (over the native
@@ -76,7 +95,7 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
-    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
     src/modules/font/quickjs/ath_font.c tests/js/font_host.c \
     "$OUT"/obj/*.o -lm -lpthread
 
@@ -104,6 +123,10 @@ check() {
 
 echo "== tests/box2d_test.js"
 check "$OUT/runner" tests/box2d_test.js "Result: .* 0 failed"
+echo "== tests/array_literal_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/array_literal_test.js "QuickJS array literal tests passed"
+echo "== tests/three_d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/three_d_test.js "3D module tests passed"
 # The summaries come from promise callbacks: check the printed result too.
 # Ease and Tween are JavaScript modules, loaded from their sources.
 echo "== tests/tween_test.js"

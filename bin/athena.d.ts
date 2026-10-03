@@ -4178,7 +4178,7 @@ declare class Matrix4 {
     clone(): Matrix4;
     /** Copies another matrix into this matrix. */
     copy(value: Matrix4): this;
-    /** Returns the product of this matrix and `value`. */
+    /** Returns this * value (column vectors); neither operand is mutated. */
     multiply(value: Matrix4): Matrix4;
     /** Replaces this matrix with identity. */
     identity(): this;

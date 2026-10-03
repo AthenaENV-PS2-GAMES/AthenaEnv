@@ -70,6 +70,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/sprite_test"
 "$OUT/collision_test"
 "$OUT/box2d_test"
+sh tests/host/run_3d.sh
 
 # VU microprograms: each committed .vsm must be what OpenVCL makes of its
 # .vcl (the Makefile regenerates it only when the .vcl is newer). Line ends
