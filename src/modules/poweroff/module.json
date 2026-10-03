@@ -1,0 +1,29 @@
+{
+  "id": "poweroff",
+  "name": "Power Off",
+  "description": "IOP poweroff driver, started from athena.ini or IOP.loadModule().",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/poweroff.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "poweroff"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_poweroff_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "poweroff",
+      "irx": "$(PS2SDK)/iop/irx/poweroff.irx"
+    }
+  ],
+  "types": null
+}

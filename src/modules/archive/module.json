@@ -1,0 +1,33 @@
+{
+  "id": "archive",
+  "name": "Archive",
+  "description": "Read zip, tar, tar.gz and gzip archives: list, read entries into memory, extract safely (also on a background worker), and gzip data in memory.",
+  "category": "Storage",
+  "version": "2.1.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/archive.c",
+    "native/archive_job.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "thread",
+      "mutex"
+    ],
+    "iop": [],
+    "ee_libs": [
+      "-lunzip",
+      "-lz"
+    ]
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_archive.c"
+    ],
+    "module_name": "Archive",
+    "global_alias": "Archive",
+    "init_func": "athena_archive_init"
+  },
+  "types": "archive.d.ts"
+}

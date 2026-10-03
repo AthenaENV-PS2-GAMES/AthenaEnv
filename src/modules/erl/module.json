@@ -1,0 +1,26 @@
+{
+  "id": "erl",
+  "name": "Native Modules (ERL)",
+  "description": "Loads relocatable native modules (.erl) at runtime, e.g. import from 'mymodule.erl'. Exports every symbol of the binary, which costs RAM and disables dead-code removal.",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/erl_exports.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": [
+      "-lerl"
+    ]
+  },
+  "native": {
+    "init": "athena_erl_init"
+  },
+  "build": {
+    "export_symbols": true
+  },
+  "types": null
+}

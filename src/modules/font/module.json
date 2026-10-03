@@ -1,0 +1,46 @@
+{
+  "id": "font",
+  "name": "Font",
+  "description": "TrueType and bitmap font loading and text rendering.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/atlas.c",
+    "native/fntsys.c",
+    "native/font.c",
+    "native/image_font.c"
+  ],
+  "includes": [
+    "$(PS2DEV)/gsKit/include",
+    "$(PS2SDK)/ports/include/freetype2"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "color",
+      "thread"
+    ],
+    "iop": [],
+    "ee_libs": [
+      "-lfreetype"
+    ]
+  },
+  "embed": [
+    {
+      "name": "quicksand_regular",
+      "file": "assets/fonts/Quicksand-Regular.ttf"
+    }
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_font.c"
+    ],
+    "module_name": "Font",
+    "global_alias": "Font",
+    "global_export": "Font.Font",
+    "init_func": "athena_font_init"
+  },
+  "types": "font.d.ts"
+}

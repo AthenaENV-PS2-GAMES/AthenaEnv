@@ -18,3 +18,15 @@ bin/brew_data.json
 
 src/exports.c
 *.erl
+
+path.md
+lib/
+
+.build-cache/
+dist/
+
+tools/wav2adp/wav2adp
+javascript_samples
+# soak test (bin/tests/soak_test.js) progress and output
+bin/tests/soak/state.json
+bin/tests/soak/out/

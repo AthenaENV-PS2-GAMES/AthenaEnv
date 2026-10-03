@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+# Build server for the module picker (tools/build-server/server.mjs).
+# Same toolchain image as the Dockerfile, plus Node.js and git.
+ARG BASE_IMAGE=ghcr.io/ps2homebrew/ps2homebrew@sha256:207523ad98f17fd406afa7dd0c6cfe10730627545cbe45247f0bd73c8a66c376
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="AthenaEnv Build Server" \
+      org.opencontainers.image.description="Builds AthenaEnv binaries for a selection of modules" \
+      org.opencontainers.image.source="https://github.com/GibranKhalil/AthenaEnv" \
+      org.opencontainers.image.licenses="MIT"
+
+ENV PS2DEV=/usr/local/ps2dev
+ENV PS2SDK=$PS2DEV/ps2sdk
+ENV PATH=$PATH:$PS2DEV/bin:$PS2DEV/ee/bin:$PS2DEV/iop/bin:$PS2DEV/dvp/bin:$PS2SDK/bin
+
+USER root
+RUN apk add --no-cache nodejs git
+
+# The server builds inside ATHENA_ROOT and rewrites Makefile.modules and
+# src/generated there, so mount a dedicated checkout, not a working copy.
+ENV ATHENA_ROOT=/athena \
+    CACHE_DIR=/cache \
+    PORT=8080
+RUN mkdir -p /athena /cache && chown -R 1000:1000 /athena /cache
+USER 1000:1000
+WORKDIR /athena
+
+EXPOSE 8080
+CMD ["node", "tools/build-server/server.mjs"]

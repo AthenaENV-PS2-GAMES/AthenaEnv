@@ -1,0 +1,885 @@
+{
+  "schemaVersion": 1,
+  "name": "AthenaEnv Module Catalog",
+  "version": "2.0.0",
+  "generatedAt": "2026-09-28T23:55:59.599Z",
+  "modules": [
+    {
+      "id": "archive",
+      "name": "Archive",
+      "description": "Read zip, tar, tar.gz and gzip archives: list, read entries into memory, extract safely (also on a background worker), and gzip data in memory.",
+      "category": "Storage",
+      "version": "2.1.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "thread",
+          "mutex"
+        ],
+        "iop": [],
+        "ee_libs": [
+          "-lunzip",
+          "-lz"
+        ]
+      },
+      "global_alias": "Archive",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "box2d",
+      "name": "Box2D",
+      "description": "2D rigid body physics with Box2D 3.2: worlds, bodies, shapes, chains, seven joint types, ray/shape casts, overlap queries, character movers and contact, sensor and body events.",
+      "category": "Physics",
+      "version": "1.1.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Box2D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "box2ddraw",
+      "name": "Box2DDraw",
+      "description": "Debug drawing of Box2D worlds: shape outlines, joints, bounds, contacts and centers of mass, batched on the GS.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "box2d",
+          "graphics",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Box2DDraw",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "camera2d",
+      "name": "Camera2D",
+      "description": "2D cameras applied in C to Draw, Image, Font and TileMap: position, zoom, rotation and viewport (split screen), follow with smoothing, dead zone, lookahead and auto zoom, bounds and zones, shake, parallax, culling helpers, timed zoom/pan, fades, flashes, letterbox and transitions between cameras.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Camera2D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "cdrom",
+      "name": "CD/DVD",
+      "description": "Disc filesystem driver (cdfs): boot from and read cdrom0:/cdfs:.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "cdfs"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "collision",
+      "name": "Collision",
+      "description": "Light 2D collision and simple physics in C, next to Box2D: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce and moving platforms that carry riders, layers and masks, queries, overlapping pairs and raycasts, stepped by the Loop.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Collision",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "color",
+      "name": "Color",
+      "description": "RGBA color construction and component manipulation.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Color",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "debug",
+      "name": "Debug",
+      "description": "On-screen diagnostics: stats overlay (FPS, CPU and frame time, RAM, JS heap, VRAM) with a frame-time graph, watches, the script's console output, shapes and text in screen or world space, and a controller shortcut. Graph and console tail in C.",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "graphics",
+          "draw",
+          "font",
+          "color",
+          "screen",
+          "system",
+          "gamepad"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Debug",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "draw",
+      "name": "Draw",
+      "description": "Immediate-mode 2D primitive drawing.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Draw",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "ease",
+      "name": "Ease",
+      "description": "Easing curves (Penner families, steps, cubic-bezier) and interpolation helpers: lerp, remap, smoothstep and frame-rate independent damping. Written in JavaScript.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Ease",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "erl",
+      "name": "Native Modules (ERL)",
+      "description": "Loads relocatable native modules (.erl) at runtime, e.g. import from 'mymodule.erl'. Exports every symbol of the binary, which costs RAM and disables dead-code removal.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": [
+          "-lerl"
+        ]
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "font",
+      "name": "Font",
+      "description": "TrueType and bitmap font loading and text rendering.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "color",
+          "thread"
+        ],
+        "iop": [],
+        "ee_libs": [
+          "-lfreetype"
+        ]
+      },
+      "global_alias": "Font",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "gamepad",
+      "name": "Gamepad",
+      "description": "Controller input for up to eight players: DualShock 2 and other PS2 pads on both ports and multitaps, DualShock 3/4 over USB and Bluetooth.",
+      "category": "Input",
+      "version": "1.1.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "sio2man",
+          "padman",
+          "mtapman",
+          "usbd",
+          "ds34usb",
+          "ds34bt"
+        ],
+        "ee_libs": [
+          "-lpad"
+        ]
+      },
+      "global_alias": "Gamepad",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "graphics",
+      "name": "Graphics",
+      "description": "PS2 GS initialization, frame control, colors, and 2D primitives.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": [
+          "-L$(PS2DEV)/gsKit/lib",
+          "-ldmakit",
+          "-ljpeg",
+          "-lpng"
+        ]
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "hdd",
+      "name": "Internal HDD",
+      "description": "Internal hard disk drivers for exFAT/FAT32 disks (not PFS): boot from and access mass:/. Needs the network adapter or a console with a built-in HDD bay.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "ps2dev9",
+          "bdm",
+          "bdmfs_fatfs",
+          "ata_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "ilink",
+      "name": "i.LINK Storage",
+      "description": "i.LINK (IEEE 1394) storage drivers, on the consoles that have the port: boot from and access mass:/.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "iLinkman",
+          "bdm",
+          "bdmfs_fatfs",
+          "IEEE1394_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "image",
+      "name": "Image",
+      "description": "Image loading, texture ownership, and textured drawing.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Image",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "imagelist",
+      "name": "ImageList",
+      "description": "Safe cooperative asynchronous image loading.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "image",
+          "thread",
+          "mutex"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "ImageList",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "iop",
+      "name": "IOP",
+      "description": "IOP module discovery, loading, reset, and memory statistics.",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "freeram"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": "IOP",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "loop",
+      "name": "Loop",
+      "description": "Game loop driven by the runtime: clears the screen, calls a per-frame callback with the native delta time and flips.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Loop",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "matrix4",
+      "name": "Matrix4",
+      "description": "Four-by-four transformation matrix type.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "vector"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Matrix4",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "memcard",
+      "name": "Memory Card",
+      "description": "Memory card drivers (sio2man, mcman, mcserv) and the MemoryCard API: card status, files, directories, attributes, icon.sys, format and background jobs on mc0:/mc1:.",
+      "category": "Storage",
+      "version": "2.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "thread",
+          "mutex"
+        ],
+        "iop": [
+          "sio2man",
+          "mcman",
+          "mcserv"
+        ],
+        "ee_libs": [
+          "-lmc"
+        ]
+      },
+      "global_alias": "MemoryCard",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "mutex",
+      "name": "Mutex",
+      "description": "Binary mutual-exclusion primitives backed by EE semaphores.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Mutex",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "mx4sio",
+      "name": "MX4SIO",
+      "description": "MX4SIO (SD card adapter in memory card slot 2) drivers: boot from and access mass:/. Slot 2 then no longer reads memory cards.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "sio2man",
+          "bdm",
+          "bdmfs_fatfs",
+          "mx4sio_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "noise",
+      "name": "Noise",
+      "description": "Procedural noise in C: Perlin and simplex (2D/3D), Worley, fBm/ridged/billow with domain warp, and batch fills of Float32Array grids (also in the background) classified into TileMap tile ids.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "random",
+          "thread"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Noise",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "poweroff",
+      "name": "Power Off",
+      "description": "IOP poweroff driver, started from athena.ini or IOP.loadModule().",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "poweroff"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "random",
+      "name": "Random",
+      "description": "Seedable random generators (xoshiro128**): integers, floats, booleans, gaussian, pick, shuffle, weighted choice and savable state.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Random",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "scene",
+      "name": "Scene",
+      "description": "Scenes with a lifecycle (enter, update, draw, pause, resume, exit), a stack for pause menus and dialogs, fade transitions, a loading screen, and reference-counted assets loaded in the background (images, sprite sheets, sound effects, music, fonts, JSON), kept while two scenes share them. Written in JavaScript.",
+      "category": "Game",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "draw",
+          "screen",
+          "color"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Scene",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "screen",
+      "name": "Screen",
+      "description": "Screen mode, frame control, GS parameters, and display synchronization.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Screen",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "sound",
+      "name": "Sound",
+      "description": "Audio through audsrv: ADPCM sound effects on the 24 SPU2 voices and a streamed WAV/OGG music track. audsrv is loaded on the IOP on first use.",
+      "category": "Audio",
+      "version": "2.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "thread",
+          "mutex"
+        ],
+        "iop": [
+          "libsd",
+          "audsrv"
+        ],
+        "ee_libs": [
+          "-laudsrv",
+          "-lvorbisfile",
+          "-lvorbis",
+          "-logg"
+        ]
+      },
+      "global_alias": "Sound",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "sprite",
+      "name": "Sprite",
+      "description": "Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed and rotated frames, tags and slices, loadable in the background) and animation clips (fps or per-frame durations, loop, once and pingpong, chained clips, frame events, promises), animated sprites with origin, scale, rotation and flip, batched drawing, and batch animation of TileMap sprites, all advanced in C by the Loop.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image",
+          "tilemap",
+          "loop",
+          "random",
+          "thread"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Sprite",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "system",
+      "name": "System Core",
+      "description": "Core system utilities: high-resolution timers, memory usage statistics, explicit garbage collection, and process controls.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": true,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "System",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "thread",
+      "name": "Thread",
+      "description": "Multi-threading and task management primitives backed by the EE kernel scheduler.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Thread",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "tilemap",
+      "name": "TileMap",
+      "description": "VU1-accelerated batched sprite and tilemap rendering.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "TileMap",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "timer",
+      "name": "Timer",
+      "description": "Pauseable elapsed-time timers backed by the EE clock.",
+      "category": "Core",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Timer",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "tween",
+      "name": "Tween",
+      "description": "Tweens: animate numeric and color properties of any object with easing, delays, repeats and yoyo; awaitable, driven by the Loop. Written in JavaScript.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "ease",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Tween",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "usbmass",
+      "name": "USB Mass Storage",
+      "description": "USB storage drivers (usbd, bdm, FAT, usbmass_bd): boot from and access mass:/.",
+      "category": "Storage",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [
+          "usbd",
+          "bdm",
+          "bdmfs_fatfs",
+          "usbmass_bd"
+        ],
+        "ee_libs": []
+      },
+      "global_alias": null,
+      "api": {
+        "native": true,
+        "quickjs": false
+      }
+    },
+    {
+      "id": "vector",
+      "name": "Vector",
+      "description": "Vector2, Vector3 and Vector4 PS2-aligned math types.",
+      "category": "Math",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Vector",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "video",
+      "name": "Video",
+      "description": "MPEG-1/2 elementary video streams (.m2v) decoded by the IPU through libmpeg, drawn directly or used as an Image texture. One video can be open at a time.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": true,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image",
+          "thread",
+          "mutex"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Video",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    }
+  ]
+}

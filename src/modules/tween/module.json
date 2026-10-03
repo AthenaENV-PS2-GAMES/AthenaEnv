@@ -1,0 +1,23 @@
+{
+  "id": "tween",
+  "name": "Tween",
+  "description": "Tweens: animate numeric and color properties of any object with easing, delays, repeats and yoyo; awaitable, driven by the Loop. Written in JavaScript.",
+  "category": "Animation",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [
+      "ease",
+      "loop"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/tween.js",
+    "module_name": "Tween",
+    "global_alias": "Tween"
+  },
+  "types": "tween.d.ts"
+}

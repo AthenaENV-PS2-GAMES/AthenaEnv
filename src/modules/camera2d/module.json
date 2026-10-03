@@ -1,0 +1,31 @@
+{
+  "id": "camera2d",
+  "name": "Camera2D",
+  "description": "2D cameras applied in C to Draw, Image, Font and TileMap: position, zoom, rotation and viewport (split screen), follow with smoothing, dead zone, lookahead and auto zoom, bounds and zones, shake, parallax, culling helpers, timed zoom/pan, fades, flashes, letterbox and transitions between cameras.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/camera2d.c",
+    "native/camera2d_gs.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "loop"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "cleanup_func": "athena_camera2d_js_cleanup",
+    "sources": [
+      "quickjs/ath_camera2d.c"
+    ],
+    "module_name": "Camera2D",
+    "global_alias": "Camera2D",
+    "init_func": "athena_camera2d_js_init"
+  },
+  "types": "camera2d.d.ts"
+}

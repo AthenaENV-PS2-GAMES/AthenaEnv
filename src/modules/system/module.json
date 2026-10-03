@@ -1,0 +1,34 @@
+{
+  "id": "system",
+  "name": "System Core",
+  "description": "Core system utilities: high-resolution timers, memory usage statistics, explicit garbage collection, and process controls.",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": true,
+  "default": true,
+  "sources": [
+    "native/system.c",
+    "native/elf_loader.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "embed": [
+    {
+      "name": "loader_elf",
+      "file": "ee_modules/loader/loader.elf",
+      "build": "ee_modules/loader"
+    }
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_system.c"
+    ],
+    "module_name": "System",
+    "global_alias": "System",
+    "init_func": "athena_system_init"
+  },
+  "types": "system.d.ts"
+}

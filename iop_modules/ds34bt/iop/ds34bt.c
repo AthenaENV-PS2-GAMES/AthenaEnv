@@ -1563,6 +1563,8 @@ int ds34bt_get_status(int port)
     if ((status & DS34BT_STATE_USB_AUTHORIZED) && (port < MAX_PADS)) {
         WaitSema(bt_dev.hid_sema);
         status |= ds34pad[port].status;
+        if ((ds34pad[port].status & DS34BT_STATE_CONNECTED) && ds34pad[port].type == DS4)
+            status |= DS34BT_STATE_DS4;
         SignalSema(bt_dev.hid_sema);
     }
 
@@ -1653,9 +1655,13 @@ void *rpc_sf(int cmd, void *data, int size)
         case DS34BT_SET_LED:
             ds34bt_set_led((u8 *)(data + 1), *(u8 *)data);
             break;
-        case DS34BT_GET_DATA:
-            ds34bt_get_data((char *)data, 18, *(u8 *)data);
+        case DS34BT_GET_DATA: {
+            /* 18 bytes of DualShock 2 formatted data, then the status byte. */
+            u8 port = *(u8 *)data;
+            ds34bt_get_data((char *)data, 18, port);
+            *(u8 *)(data + 18) = ds34bt_get_status(port);
             break;
+        }
         case DS34BT_RESET:
             ds34bt_reset();
             break;

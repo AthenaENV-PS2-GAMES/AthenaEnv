@@ -1,0 +1,38 @@
+{
+  "id": "iop",
+  "name": "IOP",
+  "description": "IOP module discovery, loading, reset, and memory statistics.",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/iop.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "freeram"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_iop_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "freeram",
+      "irx": "iop_modules/freeram/freeram.irx",
+      "build": "iop_modules/freeram"
+    }
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_iop.c"
+    ],
+    "module_name": "IOP",
+    "global_alias": "IOP",
+    "init_func": "athena_iop_init"
+  },
+  "types": "iop.d.ts"
+}

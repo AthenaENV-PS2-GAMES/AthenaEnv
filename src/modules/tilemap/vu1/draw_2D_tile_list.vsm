@@ -1,0 +1,79 @@
+		.vu
+		.align 4
+		.global	VU1Draw2D_TileList_CodeStart
+		.global	VU1Draw2D_TileList_CodeEnd
+VU1Draw2D_TileList_CodeStart:
+                    nop                             lq VF01, 0(VI00)
+                    nop                             lq VF02, 1(VI00)
+                    nop                             fcset 0x000000
+init:
+                    nop                             xtop VI01
+                    nop                             lq VF03, 0(VI01)
+                    nop                             iaddiu VI01, VI01, 1
+                    nop                             iaddiu VI03, VI01, 201
+                    nop                             xitop VI02
+                    nop                             sq VF03, 0(VI03)
+                    nop                             iaddiu VI05, VI02, 0x7fff
+                    nop                             iaddiu VI05, VI05, 0x01
+                    nop                             isw.x VI05, 0(VI03)
+                    nop                             loi 0x457ffc00
+                    addi.xyzw VF03, VF00, i         iaddiu VI04, VI03, 1
+                    nop                             iadd VI05, VI00, VI02
+vertexLoop:
+                    nop                             lq VF05, 1(VI01)
+                    ftoi4.xyzw VF08, VF05           lq VF04, 0(VI01)
+                    nop                             lq VF07, 3(VI01)
+                    nop                             lq VF06, 2(VI01)
+                    nop                             iaddiu VI01, VI01, 4
+                    nop                             mr32 VF05, VF08
+                    nop                             sq VF08, 1(VI04)
+                    nop                             sq VF06, 0(VI04)
+                    nop                             iaddi VI05, VI05, -1
+                    nop                             nop
+                    nop                             mr32 VF09, VF05
+                    mul.xyzw VF05, VF04, VF01       nop
+                    sub.xyzw VF04, VF00, VF00       nop
+                    nop                             nop
+                    nop                             nop
+                    add.xy VF04, VF05, VF02         mr32 VF10, VF05
+                    nop                             sq VF09, 3(VI04)
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             mr32 VF05, VF10
+                    sub.xyzw VF10, VF00, VF00       nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    add.xy VF10, VF04, VF05         nop
+                    maxx.xy VF04, VF04, VF00x       nop
+                    nop                             nop
+                    nop                             nop
+                    maxx.xy VF10, VF10, VF00x       nop
+                    minix.xy VF04, VF04, VF03x      nop
+                    nop                             nop
+                    nop                             nop
+                    minix.xy VF10, VF10, VF03x      nop
+                    ftoi4.xyzw VF05, VF04           nop
+                    nop                             nop
+                    nop                             nop
+                    ftoi4.xyzw VF04, VF10           nop
+                    add.z VF05, VF05, VF07          nop
+                    nop                             nop
+                    nop                             nop
+                    add.z VF04, VF04, VF07          nop
+                    nop                             sq VF05, 2(VI04)
+                    nop                             nop
+                    nop                             nop
+                    nop                             sq VF04, 4(VI04)
+                    nop                             iaddiu VI04, VI04, 5
+                    nop                             nop
+                    nop                             ibne VI05, VI00, vertexLoop
+                    nop                             nop
+                    nop                             xgkick VI03
+                    nop[E]                          nop
+                    nop                             nop
+                    nop                             b init
+                    nop                             nop
+		.align 4
+VU1Draw2D_TileList_CodeEnd:

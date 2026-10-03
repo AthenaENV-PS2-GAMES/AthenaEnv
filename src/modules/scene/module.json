@@ -1,0 +1,26 @@
+{
+  "id": "scene",
+  "name": "Scene",
+  "description": "Scenes with a lifecycle (enter, update, draw, pause, resume, exit), a stack for pause menus and dialogs, fade transitions, a loading screen, and reference-counted assets loaded in the background (images, sprite sheets, sound effects, music, fonts, JSON), kept while two scenes share them. Written in JavaScript.",
+  "category": "Game",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [
+      "loop",
+      "draw",
+      "screen",
+      "color"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/scene.js",
+    "module_name": "Scene",
+    "global_alias": "Scene",
+    "global_export": "Scene.Scene"
+  },
+  "types": "scene.d.ts"
+}

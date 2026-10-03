@@ -1,0 +1,39 @@
+{
+  "id": "debug",
+  "name": "Debug",
+  "description": "On-screen diagnostics: stats overlay (FPS, CPU and frame time, RAM, JS heap, VRAM) with a frame-time graph, watches, the script's console output, shapes and text in screen or world space, and a controller shortcut. Graph and console tail in C.",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/debug_overlay.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "loop",
+      "graphics",
+      "draw",
+      "font",
+      "color",
+      "screen",
+      "system",
+      "gamepad"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_debug.c"
+    ],
+    "module_name": "DebugNative",
+    "init_func": "athena_debug_init"
+  },
+  "js": {
+    "source": "js/debug.js",
+    "module_name": "Debug",
+    "global_alias": "Debug"
+  },
+  "types": "debug.d.ts"
+}

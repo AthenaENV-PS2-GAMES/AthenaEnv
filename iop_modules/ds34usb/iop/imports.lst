@@ -2,7 +2,8 @@ sifcmd_IMPORTS_start
 I_sceSifInitRpc
 I_sceSifSetRpcQueue
 I_sceSifRegisterRpc
-I_sceSifRpcLoop
+I_sceSifGetNextRequest
+I_sceSifExecRequest
 sifcmd_IMPORTS_end
 
 thsemap_IMPORTS_start
@@ -17,6 +18,8 @@ thbase_IMPORTS_start
 I_StartThread
 I_CreateThread
 I_DelayThread
+I_SleepThread
+I_WakeupThread
 I_GetThreadId
 I_SetAlarm
 I_CancelAlarm

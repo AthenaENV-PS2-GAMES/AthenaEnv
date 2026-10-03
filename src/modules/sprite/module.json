@@ -1,0 +1,36 @@
+{
+  "id": "sprite",
+  "name": "Sprite",
+  "description": "Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed and rotated frames, tags and slices, loadable in the background) and animation clips (fps or per-frame durations, loop, once and pingpong, chained clips, frame events, promises), animated sprites with origin, scale, rotation and flip, batched drawing, and batch animation of TileMap sprites, all advanced in C by the Loop.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/sprite.c",
+    "native/sprite_gs.c",
+    "native/sprite_job.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "image",
+      "tilemap",
+      "loop",
+      "random",
+      "thread"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "cleanup_func": "athena_sprite_js_cleanup",
+    "sources": [
+      "quickjs/ath_sprite.c"
+    ],
+    "module_name": "Sprite",
+    "global_alias": "Sprite",
+    "init_func": "athena_sprite_js_init"
+  },
+  "types": "sprite.d.ts"
+}

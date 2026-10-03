@@ -34,7 +34,7 @@
 #include <math.h>
 #if defined(__APPLE__)
 #include <malloc/malloc.h>
-#elif defined(__linux__)
+#elif defined(__linux__) || defined(PS2)
 #include <malloc.h>
 #elif defined(__FreeBSD__)
 #include <malloc_np.h>
@@ -121,7 +121,7 @@
 #include <errno.h>
 #endif
 
-#include "../include/athena_math.h"
+#include <athena/math.h>
 
 enum {
     /* classid tag        */    /* union usage   | properties */
@@ -316,12 +316,19 @@ struct JSRuntime {
     void *user_opaque;
 };
 
+/* State owned by the native thread currently executing in the runtime. The
+   job list stays runtime-wide: pending jobs belong to the event loop, not to
+   the thread that queued them. */
 typedef struct JSRuntimeInternalThreadState {
-    const uint8_t *stack_top;
+    uintptr_t stack_top;
     JSValue current_exception;
     struct JSStackFrame *current_stack_frame;
-    struct list_head job_list;
 } JSRuntimeInternalThreadState;
+
+_Static_assert(sizeof(JSRuntimeInternalThreadState) <= sizeof(JSRuntimeThreadState),
+               "JSRuntimeThreadState is too small");
+_Static_assert(_Alignof(JSRuntimeInternalThreadState) <= _Alignof(JSRuntimeThreadState),
+               "JSRuntimeThreadState is under-aligned");
 
 struct JSClass {
     uint32_t class_id; /* 0 means free entry */
@@ -1694,8 +1701,10 @@ void JS_SetRuntimeOpaque(JSRuntime *rt, void *opaque)
     rt->user_opaque = opaque;
 }
 
+/* Not the chunk header word: it also holds the allocator's flag bits, which
+   change when a neighbour block is freed, so malloc_size would drift. */
 size_t ps2_malloc_usable_size(void *ptr) {
-    return ((size_t*)ptr)[-1];
+    return malloc_usable_size(ptr);
 }
 
 /* default memory allocation functions with memory limitation */
@@ -1798,11 +1807,20 @@ JSRuntime *JS_NewRuntime(void)
     return JS_NewRuntime2(&def_malloc_funcs, NULL);
 }
 
+static void update_stack_limit(JSRuntime *rt);
+
+/* Called by a native thread entering the runtime with no JS frames of its own. */
 void JS_Enter(JSRuntime *rt)
 {
     rt->stack_top = js_get_stack_pointer();
+    update_stack_limit(rt);
+    rt->current_exception = JS_NULL;
+    rt->current_stack_frame = NULL;
 }
 
+/* Saves the calling thread's execution state before another native thread
+   uses the runtime. Each thread keeps its own C stack, so the frame chain and
+   stack bounds must not leak across threads. */
 void JS_Suspend(JSRuntime *rt, JSRuntimeThreadState *state)
 {
     JSRuntimeInternalThreadState *s = (JSRuntimeInternalThreadState *)state;
@@ -1810,12 +1828,9 @@ void JS_Suspend(JSRuntime *rt, JSRuntimeThreadState *state)
     s->stack_top = rt->stack_top;
     s->current_exception = rt->current_exception;
     s->current_stack_frame = rt->current_stack_frame;
-    memcpy(&s->job_list, &rt->job_list, sizeof(rt->job_list));
 
-    rt->stack_top = NULL;
     rt->current_exception = JS_NULL;
     rt->current_stack_frame = NULL;
-    init_list_head(&rt->job_list);
 }
 
 void JS_Resume(JSRuntime *rt, const JSRuntimeThreadState *state)
@@ -1824,14 +1839,16 @@ void JS_Resume(JSRuntime *rt, const JSRuntimeThreadState *state)
         (const JSRuntimeInternalThreadState *)state;
 
     rt->stack_top = s->stack_top;
+    update_stack_limit(rt);
     rt->current_exception = s->current_exception;
     rt->current_stack_frame = s->current_stack_frame;
-    list_splice(&s->job_list, &rt->job_list);
 }
 
+/* Called by a native thread leaving the runtime for good. */
 void JS_Leave(JSRuntime *rt)
 {
-    rt->stack_top = NULL;
+    rt->current_exception = JS_NULL;
+    rt->current_stack_frame = NULL;
 }
 
 
@@ -14141,14 +14158,19 @@ static no_inline int js_relational_slow(JSContext *ctx, JSValue *sp,
             double d1, d2;
 
         float64_compare:
-            /* can use floating point comparison */
+            /* can use floating point comparison. A float32 compared with a
+               float64 gets here too: its payload is not an int. */
             if (tag1 == JS_TAG_FLOAT64) {
                 d1 = JS_VALUE_GET_FLOAT64(op1);
+            } else if (tag1 == JS_CUSTOM_TAG_FLOAT32) {
+                d1 = JS_VALUE_GET_FLOAT32(op1);
             } else {
                 d1 = JS_VALUE_GET_INT(op1);
             }
             if (tag2 == JS_TAG_FLOAT64) {
                 d2 = JS_VALUE_GET_FLOAT64(op2);
+            } else if (tag2 == JS_CUSTOM_TAG_FLOAT32) {
+                d2 = JS_VALUE_GET_FLOAT32(op2);
             } else {
                 d2 = JS_VALUE_GET_INT(op2);
             }
@@ -42005,7 +42027,11 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
                                        BOOL *pdone, int magic)
 {
     JSArrayIteratorData *it;
-    uint32_t idx, c, start;
+    /* int, not uint32_t: string_getc() takes an int *, and on the EE
+       uint32_t is unsigned long; through a cast, GCC drops the store of idx
+       (strict aliasing) and string_getc() reads garbage. */
+    int idx;
+    uint32_t c, start;
     JSString *p;
 
     it = JS_GetOpaque2(ctx, this_val, JS_CLASS_STRING_ITERATOR);
@@ -42017,7 +42043,7 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
         goto done;
     p = JS_VALUE_GET_STRING(it->obj);
     idx = it->idx;
-    if (idx >= p->len) {
+    if (idx >= (int)p->len) {
         JS_FreeValue(ctx, it->obj);
         it->obj = JS_UNDEFINED;
     done:
@@ -42026,7 +42052,7 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
     }
 
     start = idx;
-    c = string_getc(p, (int *)&idx);
+    c = string_getc(p, &idx);
     it->idx = idx;
     *pdone = FALSE;
     if (c <= 0xffff) {
@@ -52131,7 +52157,29 @@ JSValue JS_GetTypedArrayBuffer(JSContext *ctx, JSValueConst obj,
     }
     return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, ta->buffer));
 }
-                               
+
+int JS_GetTypedArrayType(JSValueConst obj)
+{
+    if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
+        return -1;
+    switch (JS_VALUE_GET_OBJ(obj)->class_id) {
+    case JS_CLASS_UINT8C_ARRAY: return JS_TYPED_ARRAY_UINT8C;
+    case JS_CLASS_INT8_ARRAY: return JS_TYPED_ARRAY_INT8;
+    case JS_CLASS_UINT8_ARRAY: return JS_TYPED_ARRAY_UINT8;
+    case JS_CLASS_INT16_ARRAY: return JS_TYPED_ARRAY_INT16;
+    case JS_CLASS_UINT16_ARRAY: return JS_TYPED_ARRAY_UINT16;
+    case JS_CLASS_INT32_ARRAY: return JS_TYPED_ARRAY_INT32;
+    case JS_CLASS_UINT32_ARRAY: return JS_TYPED_ARRAY_UINT32;
+#ifdef CONFIG_BIGNUM
+    case JS_CLASS_BIG_INT64_ARRAY: return JS_TYPED_ARRAY_BIG_INT64;
+    case JS_CLASS_BIG_UINT64_ARRAY: return JS_TYPED_ARRAY_BIG_UINT64;
+#endif
+    case JS_CLASS_FLOAT32_ARRAY: return JS_TYPED_ARRAY_FLOAT32;
+    case JS_CLASS_FLOAT64_ARRAY: return JS_TYPED_ARRAY_FLOAT64;
+    default: return -1;
+    }
+}
+
 static JSValue js_typed_array_get_toStringTag(JSContext *ctx,
                                               JSValueConst this_val)
 {

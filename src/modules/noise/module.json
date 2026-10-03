@@ -1,0 +1,30 @@
+{
+  "id": "noise",
+  "name": "Noise",
+  "description": "Procedural noise in C: Perlin and simplex (2D/3D), Worley, fBm/ridged/billow with domain warp, and batch fills of Float32Array grids (also in the background) classified into TileMap tile ids.",
+  "category": "Math",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/noise.c",
+    "native/noise_job.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "random",
+      "thread"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_noise.c"
+    ],
+    "module_name": "Noise",
+    "global_alias": "Noise",
+    "init_func": "athena_noise_init"
+  },
+  "types": "noise.d.ts"
+}

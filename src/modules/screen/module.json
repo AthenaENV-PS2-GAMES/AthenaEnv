@@ -1,0 +1,28 @@
+{
+  "id": "screen",
+  "name": "Screen",
+  "description": "Screen mode, frame control, GS parameters, and display synchronization.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/screen.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_screen.c"
+    ],
+    "module_name": "Screen",
+    "global_alias": "Screen",
+    "init_func": "athena_screen_init"
+  },
+  "types": "screen.d.ts"
+}

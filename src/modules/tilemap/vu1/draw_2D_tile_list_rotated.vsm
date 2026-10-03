@@ -1,0 +1,71 @@
+		.vu
+		.align 4
+		.global	VU1Draw2D_TileListRotated_CodeStart
+		.global	VU1Draw2D_TileListRotated_CodeEnd
+VU1Draw2D_TileListRotated_CodeStart:
+                    nop                             lq VF01, 0(VI00)
+                    nop                             lq VF02, 1(VI00)
+                    nop                             lq VF03, 2(VI00)
+                    nop                             fcset 0x000000
+init:
+                    nop                             xtop VI01
+                    nop                             lq VF04, 0(VI01)
+                    nop                             iaddiu VI01, VI01, 1
+                    nop                             iaddiu VI03, VI01, 145
+                    nop                             xitop VI02
+                    nop                             sq VF04, 0(VI03)
+                    nop                             iaddiu VI05, VI02, 0x7fff
+                    nop                             iaddiu VI05, VI05, 0x01
+                    nop                             isw.x VI05, 0(VI03)
+                    nop                             loi 0x457ffc00
+                    addi.xyzw VF04, VF00, i         iaddiu VI04, VI03, 1
+                    nop                             iadd VI05, VI00, VI02
+vertexLoop:
+                    sub.zw VF12, VF00, VF00         lq VF05, 0(VI01)
+                    sub.zw VF15, VF00, VF00         lq VF06, 1(VI01)
+                    ftoi4.xyzw VF09, VF06           lq VF08, 3(VI01)
+                    sub.zw VF16, VF00, VF00         lq VF07, 2(VI01)
+                    mulax.xy ACC, VF01, VF05x       iaddiu VI01, VI01, 4
+                    madday.xy ACC, VF02, VF05y      iaddi VI05, VI05, -1
+                    maddw.xy VF12, VF03, VF00w      mr32 VF06, VF09
+                    mulz.xy VF13, VF01, VF05z       sq VF07, 0(VI04)
+                    mulw.xy VF14, VF02, VF05w       sq VF09, 1(VI04)
+                    sub.zw VF17, VF00, VF00         nop
+                    nop                             nop
+                    add.xy VF16, VF12, VF13         mr32 VF10, VF06
+                    add.xy VF15, VF12, VF14         move VF06, VF09
+                    maxx.xy VF12, VF12, VF00x       nop
+                    nop                             nop
+                    add.xy VF17, VF16, VF14         nop
+                    maxx.xy VF15, VF15, VF00x       move VF11, VF10
+                    maxx.xy VF16, VF16, VF00x       sq VF10, 7(VI04)
+                    minix.xy VF12, VF12, VF04x      nop
+                    maxx.xy VF17, VF17, VF00x       nop
+                    max.y VF06, VF10, VF10          nop
+                    max.y VF11, VF09, VF09          nop
+                    minix.xy VF15, VF15, VF04x      nop
+                    minix.xy VF16, VF16, VF04x      nop
+                    minix.xy VF17, VF17, VF04x      nop
+                    ftoi4.xyzw VF12, VF12           sq VF06, 3(VI04)
+                    ftoi4.xyzw VF15, VF15           sq VF11, 5(VI04)
+                    ftoi4.xyzw VF16, VF16           nop
+                    ftoi4.xyzw VF17, VF17           nop
+                    add.z VF12, VF12, VF08          nop
+                    add.z VF15, VF15, VF08          nop
+                    add.z VF16, VF16, VF08          nop
+                    add.z VF17, VF17, VF08          nop
+                    nop                             sq VF12, 2(VI04)
+                    nop                             sq VF15, 4(VI04)
+                    nop                             sq VF16, 6(VI04)
+                    nop                             sq VF17, 8(VI04)
+                    nop                             iaddiu VI04, VI04, 9
+                    nop                             nop
+                    nop                             ibne VI05, VI00, vertexLoop
+                    nop                             nop
+                    nop                             xgkick VI03
+                    nop[E]                          nop
+                    nop                             nop
+                    nop                             b init
+                    nop                             nop
+		.align 4
+VU1Draw2D_TileListRotated_CodeEnd:

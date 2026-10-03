@@ -43,14 +43,22 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 
-#include <graphics.h>
+#include <ath_gil.h>
+#include <athena/config.h>
+#include <athena/module.h>
+
 #include <ath_env.h>
+#ifdef _EE
+#include <timer.h>
+#endif
 
 #include "cutils.h"
 #include "list.h"
 #include "quickjs-libc.h"
 
+#ifdef ATHENA_MODULE_ERL
 #include <erl.h>
+#endif
 
 /* TODO:
    - add socket calls
@@ -109,6 +117,9 @@ typedef struct JSThreadState {
     int eval_script_recurse; /* only used in the main thread */
     /* not used in the main thread */
     JSWorkerMessagePipe *recv_pipe, *send_pipe;
+    /* called once per js_std_loop() iteration while set */
+    JSStdFrameFunc *frame_func;
+    void *frame_opaque;
 } JSThreadState;
 
 static uint64_t os_pending_signals;
@@ -399,38 +410,92 @@ static JSValue js_loadScript(JSContext *ctx, JSValueConst this_val,
     return ret;
 }
 
-void js_destroy_render_loop(JSContext *ctx);
-void js_destroy_input_events(JSContext *ctx);
-
+/*
+ * std.reload(script, { returnTo }): ends this script and starts `script` in a
+ * new VM. The switch unwinds the running code with an uncatchable error;
+ * run_script() then tears the VM down (module quiesce, GIL) as after any
+ * error, and main() starts the next script (athena_runtime_next_script()).
+ */
 static JSValue js_reload(JSContext *ctx, JSValueConst this_val,
                              int argc, JSValueConst *argv)
 {
-    uint8_t *buf;
-    const char *filename;
-    JSValue ret;
-    size_t buf_len;
-    
+    const char *filename, *return_to = NULL;
+    JSValue value, error;
+    FILE *f;
+
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "std.reload expects a script path");
+    if (argc > 1 && !JS_IsUndefined(argv[1]) && !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "std.reload options must be an object");
+
     filename = JS_ToCString(ctx, argv[0]);
     if (!filename)
         return JS_EXCEPTION;
+    /* A missing script is reported here, where the caller can still catch it. */
+    f = fopen(filename, "r");
+    if (!f) {
+        JS_ThrowReferenceError(ctx, "std.reload: could not open '%s'", filename);
+        JS_FreeCString(ctx, filename);
+        return JS_EXCEPTION;
+    }
+    fclose(f);
 
-    JSValue val = JS_GetPropertyStr(ctx, this_val, "reload");
-	JS_FreeValue(ctx, val);
-    JS_FreeValue(ctx, val);
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        value = JS_GetPropertyStr(ctx, argv[1], "returnTo");
+        if (JS_IsException(value)) {
+            JS_FreeCString(ctx, filename);
+            return JS_EXCEPTION;
+        }
+        if (!JS_IsUndefined(value)) {
+            if (!JS_IsString(value)) {
+                JS_FreeValue(ctx, value);
+                JS_FreeCString(ctx, filename);
+                return JS_ThrowTypeError(ctx, "std.reload returnTo must be a script path");
+            }
+            return_to = JS_ToCString(ctx, value);
+            JS_FreeValue(ctx, value);
+            if (!return_to) {
+                JS_FreeCString(ctx, filename);
+                return JS_EXCEPTION;
+            }
+        }
+    }
 
-    JS_FreeValue(ctx, this_val);
-    
-    set_default_script(filename);
+    athena_runtime_request_reload(filename, return_to);
     JS_FreeCString(ctx, filename);
+    JS_FreeCString(ctx, return_to);
 
-    js_destroy_render_loop(ctx);
-    js_destroy_input_events(ctx);
+    JS_ThrowInternalError(ctx, "reload");
+    error = JS_GetException(ctx);
+    JS_SetUncatchableError(ctx, error, TRUE);
+    return JS_Throw(ctx, error);
+}
 
-    js_set_clear_color(GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00));
+/* std.lastRun(): how the previous script ended, or null for the first one. */
+static JSValue js_last_run(JSContext *ctx, JSValueConst this_val,
+                           int argc, JSValueConst *argv)
+{
+    static const char *const names[] = {
+        [ATHENA_RUN_FINISHED] = "finished",
+        [ATHENA_RUN_ERROR] = "error",
+        [ATHENA_RUN_EXITED] = "exited",
+        [ATHENA_RUN_RELOADED] = "reloaded",
+    };
+    const char *script, *error, *output;
+    AthenaRunStatus status = athena_runtime_last_run(&script, &error, &output);
+    JSValue result;
 
-    destroy_vm(ctx);
-
-    longjmp(*get_reset_buf(), 1);
+    if (status == ATHENA_RUN_NONE)
+        return JS_NULL;
+    result = JS_NewObject(ctx);
+    if (JS_IsException(result))
+        return result;
+    JS_SetPropertyStr(ctx, result, "script", JS_NewString(ctx, script));
+    JS_SetPropertyStr(ctx, result, "status", JS_NewString(ctx, names[status]));
+    JS_SetPropertyStr(ctx, result, "error",
+                      error ? JS_NewString(ctx, error) : JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, result, "output", JS_NewString(ctx, output));
+    return result;
 }
 
 /* load a file as a UTF-8 encoded string */
@@ -459,6 +524,7 @@ typedef JSModuleDef *(JSInitModuleFunc)(JSContext *ctx,
 
 typedef JSModuleDef *(*extern_loader_function)(JSContext* ctx);
 
+#ifdef ATHENA_MODULE_ERL
 static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name)
 {
   	struct erl_record_t *erl = _init_load_erl_from_file(module_name, 0);
@@ -481,9 +547,17 @@ static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name
             return m;
         }
     }
-    
+
     return NULL;
 }
+#else
+static JSModuleDef *js_module_loader_erl(JSContext *ctx, const char *module_name)
+{
+    JS_ThrowReferenceError(ctx, "could not load module '%s': native modules (erl) are not enabled in this build",
+                           module_name);
+    return NULL;
+}
+#endif
 
 int js_module_set_import_meta(JSContext *ctx, JSValueConst func_val,
                               JS_BOOL use_realpath, JS_BOOL is_main)
@@ -701,7 +775,14 @@ static JSValue js_std_refcount(JSContext *ctx, JSValueConst this_val, int argc, 
 
 static int interrupt_handler(JSRuntime *rt, void *opaque)
 {
-    return (os_pending_signals >> SIGINT) & 1;
+    return ((os_pending_signals >> SIGINT) & 1) ||
+           athena_modules_stop_requested() ||
+           athena_runtime_stop_requested();
+}
+
+void js_std_set_interrupt_handler(JSRuntime *rt)
+{
+    JS_SetInterruptHandler(rt, interrupt_handler, NULL);
 }
 
 static int get_bool_option(JSContext *ctx, BOOL *pbool,
@@ -741,18 +822,14 @@ static JSValue js_evalScript(JSContext *ctx, JSValueConst this_val,
     str = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!str)
         return JS_EXCEPTION;
-    if (!ts->recv_pipe && ++ts->eval_script_recurse == 1) {
-        /* install the interrupt handler */
-        JS_SetInterruptHandler(JS_GetRuntime(ctx), interrupt_handler, NULL);
-    }
+    if (!ts->recv_pipe)
+        ts->eval_script_recurse++;
     flags = JS_EVAL_TYPE_GLOBAL; 
     if (backtrace_barrier)
         flags |= JS_EVAL_FLAG_BACKTRACE_BARRIER;
     ret = JS_Eval(ctx, str, len, "<evalScript>", flags);
     JS_FreeCString(ctx, str);
     if (!ts->recv_pipe && --ts->eval_script_recurse == 0) {
-        /* remove the interrupt handler */
-        JS_SetInterruptHandler(JS_GetRuntime(ctx), NULL, NULL);
         os_pending_signals &= ~((uint64_t)1 << SIGINT);
         /* convert the uncatchable "interrupted" error into a normal error
            so that it can be caught by the REPL */
@@ -1044,7 +1121,7 @@ static JSValue js_std_file_close(JSContext *ctx, JSValueConst this_val,
                                  int argc, JSValueConst *argv)
 {
     JSSTDFile *s = JS_GetOpaque2(ctx, this_val, js_std_file_class_id);
-    int err;
+    int err = 0;
     if (!s)
         return JS_EXCEPTION;
     if (!s->f)
@@ -1308,7 +1385,8 @@ static const JSCFunctionListEntry js_std_funcs[] = {
     JS_CFUNC_DEF("getRefCount", 0, js_std_refcount ),
     JS_CFUNC_DEF("evalScript", 1, js_evalScript ),
     JS_CFUNC_DEF("loadScript", 1, js_loadScript ),
-    JS_CFUNC_DEF("reload", 1, js_reload ),
+    JS_CFUNC_DEF("reload", 2, js_reload ),
+    JS_CFUNC_DEF("lastRun", 0, js_last_run ),
     JS_CFUNC_DEF("getenv", 1, js_std_getenv ),
     JS_CFUNC_DEF("setenv", 1, js_std_setenv ),
     JS_CFUNC_DEF("unsetenv", 1, js_std_unsetenv ),
@@ -1801,13 +1879,19 @@ static int64_t get_time_ms(void)
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000 + (ts.tv_nsec / 1000000);
 }
+#elif defined(_EE)
+/* monotonic milliseconds from the EE's 64-bit bus-clock counter */
+static int64_t get_time_ms(void)
+{
+    return (int64_t)(GetTimerSystemTime() / (kBUSCLK / 1000));
+}
 #else
 /* more portable, but does not work if the date is updated */
 static int64_t get_time_ms(void)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000000);
+    return (int64_t)tv.tv_sec * 1000 + (tv.tv_usec / 1000);
 }
 #endif
 
@@ -2105,6 +2189,57 @@ static int handle_posted_message(JSRuntime *rt, JSContext *ctx,
 #define JS_POLL_EMPTY 1
 #define JS_POLL_EXCEPTION -1
 
+/* Runs an expired timer; the timer list may change during the call. */
+static int fire_timer(JSContext *ctx, JSOSTimer *th, int64_t cur_time)
+{
+    int call_res;
+    JSValue func = th->func;
+
+    if (th->interval != -1) {
+        th->timeout = cur_time + th->interval;
+        call_res = call_handler(ctx, func);
+    } else {
+        th->func = JS_UNDEFINED;
+        unlink_timer(JS_GetRuntime(ctx), th);
+        if (!th->has_object)
+            free_timer(JS_GetRuntime(ctx), th);
+        call_res = call_handler(ctx, func);
+        JS_FreeValue(ctx, func);
+    }
+    return call_res;
+}
+
+/*
+ * Runs the timers expired at entry, rescanning after each call since a
+ * handler may add or remove timers. The budget stops intervals of zero ms
+ * and timers created by handlers from holding the frame.
+ */
+static int run_expired_timers(JSContext *ctx, JSThreadState *ts)
+{
+    struct list_head *el;
+    int64_t cur_time = get_time_ms();
+    int budget = 0;
+
+    list_for_each(el, &ts->os_timers)
+        budget++;
+
+    while (budget-- > 0) {
+        JSOSTimer *expired = NULL;
+        list_for_each(el, &ts->os_timers) {
+            JSOSTimer *th = list_entry(el, JSOSTimer, link);
+            if (th->timeout <= cur_time) {
+                expired = th;
+                break;
+            }
+        }
+        if (!expired)
+            break;
+        if (fire_timer(ctx, expired, cur_time) < 0)
+            return JS_POLL_EXCEPTION;
+    }
+    return JS_POLL_OK;
+}
+
 static int js_os_poll(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -2137,6 +2272,11 @@ static int js_os_poll(JSContext *ctx)
         list_empty(&ts->port_list))
         return JS_POLL_EMPTY; /* no more events */
     
+    /* with a frame handler, every expired timer runs once per frame and the
+       handler paces the loop (VSync), so never sleep here */
+    if (ts->frame_func)
+        return run_expired_timers(ctx, ts);
+
     if (!list_empty(&ts->os_timers)) {
         cur_time = get_time_ms();
         min_delay = 10000;
@@ -2144,22 +2284,7 @@ static int js_os_poll(JSContext *ctx)
             JSOSTimer *th = list_entry(el, JSOSTimer, link);
             delay = th->timeout - cur_time;
             if (delay <= 0) {
-                int call_res = 0;
-                JSValue func;
-                /* the timer expired */
-                func = th->func;
-                if (th->interval != -1) {
-                    th->timeout = cur_time + th->interval;
-                    call_res = call_handler(ctx, func);
-                } else {
-                    th->func = JS_UNDEFINED;
-                    unlink_timer(JS_GetRuntime(ctx), th);
-                    if (!th->has_object)
-                        free_timer(JS_GetRuntime(ctx), th);
-                    call_res = call_handler(ctx, func);
-                    JS_FreeValue(ctx, func);
-                }
-                return call_res;
+                return fire_timer(ctx, th, cur_time);
             } else if (delay < min_delay) {
                 min_delay = delay;
             }
@@ -2223,6 +2348,17 @@ static int js_os_poll(JSContext *ctx)
         }
     }
     */
+    if (tvp && min_delay > 0) {
+        int sleep_delay = min_delay > 16 ? 16 : min_delay;
+        athena_js_gil_unlock();
+        usleep((useconds_t)sleep_delay * 1000);
+        athena_js_gil_lock();
+    } else if (!list_empty(&ts->os_rw_handlers) ||
+               !list_empty(&ts->port_list)) {
+        athena_js_gil_unlock();
+        usleep(16000);
+        athena_js_gil_lock();
+    }
     done:
     return 0;
 }
@@ -3452,15 +3588,20 @@ static JSValue js_print(JSContext *ctx, JSValueConst this_val,
     size_t len;
 
     for(i = 0; i < argc; i++) {
-        if (i != 0)
+        if (i != 0) {
             putchar(' ');
+            athena_runtime_output(" ", 1);
+        }
         str = JS_ToCStringLen(ctx, &len, argv[i]);
         if (!str)
             return JS_EXCEPTION;
         fwrite(str, 1, len, stdout);
+        /* kept for std.lastRun(), e.g. to show on screen */
+        athena_runtime_output(str, len);
         JS_FreeCString(ctx, str);
     }
     putchar('\n');
+    athena_runtime_output("\n", 1);
     return JS_UNDEFINED;
 }
 
@@ -3475,6 +3616,10 @@ void js_std_add_helpers(JSContext *ctx, int argc, char **argv)
     console = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, console, "log",
                       JS_NewCFunction(ctx, js_print, "log", 1));
+    JS_SetPropertyStr(ctx, console, "warn",
+                      JS_NewCFunction(ctx, js_print, "warn", 1));
+    JS_SetPropertyStr(ctx, console, "error",
+                      JS_NewCFunction(ctx, js_print, "error", 1));
     JS_SetPropertyStr(ctx, global_obj, "console", console);
 
     /* same methods as the mozilla JS shell */
@@ -3569,6 +3714,19 @@ static void js_dump_obj(JSContext *ctx, FILE *f, JSValueConst val)
     }
 }
 
+/* js_dump_obj() for std.lastRun()'s output. */
+static void js_output_obj(JSContext *ctx, JSValueConst val)
+{
+    size_t len;
+    const char *str = JS_ToCStringLen(ctx, &len, val);
+
+    if (str) {
+        athena_runtime_output(str, len);
+        athena_runtime_output("\n", 1);
+        JS_FreeCString(ctx, str);
+    }
+}
+
 static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
 {
     JSValue val;
@@ -3576,10 +3734,12 @@ static void js_std_dump_error1(JSContext *ctx, JSValueConst exception_val)
     
     is_error = JS_IsError(ctx, exception_val);
     js_dump_obj(ctx, stderr, exception_val);
+    js_output_obj(ctx, exception_val);
     if (is_error) {
         val = JS_GetPropertyStr(ctx, exception_val, "stack");
         if (!JS_IsUndefined(val)) {
             js_dump_obj(ctx, stderr, val);
+            js_output_obj(ctx, val);
         }
         JS_FreeValue(ctx, val);
     }
@@ -3599,171 +3759,72 @@ void js_std_promise_rejection_tracker(JSContext *ctx, JSValueConst promise,
                                       BOOL is_handled, void *opaque)
 {
     if (!is_handled) {
-        fprintf(stderr, "Possibly unhandled promise rejection: ");
+        static const char message[] = "Possibly unhandled promise rejection: ";
+        fputs(message, stderr);
+        athena_runtime_output(message, sizeof(message) - 1);
         js_std_dump_error1(ctx, reason);
     }
 }
 
-/* main loop which calls the user JS callbacks */
-
-static JSValueConst render_loop_func = JS_UNDEFINED;
-static JSValueConst global_obj_ref = JS_UNDEFINED;
-static uint64_t clear_color = GS_SETREG_RGBAQ(0x00, 0x00, 0x00, 0x80, 0x00);
-
-void js_set_render_loop_func(JSContext *ctx, JSValueConst func) {
-    if (func == JS_UNDEFINED || func == JS_NULL) {
-        js_destroy_render_loop(ctx);
-        return;
-    }
-
-    render_loop_func = func;
-}
-
-void js_set_clear_color(uint64_t color) {
-    clear_color = color;
-}
-
-typedef struct {
-    int buttons;
-    JSValueConst function;
-    EventFlavours flavour;
-} InputEvent;
-
-static InputEvent padEvents[64] = { 0 };
-static uint8_t totalPadEvents = 0;
-
-static JSPads* inputEventHandler = NULL;
-
-void js_set_input_event_handler(JSPads* pad) {
-    inputEventHandler = pad;
-}
-
-int js_new_input_event(int buttons, JSValueConst func, EventFlavours flavour) {
-    for (int i = 0; i < 64; i++) {
-        if (!padEvents[i].function) {
-            padEvents[i].buttons = buttons;
-            padEvents[i].function = func;
-            padEvents[i].flavour = flavour;
-            totalPadEvents++;
-            return i;
-        }
-    }
-    return -1;
-}
-
-void js_delete_input_event(int id) {
-    padEvents[id].buttons = 0;
-    padEvents[id].function = NULL;
-    padEvents[id].flavour = PRESSED_EVENT;
-    totalPadEvents--;
-}
-
-void js_destroy_render_loop(JSContext *ctx) {
-    if (render_loop_func != JS_UNDEFINED) {
-        JS_FreeValue(ctx, render_loop_func);
-    }
-
-    render_loop_func = JS_UNDEFINED;
-}
-
-void js_destroy_input_events(JSContext *ctx) {
-    if (totalPadEvents) {
-        for (int i = 0; i < 64; i++) {
-            if (padEvents[i].function) {
-                JS_FreeValue(ctx, padEvents[i].function);
-                padEvents[i].function = NULL;
-                padEvents[i].buttons = 0;
-                padEvents[i].flavour = 0;
-            }
-        }
-    }
-
-    totalPadEvents = 0;
+void js_std_set_frame_handler(JSRuntime *rt, JSStdFrameFunc *func,
+                              void *opaque)
+{
+    JSThreadState *ts = JS_GetRuntimeOpaque(rt);
+    ts->frame_func = func;
+    ts->frame_opaque = func ? opaque : NULL;
 }
 
 int js_std_loop(JSContext *ctx)
 {
+    JSThreadState *ts = JS_GetRuntimeOpaque(JS_GetRuntime(ctx));
     JSContext *ctx1;
-    JSValue ret;
     int err;
     int poll_result;
 
     for(;;) {
+        /* std.reload() or SELECT+START, also while no JavaScript runs */
+        if (athena_runtime_stop_requested())
+            return -1;
+
         /* execute the pending jobs */
         for(;;) {
             err = JS_ExecutePendingJob(JS_GetRuntime(ctx), &ctx1);
             if (err <= 0) {
-                if (err < 0) {
+                /* a script switch is not an error worth printing */
+                if (err < 0 && !athena_runtime_stop_requested()) {
                     js_std_dump_error(ctx1);
                 }
                 break;
             }
+            athena_js_gil_unlock();
+            athena_js_gil_lock();
         }
 
-        if (render_loop_func != JS_UNDEFINED) {
-            clearScreen(clear_color);
-            ret = JS_Call(ctx, render_loop_func, JS_UNDEFINED, 0, NULL);
-            flipScreen();
-
-            if (JS_IsException(ret)) {
-                err = -1;
-            }
-        }
-
-        if (inputEventHandler && err != -1) {
-            js_pads_update(inputEventHandler);
-            if (totalPadEvents) {
-                for (int i = 0; i < 64; i++) {
-                    if (padEvents[i].function) {
-                        bool trigger_event = false;
-                        switch (padEvents[i].flavour) {
-                            case PRESSED_EVENT:
-                                trigger_event = (inputEventHandler->btns & padEvents[i].buttons);
-                                break;
-                            case JUSTPRESSED_EVENT:
-                                trigger_event = ((inputEventHandler->btns & padEvents[i].buttons) && !(inputEventHandler->old_btns & padEvents[i].buttons));
-                                break;
-                            case NONPRESSED_EVENT:
-                                trigger_event = !(inputEventHandler->btns & padEvents[i].buttons);
-                                break;
-                        };
-
-                        if (trigger_event) {
-                            ret = JS_Call(ctx, padEvents[i].function, JS_UNDEFINED, 0, NULL);            
-
-                            if (JS_IsException(ret)) {
-                                err = -1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if ((poll_result = js_os_poll(ctx)) == JS_POLL_EXCEPTION || err == -1) {
-            if (render_loop_func != JS_UNDEFINED)
-                JS_FreeValue(ctx, render_loop_func);
-
-            if (totalPadEvents) {
-                for (int i = 0; i < 64; i++) {
-                    if (padEvents[i].function) {
-                        JS_FreeValue(ctx, padEvents[i].function);
-                    }
-                }
-            }
-            
-            if (poll_result == JS_POLL_EXCEPTION)
-                return poll_result;
-
+        if (err < 0) {
             return err;
         }
-            
 
-        if (poll_result == JS_POLL_EMPTY && render_loop_func == JS_UNDEFINED && !totalPadEvents)
+        if (ts->frame_func) {
+            if (ts->frame_func(ctx, ts->frame_opaque) < 0)
+                return -1;
+            athena_js_gil_unlock();
+            athena_js_gil_lock();
+        }
+
+        poll_result = js_os_poll(ctx);
+        if (poll_result == JS_POLL_EXCEPTION) {
+            return -1;
+        }
+
+        /* a frame handler may have queued jobs (a promise resolved in the
+           frame that stopped the loop): run them before leaving */
+        if (poll_result == JS_POLL_EMPTY && !ts->frame_func &&
+            !JS_IsJobPending(JS_GetRuntime(ctx))) {
             break;
+        }
     }
 
-    return err;
+    return 0;
 }
 
 void js_std_eval_binary(JSContext *ctx, const uint8_t *buf, size_t buf_len,

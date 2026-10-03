@@ -1,0 +1,55 @@
+{
+  "id": "memcard",
+  "name": "Memory Card",
+  "description": "Memory card drivers (sio2man, mcman, mcserv) and the MemoryCard API: card status, files, directories, attributes, icon.sys, format and background jobs on mc0:/mc1:.",
+  "category": "Storage",
+  "version": "2.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/memcard.c",
+    "native/memcard_iop.c",
+    "native/memcard_job.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "thread",
+      "mutex"
+    ],
+    "iop": [
+      "sio2man",
+      "mcman",
+      "mcserv"
+    ],
+    "ee_libs": [
+      "-lmc"
+    ]
+  },
+  "native": {
+    "register_iop": "athena_memcard_register_iop",
+    "init": "athena_memcard_module_init"
+  },
+  "embed_irx": [
+    {
+      "name": "sio2man",
+      "irx": "$(PS2SDK)/iop/irx/sio2man.irx"
+    },
+    {
+      "name": "mcman",
+      "irx": "$(PS2SDK)/iop/irx/mcman.irx"
+    },
+    {
+      "name": "mcserv",
+      "irx": "$(PS2SDK)/iop/irx/mcserv.irx"
+    }
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_memcard.c"
+    ],
+    "module_name": "MemoryCard",
+    "global_alias": "MemoryCard",
+    "init_func": "athena_memcard_init"
+  },
+  "types": "memcard.d.ts"
+}

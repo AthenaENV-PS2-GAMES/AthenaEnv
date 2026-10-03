@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+# 32-bit userland for tests/js/run.sh: AthenaEnv's QuickJS relies on 32-bit
+# pointers (NaN-boxing), as on the EE, and the tests run under AddressSanitizer.
+FROM i386/debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+CMD ["sh", "tests/js/run.sh"]

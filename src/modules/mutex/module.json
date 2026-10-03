@@ -1,0 +1,26 @@
+{
+  "id": "mutex",
+  "name": "Mutex",
+  "description": "Binary mutual-exclusion primitives backed by EE semaphores.",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/mutex.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_mutex.c"
+    ],
+    "module_name": "Mutex",
+    "global_alias": "Mutex",
+    "init_func": "athena_mutex_init"
+  },
+  "types": "mutex.d.ts"
+}

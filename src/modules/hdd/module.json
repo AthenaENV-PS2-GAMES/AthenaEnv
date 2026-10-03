@@ -1,0 +1,44 @@
+{
+  "id": "hdd",
+  "name": "Internal HDD",
+  "description": "Internal hard disk drivers for exFAT/FAT32 disks (not PFS): boot from and access mass:/. Needs the network adapter or a console with a built-in HDD bay.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/hdd.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "ps2dev9",
+      "bdm",
+      "bdmfs_fatfs",
+      "ata_bd"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_hdd_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "ps2dev9",
+      "irx": "$(PS2SDK)/iop/irx/ps2dev9.irx"
+    },
+    {
+      "name": "bdm",
+      "irx": "$(PS2SDK)/iop/irx/bdm.irx"
+    },
+    {
+      "name": "bdmfs_fatfs",
+      "irx": "$(PS2SDK)/iop/irx/bdmfs_fatfs.irx"
+    },
+    {
+      "name": "ata_bd",
+      "irx": "$(PS2SDK)/iop/irx/ata_bd.irx"
+    }
+  ],
+  "types": null
+}

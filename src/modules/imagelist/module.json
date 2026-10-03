@@ -1,0 +1,32 @@
+{
+  "id": "imagelist",
+  "name": "ImageList",
+  "description": "Safe cooperative asynchronous image loading.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/decoder.c",
+    "native/path.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "image",
+      "thread",
+      "mutex"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_imagelist.c"
+    ],
+    "module_name": "ImageList",
+    "global_alias": "ImageList",
+    "global_export": "ImageList.ImageList",
+    "init_func": "athena_imagelist_init"
+  },
+  "types": "imagelist.d.ts"
+}

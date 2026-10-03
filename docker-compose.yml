@@ -1,0 +1,65 @@
+services:
+  build:
+    build: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    environment:
+      - ATHENAENV_SRC=/src/src
+    command: make clean all
+
+  debug:
+    build: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    environment:
+      - ATHENAENV_SRC=/src/src
+    command: make clean debug
+
+  # C unit tests of the runtime on the build machine (tests/host/run.sh).
+  host-tests:
+    build: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    entrypoint: /bin/sh
+    command: tests/host/run.sh
+
+  # Module test scripts under AddressSanitizer on an i386 host (tests/js/run.sh).
+  js-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.jstests
+    volumes:
+      - .:/src
+    working_dir: /src
+    command: sh tests/js/run.sh
+
+  shell:
+    build: .
+    volumes:
+      - .:/src
+    working_dir: /src
+    environment:
+      - ATHENAENV_SRC=/src/src
+    entrypoint: /bin/bash
+
+  # Build server for the module picker. ATHENA_CHECKOUT must be a dedicated
+  # clone (the server rewrites Makefile.modules and src/generated in it):
+  #   git clone https://github.com/GibranKhalil/AthenaEnv ../athena-build
+  #   ATHENA_CHECKOUT=../athena-build docker compose up build-server
+  build-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    volumes:
+      - ${ATHENA_CHECKOUT:-../athena-build}:/athena
+      - build-cache:/cache
+    environment:
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-*}
+    ports:
+      - "8080:8080"
+
+volumes:
+  build-cache:

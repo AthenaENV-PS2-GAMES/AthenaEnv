@@ -1,0 +1,29 @@
+{
+  "id": "cdrom",
+  "name": "CD/DVD",
+  "description": "Disc filesystem driver (cdfs): boot from and read cdrom0:/cdfs:.",
+  "category": "Storage",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/cdrom.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [
+      "cdfs"
+    ],
+    "ee_libs": []
+  },
+  "native": {
+    "register_iop": "athena_cdrom_register_iop"
+  },
+  "embed_irx": [
+    {
+      "name": "cdfs",
+      "irx": "$(PS2SDK)/iop/irx/cdfs.irx"
+    }
+  ],
+  "types": null
+}

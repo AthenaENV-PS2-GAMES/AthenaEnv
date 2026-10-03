@@ -1,68 +1,178 @@
-name: CI
+name: CI & GitHub Pages
 
 on:
   push:
     branches:
-      - '*'
+      - main
+      - modular
     tags:
-      - v*
+      - 'v*'
   pull_request:
+    branches:
+      - main
+      - modular
   workflow_dispatch:
-  repository_dispatch:
-    types: [run_build]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "ci-pages-${{ github.ref }}"
+  cancel-in-progress: false
 
 jobs:
-  build:
+  catalog:
+    name: Catalog & GitHub Pages
     runs-on: ubuntu-latest
-    container: ghcr.io/ps2homebrew/ps2homebrew:main
     steps:
-    - name: git checkout
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    - name: Workaround permission issue
-      run: |
-        git config --global --add safe.directory /__w/AthenaEnv/AthenaEnv
-        git fetch --prune --unshallow
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
-    - name: Compile project
-      run: |
-        chmod +x build-exports.sh
-        make clean all
-      env:
-        ATHENAENV_SRC: "/__w/AthenaEnv/AthenaEnv/src"
+      - name: Regenerate catalog & public assets
+        run: |
+          node tools/modules.js catalog
 
-    - name: Get short SHA
-      id: slug
-      run: echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> $GITHUB_ENV
+      # Branch pushes only: a tag checkout has no branch to push the commit to.
+      - name: Commit & push updated catalog (if changed)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update catalog.json and public assets [skip ci]"
+          file_pattern: "catalog.json public/*"
 
-    - name: Upload artifacts
-      if: ${{ success() }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: AthenaEnv-${{ steps.slug.outputs.sha8 }}
-        path: bin
+      - name: Setup Pages
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
+        uses: actions/configure-pages@v5
 
-    - name: Compress & Rename bin folder
-      run: |
-        mv bin/ AthenaEnv/
-        tar -zcvf AthenaEnv.tar.gz AthenaEnv
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'public'
 
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/modular')
+        id: deployment
+        uses: actions/deploy-pages@v4
 
-    - name: Create Pre-release
-      if: github.ref == 'refs/heads/main'
-      uses: mathieucarbou/marvinpinto-action-automatic-releases@latest
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        automatic_release_tag: "latest"
-        title: "Development build"
-        files: |
-               AthenaEnv.tar.gz
+  build:
+    name: Build PS2 Homebrew
+    needs: catalog
+    runs-on: ubuntu-latest
+    # Pinned to immutable digest matching Dockerfile
+    container: ghcr.io/ps2homebrew/ps2homebrew@sha256:207523ad98f17fd406afa7dd0c6cfe10730627545cbe45247f0bd73c8a66c376
 
-    - name: Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: AthenaEnv.tar.gz
-        tag_name: ${{ steps.tag.outputs.VERSION }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure safe directory
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --prune --unshallow || true
+
+      - name: Host tests (runtime C code on the build machine)
+        run: sh tests/host/run.sh
+
+      - name: Compile AthenaEnv Core (Release & Debug)
+        run: |
+          chmod +x build-exports.sh
+          make clean all
+          make debug
+          # The native runtime must build without QuickJS, as an ELF and as a library.
+          make all RUNTIME=native APP_SRCS=samples/native/hello/main.c
+          make lib RUNTIME=native
+          make sdk RUNTIME=native
+          make all RUNTIME=native APP_SRCS=samples/native/move/main.c
+          rm -f bin/athena_native*.elf
+        env:
+          ATHENAENV_SRC: "${{ github.workspace }}/src"
+
+      - name: Prepare distribution bundle
+        run: |
+          mkdir -p dist
+          cp -r bin dist/AthenaEnv
+          cd dist
+          tar -zcvf ../AthenaEnv.tar.gz AthenaEnv
+          cd ..
+
+      - name: Get short SHA
+        id: slug
+        run: echo "sha8=$(echo ${GITHUB_SHA} | cut -c1-8)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AthenaEnv-${{ steps.slug.outputs.sha8 }}
+          path: dist/AthenaEnv/
+          retention-days: 14
+
+      - name: Automatic Pre-release (main branch)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "AthenaEnv Development Build"
+          body: "Automated development build from commit ${{ github.sha }}."
+          prerelease: true
+          files: AthenaEnv.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tagged Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Release ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: AthenaEnv.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Optional modules (box2d, box2ddraw, erl, ...) are not in the default
+  # build above: compile every module so they cannot rot unnoticed.
+  all-modules:
+    name: Build every module
+    runs-on: ubuntu-latest
+    container: ghcr.io/ps2homebrew/ps2homebrew@sha256:207523ad98f17fd406afa7dd0c6cfe10730627545cbe45247f0bd73c8a66c376
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure and compile every module (debug and native runtime)
+        run: |
+          apk add --no-cache nodejs
+          node tools/modules.js configure --all
+          chmod +x build-exports.sh
+          make clean debug
+          make all RUNTIME=native APP_SRCS=samples/native/hello/main.c
+        env:
+          ATHENAENV_SRC: "${{ github.workspace }}/src"
+
+  # Module test scripts (bin/tests/*.js) under AddressSanitizer and UBSan,
+  # in the i386 image of Dockerfile.jstests (QuickJS needs 32-bit pointers).
+  js-tests:
+    name: Script tests (ASan)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run tests/js/run.sh
+        run: |
+          docker build -f Dockerfile.jstests -t athena-js-tests .
+          docker run --rm -v "$PWD":/src -w /src athena-js-tests sh tests/js/run.sh

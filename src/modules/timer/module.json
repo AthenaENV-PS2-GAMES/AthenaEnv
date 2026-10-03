@@ -1,0 +1,26 @@
+{
+  "id": "timer",
+  "name": "Timer",
+  "description": "Pauseable elapsed-time timers backed by the EE clock.",
+  "category": "Core",
+  "version": "1.0.0",
+  "required": false,
+  "default": true,
+  "sources": [
+    "native/timer.c"
+  ],
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_timer.c"
+    ],
+    "module_name": "Timer",
+    "global_alias": "Timer",
+    "init_func": "athena_timer_init"
+  },
+  "types": "timer.d.ts"
+}

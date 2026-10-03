@@ -1,0 +1,7 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts and Makefiles must always use LF line endings
+*.sh text eol=lf
+Makefile* text eol=lf
+*.ini text eol=lf
