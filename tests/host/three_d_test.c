@@ -18,6 +18,15 @@ int main(void) {
     assert(athena_quaternion_slerp(&half,&q,&neg,0.5f)); closef(half.w,1);
     before=half; assert(!athena_quaternion_axis_angle(&half,0,0,0,1));
     assert(!memcmp(&before,&half,sizeof(half)));
+    /* Float normalization scales by the largest component: extreme but finite
+     * inputs neither overflow nor underflow; lengths up to 1e-20 are rejected. */
+    AthenaQuaternion big={3e38f,0,0,-3e38f},tiny={4e-20f,0,3e-20f,0};
+    assert(athena_quaternion_normalize(&q,&big)); closef(q.x,(float)M_SQRT1_2); closef(q.w,-(float)M_SQRT1_2);
+    assert(athena_quaternion_normalize(&q,&tiny)); closef(q.x,.8f); closef(q.z,.6f);
+    before=q; tiny=(AthenaQuaternion){1e-21f,0,0,0};
+    assert(!athena_quaternion_normalize(&q,&tiny) && !memcmp(&before,&q,sizeof(q)));
+    assert(athena_quaternion_axis_angle(&q,0,3e38f,3e38f,3.14159265358979323846f));
+    closef(q.y,(float)M_SQRT1_2); closef(q.z,(float)M_SQRT1_2); assert(fabsf(q.w)<1e-6f);
     assert(athena_quaternion_axis_angle(&q,0,0,1,3.14159265358979323846f/2));
     AthenaVector4 pos={10,20,30,1},scale={2,3,4,0};
     assert(athena_quaternion_trs(&m,&pos,&q,&scale));
@@ -34,7 +43,7 @@ int main(void) {
     float xyz[]={-1,-1,0, 1,-1,0, 0,1,0};
     float rgba[]={1,0,0,1, 0,1,0,1, 0,0,1,1};
     uint32_t idx[]={2,0,1};
-    AthenaGeometry3D g={xyz,3,rgba,3,idx,3};
+    AthenaGeometry3D g={.positions=xyz,.vertex_count=3,.colors=rgba,.color_count=3,.indices=idx,.index_count=3};
     AthenaMesh3D *mesh=NULL,*invalid=(void *)1;
     uint32_t invalid_offset=99;
     assert(athena_geometry3d_validate(&g,&invalid_offset)==ATHENA_GEOMETRY3D_VALID && invalid_offset==0);

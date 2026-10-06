@@ -11,18 +11,28 @@ do renderer estático: os módulos são opcionais e o renderer é experimental.
 O segundo incremento implementa recorte preciso nos seis planos em C para
 instâncias que cruzam o frustum, preservando o caminho VU1 para as inteiramente
 contidas. Inclui contadores de entrada/recorte/rejeição, buffers fixos e cenas
-C/JS de diagnóstico. Texturas/luzes, animação, Scene3D e Physics3D continuam
-pendentes. Não há
-fachada compatível com a API antiga nem benchmark de ganhos nesta etapa.
+C/JS de diagnóstico. Iluminação já foi aceita em C/JS no PCSX2; UVs e texturas
+retidas foram aceitas nas nove etapas C/JS no PCSX2. Animação e
+Physics3D continuam pendentes; Scene3D teve as etapas C aceitas no PCSX2. Não há
+fachada compatível com a API antiga nem comparação de desempenho com o legado.
 Os exemplos nativo e QuickJS foram validados pelo usuário em PCSX2, com os
 cubos aparecendo corretamente. A validação encontrou e corrigiu uma falha
 na leitura de operandos desalinhados do QuickJS para R5900; detalhes e
-regressões estão em `docs/3D.md`. O shader e as cenas do novo recorte ainda
-precisam de validação visual no alvo; testes host não emulam a execução VU1.
+regressões estão em `docs/3D.md`. O recorte foi confirmado pelo usuário no
+PCSX2 em 04/10/2026, com log `input=3 output=5 clipped=3 rejected=0 culledObjects=0`.
+O incremento seguinte prepara regressões C/JS de depth, culling, câmeras,
+HUD/TileMap 2D e recriação, baseline Batch/individual e bytes de geometria DMA.
+O usuário confirmou a cena nativa completa no PCSX2 e enviou seu primeiro
+baseline: 64 instâncias contidas em aproximadamente 3,136 ms e recortadas
+em 18,342 ms. Também confirmou todas as etapas QuickJS e enviou o baseline:
+Batch JS ~3,567/18,789 ms versus individual ~16,949/32,131 ms, contido/recortado.
+As regressões C/JS e o baseline inicial no PCSX2 estão concluídos por aceite
+do usuário. PS2 real permanece pendente; testes host não emulam VU1.
+Ver [3D_REGRESSION.md](../docs/3D_REGRESSION.md).
 
 O legado tem um backend 3D substancial em C e microprogramas VU1. O trabalho principal é preservar esse backend enquanto se corrigem contratos de memória, atualização e dependências, seguindo `NEW_MODULE_DIRECTIVES.md`. A migração deve aproveitar a infraestrutura atual de gráficos, matemática, jobs e sistemas do `Loop`.
 
-Na análise inicial não existiam manifestos para renderer 3D, câmera 3D, iluminação, animação esquelética, ODE ou sombras. Agora há manifestos opcionais de `quaternion`, `camera3d`, `model3d` e `render3d`. `Vector` e `Matrix4` já estavam migrados. `Camera2D`, `Collision` e `Box2D` são 2D; `Scene` gerencia telas, transições e assets em JavaScript e não substitui uma hierarquia espacial 3D.
+Na análise inicial não existiam manifestos para renderer 3D, câmera 3D, iluminação, animação esquelética, ODE ou sombras. Agora há manifestos opcionais de `quaternion`, `camera3d`, `model3d`, `lights` e `render3d`. `Vector` e `Matrix4` já estavam migrados. `Camera2D`, `Collision` e `Box2D` são 2D; `Scene` gerencia telas, transições e assets em JavaScript e não substitui uma hierarquia espacial 3D.
 
 Recomendação: começar por uma cena estática com câmera, iluminação e HUD 2D; depois integrar cena nativa, animação, consultas espaciais, física e sombras. Otimizações adicionais devem entrar depois de uma referência funcional reproduzível, mantendo as proteções necessárias ao DMA desde o primeiro renderer.
 
@@ -188,21 +198,28 @@ Fases 4, 5 e 6 compartilham a base da fase 3 e podem ser planejadas como trilhas
 
 **Primeiro marco recomendado:** carregar um GLB estático, compartilhar o mesh entre várias instâncias, renderizar com uma câmera e luz direcional, desenhar HUD 2D e liberar/recarregar a cena com segurança. Ainda sem animação ou física. Esse marco exercita o novo padrão inteiro com um escopo revisável.
 
-### 7.1. Progresso registrado em 03/10/2026
+### 7.1. Progresso atualizado em 04/10/2026
 
 As fases acima continuam sendo o plano completo. Os incrementos entregues
-estabelecem a base e parte da fase 2; não encerram o corte vertical com luzes e HUD.
+estabelecem a base e parte da fase 2. O primeiro corte de materiais/normais e
+Lights foi aceito visualmente em C/JS no PCSX2. O incremento seguinte implementa
+UVs, texturas retidas, ST/Q VU1 e sincronização GS, com aceite visual C/JS
+concluído no PCSX2 e contadores correspondentes. O marco estático demonstrado
+está aceito nesse alvo; parsing completo, mais assets, medições e PS2 real
+permanecem como acompanhamento.
 
 | Fase / frente | Estado | Entregue | Falta para concluir |
 | --- | --- | --- | --- |
 | 0 — contratos e referência | Parcial | Inventário do legado; riscos de ownership/API; convenções matemáticas e limites; demos C/JS dos cubos. | Baseline de tempo/memória do legado e matriz de compatibilidade por export; mais cenas com assets reais. |
-| 1 — matemática e transporte | Parcial | Quaternion nativo; composição Matrix4 A × B corrigida; TRS; cópias de matrizes; retain/release; tickets de geração DMA e espera antes de reutilizar o ring. | Comprovação no PS2 real; sequências 3D → 2D → 3D, câmera/pass switches e teardown/reload no alvo. |
-| 2 — geometria e câmera | Parcial | Model3D com malhas copiadas/imutáveis e instâncias independentes; Camera3D com dirty flags; loaders síncronos OBJ/glTF/GLB de cor; limites e erros explícitos. | Normais, UVs, materiais/texturas e iluminação; orçamento completo de parsing e validação visual dos loaders no alvo. |
-| 2 — renderer e recorte | Implementado; validação visual pendente para o recorte | Passe opaco unlit VU1, Batch nativo, AABB culling, depth reverso, restauração TEST/ZBUF; recorte nos seis planos em C e caminho VU1 para objetos contidos; estatísticas e demos de recorte. | Confirmar imagem, depth e winding; adicionar HUD; medir custos CPU/DMA; migrar passe difuso. |
-| Integração modular | Entregue para os quatro módulos atuais | Manifestos opcionais, headers C, bindings finos, `.d.ts` e geração de catálogo/registries; builds mínimos native/QuickJS com 11 módulos resolvidos. | Repetir esse critério para cada novo módulo; manter os módulos avançados fora da dependência mínima. |
-| 3–8 | Planejado | Direção de dependências e critérios de aceite definidos neste documento. | Scene3D, edição/caches, animação/skinning, jobs, física, sombras e otimizações guiadas por perfis. |
+| 1 — matemática e transporte | Parcial | Quaternion nativo; composição Matrix4 A × B corrigida; TRS; cópias de matrizes; retain/release; tickets DMA; troca 3D → TileMap VU1 → 3D, câmeras e recriação aceitas em C/JS no PCSX2. | Comprovar sincronização no PS2 real. |
+| 2 — geometria e câmera | Marco estático aceito em C/JS no PCSX2 | Model3D com malhas/material copiados; normais importadas/geradas; UVs OBJ/glTF; Texture retida; instâncias independentes; Camera3D; GLB texturizado aceito nos dois runtimes; limites explícitos. | Mais assets/loaders no alvo; orçamento completo de parsing; PS2 real. |
+| 2 — iluminação | Concluída no PCSX2 em C/JS | Nove etapas aceitas pelo usuário, com logs correspondentes; ambiente/quatro direcionais, setters/revisão/cache, Gouraud VU1/C e inversa transposta. | PS2 real; baseline do passe difuso. |
+| 2 — renderer e recorte | Cor/difuso/texturas aceitos em C/JS no PCSX2 | Unlit/diffuse VU1, Batch, AABB/depth/recorte, HUD/TileMap/câmeras/recriação; ST/Q, UV no recorte, TEX0/TEX1/CLAMP restaurados, FINISH serializado, retenção e reset de vídeo aceitos nos dois runtimes. | PS2 real; baseline de materiais e medições comparáveis. |
+| Integração modular | Entregue para os cinco módulos atuais | Manifestos opcionais, headers C, bindings finos, `.d.ts` e geração de catálogo/registries; cenas native/QuickJS com 17 módulos resolvidos, incluindo HUD/TileMap. | Repetir esse critério para cada novo módulo; manter os módulos avançados fora da dependência mínima. |
+| 3 — Scene3D | Aceito em C/JS no PCSX2 | `scene3d` 1.0: nós com malhas retidas, ciclos/raiz/profundidade rejeitados, dirty flags com caminho de subárvore, bounds mundiais, culling hierárquico, fila estável por pipeline, `athena_render3d_draw_mesh()` e sistema `POST_UPDATE` do Loop. Ver [3D_SCENE.md](../docs/3D_SCENE.md). | Transparência, identidade real de materiais, edição/commit, clones e caches. |
+| 4–8 | Planejado | Direção de dependências e critérios de aceite definidos neste documento. | Animação/skinning, jobs, física, sombras e otimizações guiadas por perfis. |
 
-Validação executada neste incremento: suíte host completa com UBSan, testes
+Validação executada no incremento de 03/10: suíte host completa com UBSan, testes
 3D/pacotes de 32 bits com ASan/UBSan e suíte QuickJS de 32 bits sem falhas.
 O recorte foi exercitado com 20 mil triângulos determinísticos, seis planos,
 interpolação de cores, orientação e expansão de pacotes. Os três microprogramas
@@ -211,17 +228,53 @@ nativo dos cubos e nativo de recorte concluídos. A regressão dos módulos 3D
 passou com 59 verificações e a de arrays com 202, ambas repetidas em dois
 runtimes novos no mesmo processo.
 
-A seleção original de 36 módulos foi restaurada e o build QuickJS de regressão
+A seleção original de 36 módulos foi restaurada em 03/10 e o build QuickJS de regressão
 concluiu como `bin/athena_regression.elf`. Os ELFs 3D usam a seleção mínima,
 independentemente dessa configuração restaurada. O build completo ainda emite
 avisos de compilação do QuickJS e de ABI/float mode do objeto legado libmpeg;
 sucesso de linkedição não elimina a necessidade de investigar esses avisos
 na frente de manutenção das dependências.
 
-O usuário confirmou os cubos C e JS em PCSX2 **antes do novo incremento de
-recorte**. Isso comprova a correção do problema de arrays no exemplo JS,
-mas não valida visualmente o shader modificado, a nova cena de recorte nem
-a sincronização no PS2 real. Não há comparação de desempenho medida.
+O usuário confirmou os cubos C e JS em PCSX2, comprovando a correção de arrays,
+e confirmou as cenas de recorte e regressões nativas em 04/10. A primeira
+medição nativa em PCSX2 está em [3D_REGRESSION.md](../docs/3D_REGRESSION.md),
+com o [registro original](../docs/benchmarks/3d-native-2026-10-04.json).
+O usuário também confirmou as nove etapas QuickJS e enviou seu
+[baseline](../docs/benchmarks/3d-quickjs-2026-10-04.json). Contadores C/JS
+coincidem. Regressões e baseline inicial no PCSX2 concluídos por aceite
+explícito do usuário; sincronização no PS2 real ainda exige validação.
+Em 04/10, os quatro ELFs (QuickJS, cubos, recorte e regressões C) compilaram
+com os 16 módulos da cena com HUD/TileMap. A suíte host completa passou,
+incluindo contagem de payload contra os pacotes emitidos e 12 ciclos de
+shutdown/reload do shader com troca de câmera/contexto GS.
+A suíte QuickJS de 32 bits também passou com ASan/UBSan, incluindo 62
+verificações 3D e 202 de arrays, repetidas em dois runtimes novos.
+
+No incremento de iluminação de 04/10, foram gerados cinco ELFs pelo WSL:
+QuickJS, cubos C, recorte C, regressão C e a nova cena de iluminação C,
+com 17 módulos resolvidos. A suíte host completa passou com UBSan; os
+testes 3D/pacotes passaram também com ASan/UBSan em 32 bits. A suíte
+QuickJS completa passou, incluindo as novas verificações de Lights/materiais
+e repetição em dois runtimes novos. Quatro microprogramas conferem com a
+assembly OpenVCL. A seleção original de 36 módulos foi restaurada ao final.
+O usuário confirmou também todas as nove etapas da iluminação C/JS;
+[registro do aceite e contadores](../docs/validation/3d-lighting-2026-10-04.json).
+Os logs incluem 25→26 triângulos no recorte e 2.128→2.176 bytes; não medem tempo.
+
+O incremento de texturas acrescenta Texture independente de Image, retenção
+por Mesh/Instance/Batch, UVs copiadas/importadas e interpoladas antes de W,
+ST/Q VU1, sampler clamp nearest/linear, upload síncrono e espera GS antes de
+devolver VRAM/pixels. Cenas C/JS com nove etapas e assets determinísticos estão
+em [3D_TEXTURES.md](../docs/3D_TEXTURES.md). Seis ELFs compilam pelo WSL com 17
+módulos resolvidos. Suíte host completa, 3D de 32 bits e suíte JS com ASan/UBSan
+passaram; cinco programas OpenVCL conferem com a assembly. O usuário confirmou
+as nove etapas C/JS de texturas no PCSX2: 26→28 triângulos no recorte,
+2.064 bytes e contadores preservados após liberar o handle e reiniciar vídeo.
+[Registro do aceite](../docs/validation/3d-textures-2026-10-04.json).
+Os contadores coincidem nos dois runtimes, incluindo 1.920 bytes unlit,
+2.880 diffuse e 864 para o primeiro cubo de camera-tile-camera.
+O incremento está concluído no PCSX2. PS2 real e baseline de materiais
+continuam pendentes; esses logs são diagnósticos, sem medição de tempo.
 
 ### 7.2. Descobertas e decisões decorrentes
 
@@ -230,37 +283,86 @@ a sincronização no PS2 real. Não há comparação de desempenho medida.
 | Arrays JS com 36 índices chegavam ao binding com comprimento 32; uma inspeção adicional causou TLB Miss e assertion em JS_FreeAtomStruct. | Logs do usuário em PCSX2; endereços mapeados no ELF para o caminho de átomos/bytecode; cubos nativos funcionavam. | `get_u32()` no PS2 lê bytes voláteis e preserva operandos desalinhados, evitando recombinação em LWL/LWR. Assembly conferida e cubos JS confirmados pelo usuário. A interação exata entre toolchain e word-merge do R5900 ainda requer caso mínimo independente. Regressões: `array_literal_test.js` e `quickjs_operand_test.c`. |
 | O GCC R5900 eliminava verificações `isfinite(float)`. | Inspeção da assembly do build; buffers TypedArray podem conter padrões IEEE NaN/Inf mesmo quando o compilador assume aritmética finita. | Helper `athena/float_bits.h` inspeciona bits IEEE; proteção aplicada a geometria, câmera, quaternions, recorte e conversões JS/Matrix4. Testes cobrem padrões não finitos e preservação de estado em falhas. Não equivale a uma auditoria de todos os módulos do projeto. |
 | Matrix4.multiply calculava B × A enquanto o contrato publicava A × B. | Inspeção do caminho VU0 e testes com matrizes não comutativas. | Corrigida a ordem e documentada a incompatibilidade para jogos que compensavam a inversão. Convenção única: column-major, vetores coluna e TRS explícito. |
-| Descartar todo triângulo que cruza o frustum não preserva a parte visível. | Comportamento do microprograma inicial e testes numéricos de interseções, inclusive vértice atrás da câmera. | Recorte homogêneo antes da divisão por W, com cor interpolada e fan triangulation em C; VU1 preservado para objetos inteiramente contidos. Imagem do novo caminho ainda precisa de confirmação no alvo. |
+| Descartar todo triângulo que cruza o frustum não preserva a parte visível. | Comportamento do microprograma inicial e testes numéricos de interseções, inclusive vértice atrás da câmera; imagem confirmada pelo usuário no PCSX2 em 04/10/2026. | Recorte homogêneo antes da divisão por W, com cor interpolada e fan triangulation em C; VU1 preservado para objetos inteiramente contidos. Confirmação no PS2 real permanece pendente. |
 | O recorte pode ampliar o número de triângulos e o volume DMA. | Teste de 18 triângulos parcialmente visíveis produz 36 triângulos e três chunks; verificação de UNPACK xyzw e RGBA8. | Buffers fixos e chunks limitados a 48 vértices; cópia para o ring antes da reutilização; contadores sourceTriangles/clippedTriangles/rejectedTriangles. `triangles` passa a contar a saída enviada ao VU1, não pixels/triângulos rasterizados. |
-| Precisão double reduz instabilidade nas interseções, mas custa software no EE. | Escolha de implementação; custo ainda não medido em cenas reais. | Restringir o caminho CPU às AABBs que cruzam o frustum. Medir malhas grandes, subdivisão espacial e alternativa VU1 antes de anunciar ganho de performance. |
+| Precisão double reduz instabilidade nas interseções, mas custa software no EE. | Primeiro baseline nativo em PCSX2: recorte de 64 instâncias levou aproximadamente 18,342 ms versus 3,136 ms contidas, com payload 2,5 vezes maior. O teste não isola o custo de double. | Revisto em 05/10 após o [perfil](../docs/benchmarks/3d-profile-2026-10-05.json): o custo era o `double` emulado, não a precisão necessária. Recorte e iluminação por vértice em `float`, com snap ao plano, distâncias que estouram rejeitadas e cores/UVs limitados; os 20 mil triângulos aleatórios preservam orientação. Subdivisão espacial e recorte em VU1 seguem como alternativas medidas. |
+| Aritmética `double` domina o custo de CPU do 3D no EE. | [Perfil](../docs/benchmarks/3d-profile-2026-10-05.json) com conteúdo idêntico no PCSX2: ~1,4 µs por operação `double` contra 0,35 µs por Matrix4 multiply VU0; box_relation ~44 µs; set_euler ~250 µs; difuso +52 µs e Scene3D +52 µs por passe. | Caminhos por objeto/frame em `float` com escalonamento pelo maior componente e margem relativa 1e-5 mantida; `double` só onde ocorre uma vez por mudança (câmera) ou ainda não medido (recorte, iluminação C). Contrato: código quente de 3D evita `double`. |
+| A submissão individual JS tem custo adicional alto nesse cenário. | Baseline de 64 instâncias: Batch JS ~3,567 ms versus individual ~16,949 ms contidas; ~18,789 versus ~32,131 ms recortadas. Mesmos triângulos, payload e 64 passes/chunks. | Priorizar Batch para coleções JS. A janela inclui binding e objetos/agregação de estatísticas; não isola cada custo, não mede ganho sobre o legado e requer repetições para generalização. |
 | Lifetime JS, leitura DMA e rasterização GS são eventos diferentes. | Testes do renderer/transporte verificam troca de canais, reutilização do ring e dados válidos após liberar a malha. | Retenção nativa explícita e geometria copiada. Tickets cobrem leitura DMA; não representam conclusão do GS. DMA_REF/chains cacheadas permanecem adiados até haver lifetime e medição adequados. |
 | As dependências e ferramentas efetivas podem ser conferidas dentro da imagem de build. | Builds pelo Docker no WSL com PS2SDK/OpenVCL; testes host de 32 bits em imagem própria. | Usar o shell da imagem para consultar headers/fontes de ps2dev, ps2sdk, OpenVCL e demais dependências; comandos e caminhos em [BUILDING_ATHENA.md](../docs/BUILDING_ATHENA.md#wsl-com-docker-e-inspecao-do-toolchain). Docker/WSL é o caminho disponível quando Podman não sustenta o build. |
 
 ### 7.3. Próximos passos, na ordem de execução
 
-1. **Fechar a validação do recorte no alvo.** Executar os cubos atualizados e
-   `athena_3d_clip_native.elf`; no QuickJS, usar
-   `athena_3d_js.elf --cfg=3d_clip.ini`. Confirmar preservação da parte visível
-   nas quatro bordas e no plano próximo, cores contínuas, ausência de erros
-   e coerência dos contadores. Repetir no PS2 real quando disponível.
-2. **Consolidar regressões gráficas e baseline.** Acrescentar cenas de depth,
-   CULL_BACK/CULL_FRONT, dois passes/câmeras, HUD 2D e teardown/reload.
-   Registrar tempo CPU, volume DMA, memória e custo de objetos contidos versus
-   malhas cruzando o frustum. Aceite: imagem correta e comparação reproduzível,
-   sem anunciar ganho percentual antes da medição.
-3. **Completar o corte estático da fase 2.** Definir materiais por descriptor,
-   normais/UVs e recursos de textura com retenção; implementar Lights com
-   instâncias, limites e dirty flags, e migrar o passe difuso. Usar um GLB
-   pequeno compartilhado por instâncias e HUD como cena de aceite C/JS.
-4. **Iniciar Scene3D (fase 3).** Grafo nativo com ciclos rejeitados, transforms
-   sujos e bounds/filas em lote; integração explícita com Loop, sem atualização
-   implícita em draw. Medir muitos objetos antes de introduzir caches DMA_REF.
-5. **Avançar pelas trilhas posteriores.** Animation3D com clips opacos e pose
+1. **Recorte aceito em PCSX2 em 04/10/2026.** O usuário confirmou imagem
+   correta e três triângulos recortados produzindo cinco de saída.
+   Repetir no PS2 real quando disponível.
+2. **Regressões C/JS e baseline inicial concluídos no PCSX2.** O usuário
+   confirmou todas as etapas de depth, culling, câmeras, HUD/TileMap e
+   recriação nos dois runtimes. As nove etapas têm 60 frames de aquecimento
+   e 120 de medição cada. Logs recebidos, com contadores de geometria iguais
+   em C/JS e Batch/individual. Batch JS ~3,567/18,789 ms versus individual
+   ~16,949/32,131 ms, contido/recortado. Referência e limites em
+   [3D_REGRESSION.md](../docs/3D_REGRESSION.md). Repetições com metadados
+   completos e PS2 real ficam como acompanhamento; DMA total e pico de
+   memória ainda não são instrumentados.
+3. **Marco estático de iluminação e texturas concluído em C/JS no PCSX2.**
+   Materiais/normais e Lights aceitos nas nove etapas de
+   [3D_LIGHTING.md](../docs/3D_LIGHTING.md). UVs e Texture retida aceitos nas
+   nove etapas de [3D_TEXTURES.md](../docs/3D_TEXTURES.md), incluindo perspectiva,
+   recorte, filtros, TileMap, descarte após draw e reset de vídeo. Registrar
+   baseline de materiais antes de otimizar o lifetime síncrono; ampliar assets
+   e validação de loaders e executar no PS2 real como acompanhamento.
+4. **Scene3D (fase 3) aceito em C/JS no PCSX2 em 05/10/2026; perfil de CPU
+   concluído em 06/10/2026.** Grafo nativo com ciclos rejeitados, transforms
+   sujos, bounds por subárvore, culling hierárquico e fila por pipeline; Loop
+   explícito via `attachLoop()`; draw lança erro com a cena desatualizada.
+   Cenas C/JS de sete etapas em [3D_SCENE.md](../docs/3D_SCENE.md).
+   `samples/native/3d_profile` compara Scene3D × Batch com o mesmo grid; o
+   [perfil](../docs/benchmarks/3d-profile-2026-10-05.json) mostrou que o custo
+   de CPU era `double` emulado em software (seção 7.2). Quaternion,
+   box_relation, inversa transposta, bounds do Scene3D, recorte e iluminação
+   por vértice passaram a `float`; subárvores INSIDE dispensam os testes de
+   frustum dos descendentes e do render
+   (`athena_render3d_draw_mesh_contained()`). Clipping, lighting, textures,
+   scene e perfil revalidados no PCSX2 com imagem aceita, 60 FPS estáveis e
+   contadores idênticos. Resultados: box_relation 44,3→5,9 µs; passe unlit
+   53,6→15,1 µs, difuso 105,5→22,0 µs, Scene3D 157,3→17,6 µs (abaixo do
+   Batch, 22,0 µs); `many-nodes` 20,5→1,7 ms de draw e 4,65→0,30 ms de
+   update; `subtree-cull` 1,04→0,10 ms.
+5. **Retomada — próximos passos, nesta ordem:**
+   1. **Versionar o trabalho.** As entregas de 3D desde `144fe78` (lighting,
+      texturas, Scene3D, perfil e `float`) estão fora de commits na branch
+      `modular-3D`; revisar o diff e dividir em commits por módulo.
+   2. **Atualizar baselines.** Repetir `athena_3d_regression_native.elf` e
+      `3d_regression.js`: [3D_REGRESSION.md](../docs/3D_REGRESSION.md) e os
+      JSON de 04/10 são anteriores ao `float` e não representam mais o custo
+      atual. Registrar o baseline QuickJS de Scene3D/Batch com o mesmo grid
+      (perfil JS equivalente a `3d_profile`), para medir o custo do binding.
+   3. **Auditar `double` restante em caminhos por frame.** `view_matrix` e
+      `set_projection` da câmera (uma vez por mudança), slerp, loaders e
+      bindings JS (`JS_ToFloat64` é inevitável na fronteira, mas conversões
+      intermediárias não). Medir antes de converter; manter o contrato de
+      código quente sem `double`.
+   4. **Custos fixos por passe** (~15 µs unlit, ~22 µs difuso): duas barreiras
+      FLUSHA, upload de constantes/matrizes e salvar/restaurar registradores GS
+      a cada malha. Avaliar agrupar malhas do mesmo pipeline/material em um
+      passe, com medição antes/depois no `3d_profile`.
+   5. **Update animado:** `set_euler` ainda custa ~9 µs (três `sinf`/`cosf`
+      e normalizações); avaliar composição direta de Euler em quaternion e
+      setters em lote para Scene3D/Instance.
+   6. **Scene3D, funcionalidades pendentes:** transparência ordenada,
+      identidade real de materiais (agrupamento por textura/material na fila),
+      edição/commit, clones e caches; só então chains DMA_REF.
+   7. **Hardware real:** repetir clipping, lighting, textures, scene,
+      regression e perfil no PS2; o PCSX2 não prova sincronização nem tempo.
+6. **Avançar pelas trilhas posteriores.** Animation3D com clips opacos e pose
    por instância; jobs de assets com orçamento/cancelamento; ODE desacoplado e
    Physics3D com sync/eventos em lote. Sombras e efeitos dependem dessas bases.
 
-Os passos 1–2 são os próximos critérios de aceite. O recorte já implementado
-não deve ser confundido com a conclusão da fase 2 ou com desempenho comprovado.
+Os aceites visuais dos passos 1–4 estão concluídos no PCSX2 em C/JS por
+confirmação do usuário.
+PS2 real, parsing completo e mais assets/loaders continuam pendentes;
+as medições do PCSX2 não estabelecem o desempenho no hardware real.
 
 ## 8. Novos módulos e extensões úteis
 

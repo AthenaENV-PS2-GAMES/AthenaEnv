@@ -84,1450 +84,6 @@ declare namespace std {
 }
 
 
-/* === Module: Mutex (mutex) === */
-/**
- * Native EE mutex primitives.
- *
- * Mutexes protect native/application data shared by callbacks or threads.
- * They do not make arbitrary QuickJS runtime access thread-safe; JavaScript
- * execution must still follow AthenaEnv's runtime-gate rules.
- *
- * Example:
- * ```js
- * const lock = Mutex.new();
- * Mutex.lock(lock);
- * try {
- *     // Update shared native/application state.
- * } finally {
- *     Mutex.unlock(lock);
- *     Mutex.destroy(lock);
- * }
- * ```
- */
-declare namespace Mutex {
-    /** Opaque handle returned by `Mutex.new()`. */
-    interface Handle {
-        readonly __brand: 'Mutex';
-    }
-
-    /** Creates an unlocked native mutex. */
-    function new(): Handle;
-
-    /** Blocks until acquired and returns the native EE result code. */
-    function lock(mutex: Handle): number;
-
-    /** Releases the mutex and returns the native EE result code. */
-    function unlock(mutex: Handle): number;
-
-    /** Releases the native mutex. Do not use `mutex` afterwards. */
-    function destroy(mutex: Handle): void;
-}
-
-
-/* === Module: Thread (thread) === */
-/**
- * EE thread management.
- *
- * Thread callbacks execute on native EE worker threads. Keep callbacks short,
- * avoid direct QuickJS runtime access from native workers, and use the
- * documented AthenaEnv synchronization boundaries.
- *
- * Example:
- * ```js
- * const worker = Thread.new(() => {
- *     System.delay();
- * }, 'worker', 32768, 16);
- * Thread.start(worker);
- * console.log(Thread.getStatus(worker));
- * Thread.destroy(worker);
- * ```
- */
-declare namespace Thread {
-    /** Opaque handle returned by `Thread.new()`. */
-    interface Handle {
-        readonly __brand: 'Thread';
-    }
-
-    /** Snapshot of one tracked native thread. */
-    interface TaskInfo {
-        /** Native EE thread ID. */
-        id: number;
-        /** Thread name. */
-        name: string;
-        /** Native status code. */
-        status: number;
-        /** Configured stack size in bytes. */
-        stack: number;
-    }
-
-    /**
-     * Creates a native EE thread.
-     * @param callback Function executed by the new thread.
-     * @param name Optional name, limited to 63 characters.
-     * @param stackSize Stack size in bytes, at least 16384; defaults to 32768.
-     *   JavaScript may use it all but 8 KB: deeper recursion throws a
-     *   catchable "stack overflow" instead of overrunning the stack.
-     * @param priority EE priority from 1 to 127; defaults to 16.
-     */
-    function new(
-        callback: () => void,
-        name?: string,
-        stackSize?: number,
-        priority?: number
-    ): Handle;
-
-    /** Starts execution and returns the native EE result code. */
-    function start(thread: Handle): number;
-
-    /** Requests thread termination and returns the native EE result code. */
-    function stop(thread: Handle): number;
-
-    /** Returns the native EE thread ID. */
-    function getId(thread: Handle): number;
-
-    /** Returns the current thread name. */
-    function getName(thread: Handle): string;
-
-    /** Replaces the thread name. */
-    function setName(thread: Handle, name: string): void;
-
-    /** Returns the native EE status code. */
-    function getStatus(thread: Handle): number;
-
-    /** Releases the thread handle. Stop it first; do not reuse the object. */
-    function destroy(thread: Handle): void;
-
-    /** Returns all active/tracked threads. */
-    function list(): TaskInfo[];
-
-    /** Force-terminates a native thread by ID. */
-    function kill(id: number): number;
-
-    interface ReadFileOptions {
-        /** Decode the file as UTF-8 text and resolve with a string. Default false (ArrayBuffer). */
-        text?: boolean;
-        /** Refuse files larger than this many bytes. Default 16 MiB. */
-        maxBytes?: number;
-    }
-
-    /** `poll()` of a read: bytes read so far and the file's size (0 until known). */
-    interface ReadFileStatus<T> extends AthenaJobStatus<T> {
-        bytesDone: number;
-        bytesTotal: number;
-    }
-
-    /**
-     * Reads a whole file on the shared job pool, in 64 KiB chunks, while
-     * frames keep coming: large data files, or files on slow storage (disc,
-     * USB). Resolves with an ArrayBuffer (no copy of the bytes read), or a
-     * string with `text: true`. Rejects with an error that has `path` when
-     * the file cannot be opened or read, or is larger than `maxBytes`.
-     *
-     * @example
-     * ```js
-     * const level = JSON.parse(await Thread.readFileAsync("levels/1.json", { text: true }));
-     * ```
-     */
-    function readFileAsync(path: string, options: ReadFileOptions & { text: true }):
-        AthenaJob<string, ReadFileStatus<string>>;
-    function readFileAsync(path: string, options?: ReadFileOptions):
-        AthenaJob<ArrayBuffer, ReadFileStatus<ArrayBuffer>>;
-}
-
-/**
- * A background job, as returned by `MemoryCard.readFileAsync()`,
- * `Archive.extractAsync()`, `Sound.loadSfxAsync()`, `Font.loadAsync()`...
- * Jobs run on a small shared pool of worker threads while frames keep
- * coming. Every job can be awaited, polled, waited for and cancelled; the
- * module functions (`MemoryCard.poll(job)`, ...) do the same.
- *
- * @example
- * ```js
- * const font = await Font.loadAsync("fonts/title.ttf", { size: 40 });
- *
- * const job = Archive.extractAsync("dlc.zip", "mass:/GAME/dlc");
- * Loop.run(() => {
- *     const status = job.poll();          // { state, result | error, ...progress }
- *     if (status.state === "running") drawProgress(status.bytesDone, status.bytesTotal);
- * });
- * ```
- */
-interface AthenaJob<T, Status extends AthenaJobStatus<T> = AthenaJobStatus<T>> extends PromiseLike<T> {
-    /** State without blocking; the result or error is converted once and kept. */
-    poll(): Status;
-    /** Blocks until the job settles or `timeoutMs` passes, then polls. */
-    wait(timeoutMs?: number): Status;
-    /** The job ends as `'cancelled'` unless it already finished. */
-    cancel(): void;
-}
-
-interface AthenaJobStatus<T> {
-    state: 'running' | 'done' | 'failed' | 'cancelled';
-    /** When `state` is `'done'`. The same value on every later poll. */
-    result?: T;
-    /** When `state` is `'failed'` or `'cancelled'`. */
-    error?: Error;
-}
-
-
-/* === Module: Archive (archive) === */
-/**
- * Read zip, tar, tar.gz and gzip files, and gzip data in memory.
- *
- * Every format is a list of entries: a `.gz` file is a single-entry archive
- * named after the original file. `list`, `read` and `extractAll` work the
- * same way for all of them.
- *
- * Safety:
- * - extraction validates every entry before the first write: names with
- *   `..`, absolute paths or devices (`mc0:`), encrypted entries, existing
- *   files (with `overwrite: false`) and `maxSize` all reject the archive
- *   without writing anything;
- * - a file that fails midway is removed;
- * - `read` and `gunzip` stop at `maxSize` (default 16 MiB), so a small
- *   compressed file cannot exhaust the EE RAM.
- *
- * Failures throw with a stable `error.code` (see `ErrorCode`).
- *
- * Example:
- * ```js
- * // Assets straight from a zip, without extracting to the memory card.
- * const pack = Archive.open("assets.zip");
- * const levelJson = Archive.read(pack, "levels/1.json");
- * Archive.close(pack);
- *
- * // Install with a progress bar; nothing is written if any entry is unsafe.
- * Archive.extract("update.tar.gz", "mass:/GAME", {
- *     overwrite: true,
- *     onProgress(entry, index, count) { drawBar(index / count); },
- * });
- *
- * // Compress a save in memory.
- * const packed = Archive.gzip(saveBytes, { level: 9 });
- * const restored = Archive.gunzip(packed);
- *
- * // Extract on a worker thread while the frame loop keeps drawing.
- * const job = Archive.extractAsync("dlc.zip", "mass:/GAME/dlc");
- * while (true) {
- *     const status = Archive.poll(job);
- *     if (status.state !== "running") break;
- *     drawBar(status.bytesDone / (status.bytesTotal || 1));
- *     Screen.flip();
- * }
- * ```
- *
- * Zip entries must use store or deflate (what nearly every tool writes);
- * other methods fail with `UNSUPPORTED` before anything is written.
- */
-declare namespace Archive {
-    /** Opaque handle returned by `Archive.open()`. */
-    interface Handle {
-        readonly __brand: 'Archive';
-    }
-
-    type Format = 'zip' | 'tar' | 'gz';
-
-    /** Binary input accepted by `gzip` and `gunzip` (DataView is not supported). */
-    type Bytes = ArrayBuffer | Uint8Array | Int8Array | Uint8ClampedArray | Uint16Array | Int16Array
-        | Uint32Array | Int32Array | Float32Array | Float64Array;
-
-    type ErrorCode =
-        | 'INVALID_ARGUMENT'
-        | 'IO'
-        | 'BAD_FORMAT'
-        | 'NO_MEMORY'
-        | 'UNSUPPORTED'
-        /** An entry would be written outside the destination. */
-        | 'UNSAFE_PATH'
-        /** Data is larger than `maxSize`. */
-        | 'TOO_LARGE'
-        | 'NOT_FOUND'
-        /** `overwrite: false` and the destination file exists. */
-        | 'EXISTS'
-        | 'ENCRYPTED'
-        /** `onProgress` returned `false`. An exception thrown by a callback propagates as is. */
-        | 'ABORTED'
-        /** The handle was used after `close()`. */
-        | 'CLOSED'
-        /** The handle is in use by another operation (e.g. from a callback). */
-        | 'BUSY';
-
-    interface Error extends globalThis.Error {
-        code: ErrorCode;
-    }
-
-    interface Entry {
-        /** Path inside the archive. Directories end with `/`. */
-        name: string;
-        /** Uncompressed size in bytes. For `.gz` it comes from the file trailer (modulo 4 GiB). */
-        size: number;
-        /** Stored size in bytes. */
-        compressedSize: number;
-        /** Modification time as Unix seconds, 0 when unknown. */
-        mtime: number;
-        dir: boolean;
-        /** Encrypted zip entries cannot be read or extracted. */
-        encrypted: boolean;
-    }
-
-    interface ReadOptions {
-        /** Maximum bytes to decompress. Default and `0`: 16 MiB. */
-        maxSize?: number;
-    }
-
-    interface ExtractOptions {
-        /** Replace existing files. Default `true`. With `false` an existing file rejects the whole extraction. */
-        overwrite?: boolean;
-        /** Maximum total bytes to write. Default `0`: unlimited. */
-        maxSize?: number;
-        /** Return `false` to skip an entry. Called for every entry before anything is written. */
-        filter?: (entry: Entry) => boolean;
-        /** Called before each selected entry is written. Return `false` to cancel. */
-        onProgress?: (entry: Entry, index: number, count: number) => boolean | void;
-    }
-
-    /** Opens a zip, tar, tar.gz or gzip file, detected by content. */
-    function open(path: string): Handle;
-
-    /** Releases the archive. Do not use `archive` afterwards. */
-    function close(archive: Handle): void;
-
-    /** Returns the detected format (`.tar.gz` is `'tar'`). */
-    function type(archive: Handle): Format;
-
-    /** Lists the entries. The first call on a `.tar.gz` decompresses it once to build the index. */
-    function list(archive: Handle): Entry[];
-
-    /**
-     * Reads one entry into memory. `name` may be omitted for a `.gz` file.
-     * Throws `TOO_LARGE` past `options.maxSize`.
-     */
-    function read(archive: Handle, name?: string, options?: ReadOptions): ArrayBuffer;
-
-    /**
-     * Writes the entries below `destination` (default: current directory)
-     * and returns how many were written.
-     */
-    function extractAll(archive: Handle, destination?: string, options?: ExtractOptions): number;
-
-    /** Opens, extracts and closes any supported archive. Returns how many entries were written. */
-    function extract(path: string, destination?: string, options?: ExtractOptions): number;
-
-    /** Alias of `extract`, kept for scripts written for the old API. */
-    function untar(path: string, destination?: string, options?: ExtractOptions): number;
-
-    /** Decompresses gzip data held in memory. */
-    function gunzip(data: Bytes, options?: ReadOptions): ArrayBuffer;
-
-    /** Compresses data in memory as gzip. `level` 0-9, default 6. */
-    function gzip(data: Bytes, options?: { level?: number }): ArrayBuffer;
-
-    /* --- Background jobs ------------------------------------------------ */
-
-    /**
-     * Work running on the shared job pool (see `AthenaJob`). The worker opens
-     * its own copy of the archive and never runs script code; the script
-     * awaits the job, or calls `poll()` (e.g. once per frame) to follow it.
-     * Dropping the handle cancels the job.
-     */
-    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
-        readonly __brand: 'ArchiveJob';
-    }
-
-    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
-
-    interface JobStatus<T> {
-        state: JobState;
-        /** Entry being processed, `""` when none. */
-        entry: string;
-        entriesDone: number;
-        /** 0 until the archive has been indexed. */
-        entriesTotal: number;
-        bytesDone: number;
-        /** Declared size of the selected entries. */
-        bytesTotal: number;
-        /** When `state` is `'done'`. The same value on every later poll. */
-        result?: T;
-        /** When `state` is `'failed'` or `'cancelled'`. */
-        error?: Error;
-    }
-
-    interface AsyncExtractOptions {
-        /** As in `ExtractOptions`. Default `true`. */
-        overwrite?: boolean;
-        /** As in `ExtractOptions`. Default `0`: unlimited. */
-        maxSize?: number;
-        /**
-         * Entries to extract: exact names, or prefixes ending with `/` for a
-         * whole directory. Default: every entry. (Callbacks such as `filter`
-         * cannot run on the worker; this replaces them.)
-         */
-        include?: string[];
-    }
-
-    /**
-     * Starts `extract()` on a worker thread. The result is the number of
-     * entries written. Validation still happens before the first write.
-     */
-    function extractAsync(path: string, destination?: string, options?: AsyncExtractOptions): Job<number>;
-
-    /** Starts `read()` on a worker thread. `name` may be omitted for a `.gz` file. */
-    function readAsync(path: string, name?: string, options?: ReadOptions): Job<ArrayBuffer>;
-
-    /** Returns the job's progress without blocking. */
-    function poll<T>(job: Job<T>): JobStatus<T>;
-
-    /**
-     * Blocks until the job settles or `timeoutMs` passes (default: no limit),
-     * letting other threads run meanwhile, then returns `poll(job)`.
-     */
-    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
-
-    /**
-     * Asks the job to stop before its next block of work. Files already
-     * written stay; the file being written is removed.
-     */
-    function cancel(job: Job<unknown>): void;
-}
-
-
-/* === Module: Box2D (box2d) === */
-/**
- * 2D rigid body physics with Box2D 3.2.
- *
- * A `World` owns `Body` objects; bodies carry `Shape`s (circle, box,
- * polygon, capsule, segment) and `Chain`s, and are connected by `Joint`s.
- * Units are meters, kilograms, seconds and radians; keep moving objects
- * between 0.1 and 10 meters and scale to pixels when drawing.
- *
- * Every Box2D object has exactly one script object: `shape.getBody() === body`,
- * and the shapes reported by queries and events can be compared with `===`
- * or used as Map keys. Objects hold their world (`body.world`), so the world
- * stays alive while any of them is reachable; an unreachable world is freed
- * by the GC with everything in it. `destroy()` frees the Box2D object at
- * once: later calls on it throw a TypeError (`isValid()` returns false).
- *
- * Invalid arguments throw instead of reaching Box2D, whose assertions would
- * reset the console: TypeError for wrong types or objects, RangeError for
- * values out of range (NaN and Infinity included). Every number must be
- * finite and within +-1e10; positions, points, distances and vectors
- * (`{ x, y }`) within +-100000 m (Box2D's B2_HUGE).
- *
- * Creating worlds, bodies, shapes, chains or joints, and `world.step()`,
- * throw a RangeError when Box2D would exceed `setMemoryLimit()` or leave less
- * than 256 KB of free RAM: Box2D itself cannot recover from a failed
- * allocation. A refused step leaves the world as it was. The limit goes back
- * to 0 (none) when the VM restarts (`std.reload()`).
- *
- * Performance: every getter allocates an object. To sync many sprites per
- * frame use `world.readTransforms(bodies, float32Array)` (no allocation) or
- * `world.getBodyEvents()` (moved bodies only).
- *
- * Example:
- * ```js
- * const world = Box2D.createWorld({ gravity: { x: 0, y: -10 } });
- *
- * const ground = world.createBody({ position: { x: 0, y: -1 } });
- * ground.createBoxShape({ halfWidth: 20, halfHeight: 1 });
- *
- * const crate = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 0, y: 5 } });
- * crate.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5, friction: 0.4, enableContactEvents: true });
- *
- * while (true) {
- *     world.step(1 / 60, 4);
- *     for (const hit of world.getContactEvents().begin) {
- *         if (hit.shapeA.getBody() === crate || hit.shapeB.getBody() === crate) console.log("landed");
- *     }
- *     const t = crate.getTransform();
- *     drawCrate(t.x * PIXELS_PER_METER, t.y * PIXELS_PER_METER, t.angle);
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace Box2D {
-    /** Box2D library version, `"3.2.0"`. */
-    const version: string;
-    /** Body types for `BodyOptions.type` and `Body.setType()`. */
-    const STATIC_BODY: 0;
-    const KINEMATIC_BODY: 1;
-    const DYNAMIC_BODY: 2;
-    /** Most vertices a polygon (or query proxy) can have: 8. */
-    const MAX_POLYGON_VERTICES: number;
-    /** Most worlds alive at a time (8 on the EE). */
-    const MAX_WORLDS: number;
-
-    /**
-     * Caps the bytes Box2D may hold (0 = no limit, the default). Reset to 0
-     * when the VM restarts.
-     */
-    function setMemoryLimit(bytes: number): void;
-    function getMemoryLimit(): number;
-    /** Bytes currently allocated by Box2D (all worlds). */
-    function getMemoryUsage(): number;
-
-    /**
-     * Character mover: given the desired translation and the planes from
-     * `world.collideMover()`, returns the translation that respects them.
-     * Move the capsule by it, then collide again next frame.
-     */
-    function solvePlanes(dx: number, dy: number, planes: CollisionPlane[]): { x: number; y: number; iterations: number };
-    /**
-     * Removes the parts of a velocity that go into the planes. Pass the same
-     * planes, after `solvePlanes` wrote their `push`.
-     */
-    function clipVector(vx: number, vy: number, planes: CollisionPlane[]): Vec2;
-
-    /** A plane for the mover solver; `collideMover()` results can be passed as they are. */
-    interface CollisionPlane {
-        normal: Vec2;
-        offset: number;
-        /** Most the solver may push along this plane. Default: unlimited. */
-        pushLimit?: number;
-        /** `clipVector` clips against this plane. Default true (false for soft collision). */
-        clipVelocity?: boolean;
-        /** Written by `solvePlanes`: `clipVector` only clips against planes that pushed. */
-        push?: number;
-    }
-
-    type BodyType = 0 | 1 | 2;
-    type ShapeType = 'circle' | 'capsule' | 'segment' | 'polygon' | 'chainSegment';
-    type JointType = 'distance' | 'filter' | 'motor' | 'prismatic' | 'revolute' | 'weld' | 'wheel';
-
-    interface Vec2 {
-        x: number;
-        y: number;
-    }
-
-    interface AABB {
-        lowerX: number;
-        lowerY: number;
-        upperX: number;
-        upperY: number;
-    }
-
-    /**
-     * 64-bit collision bits. Accepted as an integer number (a negative number
-     * is two's complement: `-1` is every bit) or a BigInt. Read back as a
-     * number within +-2^53, as a BigInt beyond (bits 53 to 62).
-     */
-    type Bits = number | bigint;
-
-    /**
-     * Two shapes collide when each one's categoryBits match the other's
-     * maskBits, unless they share a groupIndex: positive always collides,
-     * negative never does.
-     */
-    interface Filter {
-        /** Default 1. */
-        categoryBits?: Bits;
-        /** Default -1 (every category). */
-        maskBits?: Bits;
-        /** Default 0. */
-        groupIndex?: number;
-    }
-
-    /** Filter for queries: shapes whose categoryBits match maskBits, and whose maskBits match categoryBits. */
-    interface QueryFilter {
-        /** Default 1. */
-        categoryBits?: Bits;
-        /** Default -1. */
-        maskBits?: Bits;
-    }
-
-    interface WorldOptions {
-        /** Default `{ x: 0, y: -10 }`. */
-        gravity?: Vec2;
-        /** Let resting bodies sleep. Default true. */
-        enableSleep?: boolean;
-        /** Continuous collision between dynamic and static bodies. Default true. */
-        enableContinuous?: boolean;
-        /** Speed (m/s) below which collisions do not bounce. Default 1. */
-        restitutionThreshold?: number;
-        /** Approach speed (m/s) that reports a hit event. Default 1. */
-        hitEventThreshold?: number;
-        /** Speed cap in m/s, > 0. Default 400. */
-        maximumLinearSpeed?: number;
-        /** Accepted for compatibility (1..32); the EE always simulates on one worker. */
-        workerCount?: number;
-        /** Contact stiffness in Hz, >= 0. Default 30. See `World.setContactTuning()`. */
-        contactHertz?: number;
-        /** Contact damping ratio, >= 0. Default 10. */
-        contactDampingRatio?: number;
-        /** Most speed (m/s) at which overlap is pushed out, >= 0. Default 3. */
-        contactSpeed?: number;
-        /** Softer contacts between bodies of very different mass (experimental). Default false. */
-        enableContactSoftening?: boolean;
-        userData?: any;
-    }
-
-    interface BodyOptions {
-        /** Default STATIC_BODY. */
-        type?: BodyType;
-        position?: Vec2;
-        /** Radians. `rotation` is an alias. */
-        angle?: number;
-        rotation?: number;
-        linearVelocity?: Vec2;
-        angularVelocity?: number;
-        /** >= 0. */
-        linearDamping?: number;
-        /** >= 0. */
-        angularDamping?: number;
-        /** Multiplies the world gravity; may be negative. Default 1. */
-        gravityScale?: number;
-        /** Speed below which the body may sleep, >= 0. Default 0.05 m/s. */
-        sleepThreshold?: number;
-        /** Stops rotation. */
-        fixedRotation?: boolean;
-        /** Blocks motion along world x (e.g. a 2D side view with vertical-only motion). */
-        lockLinearX?: boolean;
-        /** Blocks motion along world y. */
-        lockLinearY?: boolean;
-        /** Continuous collision against other dynamic bodies too (fast projectiles). */
-        isBullet?: boolean;
-        enableSleep?: boolean;
-        isAwake?: boolean;
-        isEnabled?: boolean;
-        /** Lets the body spin past Box2D's rotation speed cap (round wheels only). Default false. */
-        allowFastRotation?: boolean;
-        /**
-         * Reuse contact points between steps. Default true (faster); turn it
-         * off for characters that must not catch on ghost collisions.
-         */
-        enableContactRecycling?: boolean;
-        /** Debug name, cut to 10 bytes (B2_NAME_LENGTH) at a character boundary. */
-        name?: string;
-        userData?: any;
-    }
-
-    /** Surface properties of a shape; see `Shape.setSurfaceMaterial()`. */
-    interface SurfaceMaterial {
-        /** >= 0. Default 0.6. */
-        friction?: number;
-        /** Bounciness, >= 0 (above 1 gains energy). Default 0. */
-        restitution?: number;
-        /** >= 0. Default 0. */
-        rollingResistance?: number;
-        /** Conveyor belt speed along the surface. Default 0. */
-        tangentSpeed?: number;
-        /** Your own material id (e.g. for footstep sounds). Not used by Box2D. Default 0. */
-        userMaterialId?: Bits;
-        /** Debug draw color 0xRRGGBB; 0 = the default color. */
-        customColor?: number;
-    }
-
-    /** Mass properties. `center` is local; the inertia is about the center of mass. */
-    interface MassData {
-        mass: number;
-        center: Vec2;
-        rotationalInertia: number;
-    }
-
-    /** Options shared by every `create*Shape` method. */
-    interface ShapeOptions extends SurfaceMaterial {
-        /** kg/m^2, >= 0. Default 1. */
-        density?: number;
-        /** Detects overlaps without colliding; see `World.getSensorEvents()`. */
-        isSensor?: boolean;
-        /** Report this shape to sensors (visitors need it too). Default false. */
-        enableSensorEvents?: boolean;
-        /** Contact begin/end events. Default false. */
-        enableContactEvents?: boolean;
-        /** Hit events above `hitEventThreshold`. Default false. */
-        enableHitEvents?: boolean;
-        filter?: Filter;
-        userData?: any;
-    }
-
-    interface CircleOptions extends ShapeOptions {
-        /** > 0. */
-        radius: number;
-        /** Local center. Default `{ x: 0, y: 0 }`. */
-        center?: Vec2;
-    }
-
-    interface BoxOptions extends ShapeOptions {
-        /** > 0. */
-        halfWidth: number;
-        /** > 0. */
-        halfHeight: number;
-        /** Local center. */
-        center?: Vec2;
-        /** Local rotation in radians. */
-        angle?: number;
-    }
-
-    interface PolygonOptions extends ShapeOptions {
-        /** 3 to 8 local points; their convex hull is used. */
-        vertices: Vec2[];
-        /** Rounds the corners, >= 0. Default 0. */
-        radius?: number;
-    }
-
-    interface CapsuleOptions extends ShapeOptions {
-        /** Local centers of the two half circles; more than 0.005 apart. */
-        point1: Vec2;
-        point2: Vec2;
-        /** > 0. */
-        radius: number;
-    }
-
-    interface SegmentOptions extends ShapeOptions {
-        /** Local end points; more than 0.005 apart. */
-        point1: Vec2;
-        point2: Vec2;
-    }
-
-    interface ChainOptions extends SurfaceMaterial {
-        /** Connects the last point to the first. Default false. */
-        isLoop?: boolean;
-        enableSensorEvents?: boolean;
-        filter?: Filter;
-        userData?: any;
-    }
-
-    interface JointOptions {
-        /** Let the two bodies collide with each other. Default false. */
-        collideConnected?: boolean;
-        /** Constraint force (N) above which the joint reports a joint event. Default: never. */
-        forceThreshold?: number;
-        /** Constraint torque (N·m) above which the joint reports a joint event. Default: never. */
-        torqueThreshold?: number;
-        /** Stiffness of the joint constraint in Hz, >= 0 (advanced). Default 60. */
-        constraintHertz?: number;
-        /** Damping of the joint constraint, >= 0 (advanced). Default 2. */
-        constraintDampingRatio?: number;
-        userData?: any;
-    }
-
-    /**
-     * `anchor` is a world point where both bodies are joined. Without it,
-     * each body is joined at its own origin. Joints start relaxed: the
-     * current relative angle is the zero angle of revolute joints and is
-     * kept by weld joints.
-     */
-    interface AnchorOptions extends JointOptions {
-        anchor?: Vec2;
-    }
-
-    interface SpringOptions {
-        enableSpring?: boolean;
-        /** Stiffness in Hz, >= 0. */
-        hertz?: number;
-        /** >= 0 (1 = critically damped). */
-        dampingRatio?: number;
-    }
-
-    interface DistanceJointOptions extends JointOptions, SpringOptions {
-        /** World point used by both bodies. */
-        anchor?: Vec2;
-        /** Local point on body A (when `anchor` is not given). */
-        anchorA?: Vec2;
-        /** Local point on body B (when `anchor` is not given). */
-        anchorB?: Vec2;
-        /** Rest length, > 0. Default: the current distance between the anchors. */
-        length?: number;
-        enableLimit?: boolean;
-        minLength?: number;
-        maxLength?: number;
-        enableMotor?: boolean;
-        maxMotorForce?: number;
-        motorSpeed?: number;
-        /**
-         * Spring force range (N), lower <= upper: lower bounds the tension, upper
-         * the compression (upperSpringForce 0 makes a spring that only pulls).
-         * Default unlimited.
-         */
-        lowerSpringForce?: number;
-        upperSpringForce?: number;
-    }
-
-    interface RevoluteJointOptions extends AnchorOptions, SpringOptions {
-        enableLimit?: boolean;
-        /** Radians, within +-0.99 * PI, lowerAngle <= upperAngle. */
-        lowerAngle?: number;
-        upperAngle?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorTorque?: number;
-        /** Angle (radians) the spring pulls towards. Default 0. */
-        targetAngle?: number;
-    }
-
-    interface PrismaticJointOptions extends AnchorOptions, SpringOptions {
-        /** World direction of the slide at creation. Default `{ x: 1, y: 0 }`. */
-        axis?: Vec2;
-        enableLimit?: boolean;
-        lowerTranslation?: number;
-        upperTranslation?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorForce?: number;
-        /** Translation (m) the spring pulls towards. Default 0. */
-        targetTranslation?: number;
-    }
-
-    interface WeldJointOptions extends AnchorOptions {
-        /** 0 = rigid. */
-        linearHertz?: number;
-        angularHertz?: number;
-        linearDampingRatio?: number;
-        angularDampingRatio?: number;
-    }
-
-    interface WheelJointOptions extends AnchorOptions, SpringOptions {
-        /** World direction of the suspension at creation. Default `{ x: 0, y: 1 }`. */
-        axis?: Vec2;
-        enableLimit?: boolean;
-        lowerTranslation?: number;
-        upperTranslation?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorTorque?: number;
-    }
-
-    /** Drives body B relative to body A (top-down friction, animated platforms). */
-    interface MotorJointOptions extends JointOptions {
-        linearVelocity?: Vec2;
-        angularVelocity?: number;
-        maxVelocityForce?: number;
-        maxVelocityTorque?: number;
-        linearHertz?: number;
-        linearDampingRatio?: number;
-        maxSpringForce?: number;
-        angularHertz?: number;
-        angularDampingRatio?: number;
-        maxSpringTorque?: number;
-    }
-
-    interface Contact {
-        shapeA: Shape;
-        shapeB: Shape;
-        /** From shape A to shape B. */
-        normal: Vec2;
-        /** 1 or 2 points. */
-        points: { point: Vec2; separation: number; normalImpulse: number }[];
-    }
-
-    interface CastHit {
-        shape: Shape;
-        point: Vec2;
-        normal: Vec2;
-        /** Position along the cast, 0 (start) to 1 (end). */
-        fraction: number;
-    }
-
-    interface MoverPlane {
-        shape: Shape;
-        /** Plane normal, pointing out of the shape. */
-        normal: Vec2;
-        /** Plane offset, relative to the mover origin. */
-        offset: number;
-        /** Contact point on the shape, relative to the mover origin. */
-        point: Vec2;
-    }
-
-    /**
-     * Events of the last step. A shape destroyed since then reads as null:
-     * always check `end` events, and the others when shapes are destroyed
-     * between `step()` and the read.
-     */
-    interface ContactEvents {
-        begin: { shapeA: Shape; shapeB: Shape }[];
-        end: { shapeA: Shape | null; shapeB: Shape | null }[];
-        hit: { shapeA: Shape; shapeB: Shape; point: Vec2; normal: Vec2; approachSpeed: number }[];
-    }
-
-    /** See ContactEvents about destroyed shapes. */
-    interface SensorEvents {
-        begin: { sensor: Shape; visitor: Shape }[];
-        end: { sensor: Shape | null; visitor: Shape | null }[];
-    }
-
-    /** A body that moved in the last step (awake bodies only; bodies destroyed since are left out). */
-    interface BodyMoveEvent {
-        body: Body;
-        x: number;
-        y: number;
-        angle: number;
-        /** The body went to sleep in this step. */
-        fellAsleep: boolean;
-    }
-
-    /** Sizes of the simulation, from `World.getCounters()`. */
-    interface Counters {
-        bodyCount: number;
-        shapeCount: number;
-        contactCount: number;
-        jointCount: number;
-        islandCount: number;
-        stackUsed: number;
-        staticTreeHeight: number;
-        treeHeight: number;
-        taskCount: number;
-        awakeContactCount: number;
-        recycledContactCount: number;
-        /** Bytes held by this world. */
-        byteCount: number;
-        /** Constraints per solver graph color (24 colors). */
-        colorCounts: number[];
-    }
-
-    interface World {
-        /**
-         * Advances the simulation. Default 1/60 s and 4 sub-steps (1 to 64).
-         * Use a fixed time step for stable results. Throws a RangeError, and
-         * leaves the world as it was, once the memory budget is spent (see
-         * `Box2D.setMemoryLimit()`).
-         */
-        step(timeStep?: number, subStepCount?: number): void;
-        createBody(options?: BodyOptions): Body;
-
-        createDistanceJoint(bodyA: Body, bodyB: Body, options?: DistanceJointOptions): Joint;
-        createRevoluteJoint(bodyA: Body, bodyB: Body, options?: RevoluteJointOptions): Joint;
-        createPrismaticJoint(bodyA: Body, bodyB: Body, options?: PrismaticJointOptions): Joint;
-        createWeldJoint(bodyA: Body, bodyB: Body, options?: WeldJointOptions): Joint;
-        createWheelJoint(bodyA: Body, bodyB: Body, options?: WheelJointOptions): Joint;
-        createMotorJoint(bodyA: Body, bodyB: Body, options?: MotorJointOptions): Joint;
-        /** Only disables collision between the two bodies. */
-        createFilterJoint(bodyA: Body, bodyB: Body, options?: JointOptions): Joint;
-
-        getGravity(): Vec2;
-        setGravity(x: number, y: number): void;
-        enableContinuous(flag: boolean): void;
-        isContinuousEnabled(): boolean;
-        enableSleeping(flag: boolean): void;
-        isSleepingEnabled(): boolean;
-        setRestitutionThreshold(value: number): void;
-        getRestitutionThreshold(): number;
-        setHitEventThreshold(value: number): void;
-        getHitEventThreshold(): number;
-        /** > 0. */
-        setMaximumLinearSpeed(value: number): void;
-        getMaximumLinearSpeed(): number;
-        getAwakeBodyCount(): number;
-        /**
-         * Contact softness (advanced): stiffness in Hz, damping ratio and the
-         * most speed (m/s) at which overlap is pushed out; all >= 0.
-         * Defaults 30, 10, 3.
-         */
-        setContactTuning(hertz: number, dampingRatio: number, pushSpeed: number): void;
-        /** Distance (m) within which contact points are reused between steps, >= 0 (0 disables). */
-        setContactRecycleDistance(distance: number): void;
-        getContactRecycleDistance(): number;
-        /** Solver warm starting; disabling it only makes stacks less stable (testing). */
-        enableWarmStarting(flag: boolean): void;
-        isWarmStartingEnabled(): boolean;
-        /** Speculative contacts (testing). */
-        enableSpeculative(flag: boolean): void;
-        getCounters(): Counters;
-        /** Rebalances the tree of static shapes, e.g. after building a level. */
-        rebuildStaticTree(): void;
-        getUserData(): any;
-        setUserData(value: any): void;
-
-        /** Closest shape hit by the ray from origin to origin + translation, or null. */
-        castRay(originX: number, originY: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit | null;
-        /** Every shape hit by the ray, nearest first. */
-        raycastAll(originX: number, originY: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        /** Shapes whose bounds overlap the box (a broad test: bounds are slightly padded). */
-        queryAABB(lowerX: number, lowerY: number, upperX: number, upperY: number, filter?: QueryFilter): Shape[];
-        /** Shapes overlapping the convex hull of 1 to 8 world points, rounded by radius. */
-        overlapShape(points: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
-        overlapShape(points: Vec2[], filter?: QueryFilter): Shape[];
-        overlapPolygon(vertices: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
-        overlapPolygon(vertices: Vec2[], filter?: QueryFilter): Shape[];
-        overlapCircle(x: number, y: number, radius: number, filter?: QueryFilter): Shape[];
-        overlapCapsule(x1: number, y1: number, x2: number, y2: number, radius: number, filter?: QueryFilter): Shape[];
-        /** Sweeps a shape and returns every hit, nearest first. */
-        castShape(points: Vec2[], radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castPolygon(vertices: Vec2[], radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castCircle(x: number, y: number, radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castCapsule(x1: number, y1: number, x2: number, y2: number, radius: number,
-            translationX: number, translationY: number, filter?: QueryFilter): CastHit[];
-
-        /**
-         * Character mover: sweeps a capsule (centers x1,y1 / x2,y2 relative to
-         * x,y; radius > 0.01) and returns the fraction of the translation
-         * it can move.
-         */
-        castMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
-            translationX: number, translationY: number, filter?: QueryFilter): number;
-        /** Collision planes around a capsule mover, relative to x,y. */
-        collideMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
-            filter?: QueryFilter): MoverPlane[];
-
-        /** Events of the last step. Only shapes with the matching enable*Events option report them. */
-        getContactEvents(): ContactEvents;
-        getSensorEvents(): SensorEvents;
-        /** Cheapest way to sync sprites: only the bodies that moved. */
-        getBodyEvents(): BodyMoveEvent[];
-        /**
-         * Joints whose force or torque exceeded their threshold in the last
-         * step (breakable joints: destroy them here).
-         */
-        getJointEvents(): { joint: Joint }[];
-        /**
-         * Writes x, y, angle of each body into out[3i], out[3i + 1],
-         * out[3i + 2] and returns the body count. No object is allocated:
-         * the fastest way to sync sprites every frame.
-         */
-        readTransforms(bodies: Body[], out: Float32Array): number;
-        /** Milliseconds spent in each phase of the last step (EE cycle counter). */
-        getProfile(): {
-            step: number; pairs: number; collide: number; solve: number; solverSetup: number;
-            constraints: number; prepareConstraints: number; integrateVelocities: number; warmStart: number;
-            solveImpulses: number; integratePositions: number; relaxImpulses: number; applyRestitution: number;
-            storeImpulses: number; splitIslands: number; transforms: number; sensorHits: number;
-            jointEvents: number; hitEvents: number; refit: number; bullets: number; sleepIslands: number;
-            sensors: number;
-        };
-        /**
-         * The whole simulation state, between steps. Checksummed: a damaged
-         * image is rejected by `restore`. Valid for this build only.
-         */
-        snapshot(): ArrayBuffer;
-        /**
-         * Returns the world to a snapshot of itself. Objects that existed then
-         * keep their script objects and user data; objects created since are
-         * destroyed; objects destroyed since come back as new script objects.
-         * RangeError for a rejected image (the world is unchanged). If the
-         * image fails midway the world is destroyed and an InternalError thrown.
-         */
-        restore(image: ArrayBuffer | ArrayBufferView): true;
-        /** Radial impulse on the shapes within radius + falloff. */
-        explode(x: number, y: number, radius: number, falloff: number, impulsePerLength: number, maskBits?: Bits): void;
-
-        /** Frees the world and everything in it. Returns false if already destroyed. */
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    interface Body {
-        readonly world: World;
-
-        getType(): BodyType;
-        setType(type: BodyType): void;
-        getPosition(): Vec2;
-        /** Teleports the body, keeping its angle. */
-        setPosition(x: number, y: number): void;
-        /** Radians. */
-        getAngle(): number;
-        /** Position and angle in one call. */
-        getTransform(): { x: number; y: number; angle: number };
-        setTransform(x: number, y: number, angle: number): void;
-        /** Moves a kinematic body to the target over `duration` seconds (> 0) with velocities. */
-        setTargetTransform(x: number, y: number, angle: number, duration: number): void;
-        getLinearVelocity(): Vec2;
-        setLinearVelocity(vx: number, vy: number): void;
-        getAngularVelocity(): number;
-        setAngularVelocity(w: number): void;
-
-        /** Force at a world point. `wake` defaults to true. */
-        applyForce(fx: number, fy: number, px: number, py: number, wake?: boolean): void;
-        applyForceToCenter(fx: number, fy: number, wake?: boolean): void;
-        applyTorque(torque: number, wake?: boolean): void;
-        applyLinearImpulse(ix: number, iy: number, px: number, py: number, wake?: boolean): void;
-        applyLinearImpulseToCenter(ix: number, iy: number, wake?: boolean): void;
-        applyAngularImpulse(impulse: number, wake?: boolean): void;
-
-        getMass(): number;
-        getLinearDamping(): number;
-        setLinearDamping(damping: number): void;
-        getAngularDamping(): number;
-        setAngularDamping(damping: number): void;
-        getGravityScale(): number;
-        setGravityScale(scale: number): void;
-        isAwake(): boolean;
-        setAwake(flag: boolean): void;
-        isEnabled(): boolean;
-        setEnabled(flag: boolean): void;
-        isFixedRotation(): boolean;
-        setFixedRotation(flag: boolean): void;
-        isBullet(): boolean;
-        setBullet(flag: boolean): void;
-
-        /** Local point to world. */
-        getWorldPoint(x: number, y: number): Vec2;
-        /** World point to local. */
-        getLocalPoint(x: number, y: number): Vec2;
-        /** Local direction to world (rotation only). */
-        getWorldVector(x: number, y: number): Vec2;
-        /** World direction to local (rotation only). */
-        getLocalVector(x: number, y: number): Vec2;
-        /** Velocity of a world point moving with the body. */
-        getWorldPointVelocity(x: number, y: number): Vec2;
-        /** Velocity of a local point of the body, in world coordinates. */
-        getLocalPointVelocity(x: number, y: number): Vec2;
-        /** Center of mass in world coordinates. */
-        getWorldCenter(): Vec2;
-        /** Center of mass in local coordinates. */
-        getLocalCenter(): Vec2;
-        /** About the center of mass, kg·m^2. */
-        getRotationalInertia(): number;
-        getMassData(): MassData;
-        /**
-         * Overrides the mass computed from the shapes (fields left out keep
-         * their value; mass and inertia >= 0) until the shapes change or
-         * `applyMassFromShapes()` is called.
-         */
-        setMassData(data: Partial<MassData>): void;
-        /** Recomputes mass after shape density or geometry changes. */
-        applyMassFromShapes(): void;
-        computeAABB(): AABB;
-        /** Drops the forces and torques applied since the last step. */
-        clearForces(): void;
-        /** Wakes the bodies touching this one. */
-        wakeTouching(): void;
-        /** When false the body never sleeps. Default true. */
-        enableSleep(flag: boolean): void;
-        isSleepEnabled(): boolean;
-        /** Speed (m/s) below which the body may sleep, >= 0. */
-        setSleepThreshold(threshold: number): void;
-        getSleepThreshold(): number;
-        /** See `BodyOptions.enableContactRecycling`. */
-        enableContactRecycling(flag: boolean): void;
-        isContactRecyclingEnabled(): boolean;
-        /** Sets the flag on every shape of the body (read it with `shape.areContactEventsEnabled()`). */
-        enableContactEvents(flag: boolean): void;
-        /** Sets the flag on every shape of the body. */
-        enableHitEvents(flag: boolean): void;
-        /** Debug name, cut to 10 bytes at a character boundary. */
-        setName(name: string): void;
-        getName(): string;
-
-        createCircleShape(options: CircleOptions): Shape;
-        createBoxShape(options: BoxOptions): Shape;
-        createPolygonShape(options: PolygonOptions): Shape;
-        createCapsuleShape(options: CapsuleOptions): Shape;
-        createSegmentShape(options: SegmentOptions): Shape;
-        /**
-         * Chain of segments from 4 or more local points, consecutive points
-         * more than 0.005 apart. Segments are one-sided: they collide on the
-         * right of the direction from one point to the next, so terrain
-         * walked on from above is listed right to left, and a loop listed
-         * counter-clockwise collides on the outside. An open chain uses its
-         * first and last points only to smooth the ends: n points make
-         * n - 3 segments (a loop makes n).
-         */
-        createChain(points: Vec2[], options?: ChainOptions): Chain;
-        /** Shapes of the body, chain segments included. */
-        getShapes(): Shape[];
-        getJoints(): Joint[];
-        /** Touching contacts of the body's shapes (e.g. "is the player grounded?"). */
-        getContacts(): Contact[];
-        getMotionLocks(): { linearX: boolean; linearY: boolean; angularZ: boolean };
-        /** Fields left out keep their value; `angularZ` is `fixedRotation`. */
-        setMotionLocks(locks: { linearX?: boolean; linearY?: boolean; angularZ?: boolean }): void;
-
-        getUserData(): any;
-        setUserData(value: any): void;
-        /** Frees the body with its shapes, chains and joints. Returns false if already destroyed. */
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    interface Shape {
-        readonly world: World;
-
-        getType(): ShapeType;
-        getBody(): Body;
-        getFriction(): number;
-        setFriction(friction: number): void;
-        getRestitution(): number;
-        setRestitution(restitution: number): void;
-        getDensity(): number;
-        /** `updateBodyMass` defaults to true. */
-        setDensity(density: number, updateBodyMass?: boolean): void;
-        isSensor(): boolean;
-        enableSensorEvents(flag: boolean): void;
-        areSensorEventsEnabled(): boolean;
-        enableContactEvents(flag: boolean): void;
-        areContactEventsEnabled(): boolean;
-        enableHitEvents(flag: boolean): void;
-        areHitEventsEnabled(): boolean;
-        getFilter(): { categoryBits: Bits; maskBits: Bits; groupIndex: number };
-        /** Fields left out keep their value. */
-        setFilter(filter: Filter): void;
-        getUserData(): any;
-        setUserData(value: any): void;
-
-        /** World point inside the shape. */
-        testPoint(x: number, y: number): boolean;
-        getClosestPoint(x: number, y: number): Vec2;
-        /** World bounds, slightly padded. */
-        getAABB(): AABB;
-        /** Local geometry; each throws a TypeError for another shape type. */
-        getCircle(): { center: Vec2; radius: number };
-        getCapsule(): { center1: Vec2; center2: Vec2; radius: number };
-        getPolygon(): { vertices: Vec2[]; normals: Vec2[]; centroid: Vec2; radius: number; count: number };
-        getSegment(): { point1: Vec2; point2: Vec2 };
-        getChainSegment(): { ghost1: Vec2; segment: { point1: Vec2; point2: Vec2 }; ghost2: Vec2; chain: Chain };
-        /** Touching contacts of this shape. */
-        getContacts(): Contact[];
-        /** Sensors only: the shapes inside, as of the last step. */
-        getSensorOverlaps(): Shape[];
-
-        /**
-         * Replace the geometry (the type may change), with the options of the
-         * matching `create*Shape`. The body mass is kept: call
-         * `body.applyMassFromShapes()`. Chain segments throw a TypeError.
-         */
-        setCircle(circle: { radius: number; center?: Vec2 }): void;
-        setBox(box: { halfWidth: number; halfHeight: number; center?: Vec2; angle?: number }): void;
-        setPolygon(polygon: { vertices: Vec2[]; radius?: number }): void;
-        setCapsule(capsule: { point1: Vec2; point2: Vec2; radius: number }): void;
-        setSegment(segment: { point1: Vec2; point2: Vec2 }): void;
-        getSurfaceMaterial(): Required<SurfaceMaterial>;
-        /** Fields left out keep their value. */
-        setSurfaceMaterial(material: SurfaceMaterial): void;
-        /** Mass of this shape alone, from its density. */
-        computeMassData(): MassData;
-        /** Ray against this shape only (world coordinates); null when missed. */
-        rayCast(originX: number, originY: number, translationX: number, translationY: number): CastHit | null;
-        /**
-         * Air force on a circle, capsule or polygon of a dynamic body (other
-         * shapes are ignored). `drag` (>= 0) scales the shape's own velocity
-         * against the wind, `lift` the force across it. `wake` defaults to true.
-         */
-        applyWind(windX: number, windY: number, drag: number, lift: number, wake?: boolean): void;
-
-        /**
-         * `updateBodyMass` defaults to true. Returns false if already
-         * destroyed. Chain segments go away with their chain: destroying one
-         * throws a TypeError.
-         */
-        destroy(updateBodyMass?: boolean): boolean;
-        isValid(): boolean;
-    }
-
-    interface Chain {
-        readonly world: World;
-
-        getBody(): Body;
-        /** The chain segments (shapes of type 'chainSegment'). */
-        getShapes(): Shape[];
-        getUserData(): any;
-        setUserData(value: any): void;
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    /**
-     * Methods specific to a joint type throw a TypeError on other types.
-     * Types noted per method.
-     */
-    interface Joint {
-        readonly world: World;
-
-        getType(): JointType;
-        getBodyA(): Body;
-        getBodyB(): Body;
-        getUserData(): any;
-        setUserData(value: any): void;
-        setCollideConnected(flag: boolean): void;
-        getCollideConnected(): boolean;
-        wakeBodies(): void;
-        /** See `JointOptions.forceThreshold` and `World.getJointEvents()`. */
-        setForceThreshold(force: number): void;
-        getForceThreshold(): number;
-        setTorqueThreshold(torque: number): void;
-        getTorqueThreshold(): number;
-        getConstraintForce(): Vec2;
-        getConstraintTorque(): number;
-        /** Constraint error: meters apart the anchors are (ignoring allowed motion). */
-        getLinearSeparation(): number;
-        /** Constraint error in radians. */
-        getAngularSeparation(): number;
-        /** See `JointOptions.constraintHertz`; both >= 0. */
-        setConstraintTuning(hertz: number, dampingRatio: number): void;
-        getConstraintTuning(): { hertz: number; dampingRatio: number };
-        /** Joint frame in body A's (or B's) local space: anchor and axis angle. */
-        getLocalFrameA(): { x: number; y: number; angle: number };
-        getLocalFrameB(): { x: number; y: number; angle: number };
-        setLocalFrameA(x: number, y: number, angle: number): void;
-        setLocalFrameB(x: number, y: number, angle: number): void;
-
-        /** distance, revolute, prismatic, wheel. */
-        enableSpring(flag: boolean): void;
-        isSpringEnabled(): boolean;
-        setSpringHertz(hertz: number): void;
-        getSpringHertz(): number;
-        setSpringDampingRatio(ratio: number): void;
-        getSpringDampingRatio(): number;
-        enableLimit(flag: boolean): void;
-        isLimitEnabled(): boolean;
-        /** Length range (distance), angle (revolute, within +-0.99 * PI) or translation (prismatic, wheel). */
-        setLimits(lower: number, upper: number): void;
-        getLimits(): { lower: number; upper: number };
-        enableMotor(flag: boolean): void;
-        isMotorEnabled(): boolean;
-        setMotorSpeed(speed: number): void;
-        getMotorSpeed(): number;
-
-        /** distance, prismatic. */
-        setMaxMotorForce(force: number): void;
-        getMaxMotorForce(): number;
-        getMotorForce(): number;
-        /** revolute, wheel. */
-        setMaxMotorTorque(torque: number): void;
-        getMaxMotorTorque(): number;
-        getMotorTorque(): number;
-
-        /** revolute: current angle in radians. */
-        getAngle(): number;
-        /**
-         * revolute: angle the spring pulls towards. Like the other setters,
-         * this does not wake sleeping bodies: call `wakeBodies()`.
-         */
-        setTargetAngle(angle: number): void;
-        getTargetAngle(): number;
-        /** prismatic: translation along the axis and its speed. */
-        getTranslation(): number;
-        getSpeed(): number;
-        /** prismatic: translation the spring pulls towards (does not wake the bodies). */
-        setTargetTranslation(translation: number): void;
-        getTargetTranslation(): number;
-        /** distance: rest length (> 0) and current length. */
-        getLength(): number;
-        setLength(length: number): void;
-        getCurrentLength(): number;
-        /** distance: see `DistanceJointOptions.lowerSpringForce`; lower <= upper. */
-        setSpringForceRange(lower: number, upper: number): void;
-        getSpringForceRange(): { lower: number; upper: number };
-
-        /** weld, motor. */
-        setLinearHertz(hertz: number): void;
-        getLinearHertz(): number;
-        setLinearDampingRatio(ratio: number): void;
-        getLinearDampingRatio(): number;
-        setAngularHertz(hertz: number): void;
-        getAngularHertz(): number;
-        setAngularDampingRatio(ratio: number): void;
-        getAngularDampingRatio(): number;
-
-        /** motor. */
-        setLinearVelocity(x: number, y: number): void;
-        getLinearVelocity(): Vec2;
-        setAngularVelocity(velocity: number): void;
-        getAngularVelocity(): number;
-        setMaxVelocityForce(force: number): void;
-        getMaxVelocityForce(): number;
-        setMaxVelocityTorque(torque: number): void;
-        getMaxVelocityTorque(): number;
-        setMaxSpringForce(force: number): void;
-        getMaxSpringForce(): number;
-        setMaxSpringTorque(torque: number): void;
-        getMaxSpringTorque(): number;
-
-        /** `wakeBodies` defaults to true. Returns false if already destroyed. */
-        destroy(wakeBodies?: boolean): boolean;
-        isValid(): boolean;
-    }
-
-    /**
-     * Creates a world. At most `MAX_WORLDS` exist at a time: destroy() the
-     * ones you no longer need (unreachable ones are collected first).
-     */
-    function createWorld(options?: WorldOptions): World;
-}
-
-
-/* === Module: Color (color) === */
-/**
- * Packs RGBA components into the 32-bit color format used by AthenaEnv.
- *
- * The component order in the returned value is `0xAABBGGRR`:
- * red occupies the least-significant byte and alpha the most-significant.
- * Component values are converted to unsigned 8-bit values.
- *
- * The default alpha used by `new()` is `0x80`, matching the PS2 GS default
- * convention. Color helpers are pure and return a new packed value.
- *
- * @example
- * ```js
- * let tint = Color.new(255, 128, 0, 255);
- * tint = Color.setA(tint, 192);
- * console.log(Color.getR(tint), Color.getA(tint));
- * ```
- */
-declare namespace Color {
-    /** Packed `0xAABBGGRR` color value. */
-    type Value = number;
-
-    /** Creates a packed color from red, green, blue and optional alpha. */
-    function new(r: number, g: number, b: number, a?: number): Value;
-    /** Reads the red component in the range 0..255. */
-    function getR(color: Value): number;
-    /** Reads the green component in the range 0..255. */
-    function getG(color: Value): number;
-    /** Reads the blue component in the range 0..255. */
-    function getB(color: Value): number;
-    /** Reads the alpha component in the range 0..255. */
-    function getA(color: Value): number;
-    /** Returns `color` with its red component replaced. */
-    function setR(color: Value, value: number): Value;
-    /** Returns `color` with its green component replaced. */
-    function setG(color: Value, value: number): Value;
-    /** Returns `color` with its blue component replaced. */
-    function setB(color: Value, value: number): Value;
-    /** Returns `color` with its alpha component replaced. */
-    function setA(color: Value, value: number): Value;
-}
-
-
-/* === Module: Box2DDraw (box2ddraw) === */
-/**
- * Debug drawing of a Box2D world: shape outlines, joints, bounds, contacts
- * and centers of mass, in Box2D's colors (static bodies green, awake
- * dynamic bodies pink, sleeping ones gray). Lines are batched into one GS
- * packet stream per call and what lies outside the screen is skipped.
- *
- * Example:
- * ```js
- * while (true) {
- *     world.step(1 / 60, 4);
- *     Screen.clear(BLACK);
- *     Box2DDraw.draw(world, { scale: 32, offsetX: 320, offsetY: 400 });
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace Box2DDraw {
-    interface Options {
-        /** Pixels per meter, 0.001 to 1e6. Default 32. */
-        scale?: number;
-        /** Screen position of the world origin. Default: the screen center. */
-        offsetX?: number;
-        offsetY?: number;
-        /** World y up, screen y down. Default true. */
-        flipY?: boolean;
-        /** Translucent shape interiors (needs alpha blending). Default false. */
-        fill?: boolean;
-        /** Default true. */
-        shapes?: boolean;
-        /** Default true. */
-        joints?: boolean;
-        /** Joint limits, springs and frames. Default false. */
-        jointExtras?: boolean;
-        /** Shape bounding boxes. Default false. */
-        bounds?: boolean;
-        /** Contact points and normals. Default false. */
-        contacts?: boolean;
-        /** Centers of mass. Default false. */
-        mass?: boolean;
-    }
-
-    /** Draws the world. Call between Screen.clear() and Screen.flip(). */
-    function draw(world: Box2D.World, options?: Options): void;
-}
-
-
 /* === Module: Loop (loop) === */
 /**
  * Game loop driven by the runtime.
@@ -2544,6 +1100,49 @@ declare namespace Collision {
 }
 
 
+/* === Module: Color (color) === */
+/**
+ * Packs RGBA components into the 32-bit color format used by AthenaEnv.
+ *
+ * The component order in the returned value is `0xAABBGGRR`:
+ * red occupies the least-significant byte and alpha the most-significant.
+ * Component values are converted to unsigned 8-bit values.
+ *
+ * The default alpha used by `new()` is `0x80`, matching the PS2 GS default
+ * convention. Color helpers are pure and return a new packed value.
+ *
+ * @example
+ * ```js
+ * let tint = Color.new(255, 128, 0, 255);
+ * tint = Color.setA(tint, 192);
+ * console.log(Color.getR(tint), Color.getA(tint));
+ * ```
+ */
+declare namespace Color {
+    /** Packed `0xAABBGGRR` color value. */
+    type Value = number;
+
+    /** Creates a packed color from red, green, blue and optional alpha. */
+    function new(r: number, g: number, b: number, a?: number): Value;
+    /** Reads the red component in the range 0..255. */
+    function getR(color: Value): number;
+    /** Reads the green component in the range 0..255. */
+    function getG(color: Value): number;
+    /** Reads the blue component in the range 0..255. */
+    function getB(color: Value): number;
+    /** Reads the alpha component in the range 0..255. */
+    function getA(color: Value): number;
+    /** Returns `color` with its red component replaced. */
+    function setR(color: Value, value: number): Value;
+    /** Returns `color` with its green component replaced. */
+    function setG(color: Value, value: number): Value;
+    /** Returns `color` with its blue component replaced. */
+    function setB(color: Value, value: number): Value;
+    /** Returns `color` with its alpha component replaced. */
+    function setA(color: Value, value: number): Value;
+}
+
+
 /* === Module: Draw (draw) === */
 /**
  * Immediate-mode 2D primitives rendered by the PS2 GS.
@@ -2595,6 +1194,244 @@ declare namespace Draw {
     /** Draws a circle outline or filled circle. */
     function circle(x: number, y: number, radius: number,
         color: Color.Value, filled?: boolean): void;
+}
+
+
+/* === Module: Ease (ease) === */
+/**
+ * Easing curves and interpolation helpers.
+ *
+ * A curve maps the progress `t` of an animation to a value, with `f(0) = 0`
+ * and `f(1) = 1`; `back` and `elastic` curves overshoot in between. Every
+ * curve clamps `t` to [0, 1] first, so a last frame past the end still gives
+ * a valid value. Curves have short names (`outBack`) and the long names of
+ * easings.net (`easeOutBack`); `Tween` accepts either as a string.
+ *
+ * @example
+ * ```js
+ * const y = Ease.lerp(400, 120, Ease.outBack(elapsed / 0.6));
+ * camera.x = Ease.damp(camera.x, player.x, 10, dt);   // same speed at 30 and 60 FPS
+ * ```
+ */
+declare namespace Ease {
+    /** A curve: progress (clamped to 0..1) to eased value. */
+    type Curve = (t: number) => number;
+    /** A curve, or the name of one (`"outBack"`, `"easeOutBack"`). */
+    type Easing = Curve | string;
+
+    /** The three forms of a curve family. */
+    interface Family {
+        in: Curve;
+        out: Curve;
+        inOut: Curve;
+    }
+
+    const linear: Curve;
+    const inQuad: Curve, outQuad: Curve, inOutQuad: Curve;
+    const inCubic: Curve, outCubic: Curve, inOutCubic: Curve;
+    const inQuart: Curve, outQuart: Curve, inOutQuart: Curve;
+    const inQuint: Curve, outQuint: Curve, inOutQuint: Curve;
+    const inSine: Curve, outSine: Curve, inOutSine: Curve;
+    const inExpo: Curve, outExpo: Curve, inOutExpo: Curve;
+    const inCirc: Curve, outCirc: Curve, inOutCirc: Curve;
+    /** Overshoot of 1.70158 (times 1.525 in `inOutBack`, as easings.net); see `back()`. */
+    const inBack: Curve, outBack: Curve, inOutBack: Curve;
+    /** Amplitude 1, period 0.3; see `elastic()`. */
+    const inElastic: Curve, outElastic: Curve, inOutElastic: Curve;
+    const inBounce: Curve, outBounce: Curve, inOutBounce: Curve;
+
+    /** Long names (easings.net), the same functions as the short ones. */
+    const easeInQuad: Curve, easeOutQuad: Curve, easeInOutQuad: Curve;
+    const easeInCubic: Curve, easeOutCubic: Curve, easeInOutCubic: Curve;
+    const easeInQuart: Curve, easeOutQuart: Curve, easeInOutQuart: Curve;
+    const easeInQuint: Curve, easeOutQuint: Curve, easeInOutQuint: Curve;
+    const easeInSine: Curve, easeOutSine: Curve, easeInOutSine: Curve;
+    const easeInExpo: Curve, easeOutExpo: Curve, easeInOutExpo: Curve;
+    const easeInCirc: Curve, easeOutCirc: Curve, easeInOutCirc: Curve;
+    const easeInBack: Curve, easeOutBack: Curve, easeInOutBack: Curve;
+    const easeInElastic: Curve, easeOutElastic: Curve, easeInOutElastic: Curve;
+    const easeInBounce: Curve, easeOutBounce: Curve, easeInOutBounce: Curve;
+
+    /** Every name `get()` accepts. */
+    const names: readonly string[];
+
+    /** Returns the curve named `ease`, or `ease` itself when it is a function. Throws on unknown names. */
+    function get(ease: Easing): Curve;
+
+    /** Back curves with another overshoot (times 1.525 in `inOut`); 0 is a cubic, larger values overshoot more. */
+    function back(overshoot?: number): Family;
+    /** Elastic curves; `amplitude` >= 1 (default 1), `period` > 0 (default 0.3). */
+    function elastic(options?: { amplitude?: number; period?: number }): Family;
+    /** `count` equal jumps, for frame-by-frame motion; reaches 1 only at t = 1. */
+    function steps(count: number): Curve;
+    /** CSS `cubic-bezier(x1, y1, x2, y2)`; `x1` and `x2` within [0, 1]. */
+    function cubicBezier(x1: number, y1: number, x2: number, y2: number): Curve;
+    /** The curve played backwards: `1 - f(1 - t)`. */
+    function reverse(ease: Easing): Curve;
+    /** The curve forward then back: 0 → 1 → 0, for pulses. */
+    function mirror(ease: Easing): Curve;
+
+    /** `a + (b - a) * t`; `t` is not clamped. */
+    function lerp(a: number, b: number, t: number): number;
+    /** The `t` for which `lerp(a, b, t)` is `value`; 0 when `a === b`. */
+    function inverseLerp(a: number, b: number, value: number): number;
+    /** Maps `value` from [inMin, inMax] to [outMin, outMax], without clamping. */
+    function remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
+    function clamp(value: number, min: number, max: number): number;
+    /** 0 below `edge0`, 1 above `edge1`, a smooth S-curve in between. */
+    function smoothstep(edge0: number, edge1: number, x: number): number;
+    /**
+     * Moves `current` towards `target`, closing the same share of the gap per
+     * second at any frame rate. `lambda` is the speed (about 5 to 15 for a
+     * camera or UI follow); `dt` is the frame delta in seconds.
+     */
+    function damp(current: number, target: number, lambda: number, dt: number): number;
+}
+
+
+/* === Module: Thread (thread) === */
+/**
+ * EE thread management.
+ *
+ * Thread callbacks execute on native EE worker threads. Keep callbacks short,
+ * avoid direct QuickJS runtime access from native workers, and use the
+ * documented AthenaEnv synchronization boundaries.
+ *
+ * Example:
+ * ```js
+ * const worker = Thread.new(() => {
+ *     System.delay();
+ * }, 'worker', 32768, 16);
+ * Thread.start(worker);
+ * console.log(Thread.getStatus(worker));
+ * Thread.destroy(worker);
+ * ```
+ */
+declare namespace Thread {
+    /** Opaque handle returned by `Thread.new()`. */
+    interface Handle {
+        readonly __brand: 'Thread';
+    }
+
+    /** Snapshot of one tracked native thread. */
+    interface TaskInfo {
+        /** Native EE thread ID. */
+        id: number;
+        /** Thread name. */
+        name: string;
+        /** Native status code. */
+        status: number;
+        /** Configured stack size in bytes. */
+        stack: number;
+    }
+
+    /**
+     * Creates a native EE thread.
+     * @param callback Function executed by the new thread.
+     * @param name Optional name, limited to 63 characters.
+     * @param stackSize Stack size in bytes, at least 16384; defaults to 32768.
+     *   JavaScript may use it all but 8 KB: deeper recursion throws a
+     *   catchable "stack overflow" instead of overrunning the stack.
+     * @param priority EE priority from 1 to 127; defaults to 16.
+     */
+    function new(
+        callback: () => void,
+        name?: string,
+        stackSize?: number,
+        priority?: number
+    ): Handle;
+
+    /** Starts execution and returns the native EE result code. */
+    function start(thread: Handle): number;
+
+    /** Requests thread termination and returns the native EE result code. */
+    function stop(thread: Handle): number;
+
+    /** Returns the native EE thread ID. */
+    function getId(thread: Handle): number;
+
+    /** Returns the current thread name. */
+    function getName(thread: Handle): string;
+
+    /** Replaces the thread name. */
+    function setName(thread: Handle, name: string): void;
+
+    /** Returns the native EE status code. */
+    function getStatus(thread: Handle): number;
+
+    /** Releases the thread handle. Stop it first; do not reuse the object. */
+    function destroy(thread: Handle): void;
+
+    /** Returns all active/tracked threads. */
+    function list(): TaskInfo[];
+
+    /** Force-terminates a native thread by ID. */
+    function kill(id: number): number;
+
+    interface ReadFileOptions {
+        /** Decode the file as UTF-8 text and resolve with a string. Default false (ArrayBuffer). */
+        text?: boolean;
+        /** Refuse files larger than this many bytes. Default 16 MiB. */
+        maxBytes?: number;
+    }
+
+    /** `poll()` of a read: bytes read so far and the file's size (0 until known). */
+    interface ReadFileStatus<T> extends AthenaJobStatus<T> {
+        bytesDone: number;
+        bytesTotal: number;
+    }
+
+    /**
+     * Reads a whole file on the shared job pool, in 64 KiB chunks, while
+     * frames keep coming: large data files, or files on slow storage (disc,
+     * USB). Resolves with an ArrayBuffer (no copy of the bytes read), or a
+     * string with `text: true`. Rejects with an error that has `path` when
+     * the file cannot be opened or read, or is larger than `maxBytes`.
+     *
+     * @example
+     * ```js
+     * const level = JSON.parse(await Thread.readFileAsync("levels/1.json", { text: true }));
+     * ```
+     */
+    function readFileAsync(path: string, options: ReadFileOptions & { text: true }):
+        AthenaJob<string, ReadFileStatus<string>>;
+    function readFileAsync(path: string, options?: ReadFileOptions):
+        AthenaJob<ArrayBuffer, ReadFileStatus<ArrayBuffer>>;
+}
+
+/**
+ * A background job, as returned by `MemoryCard.readFileAsync()`,
+ * `Archive.extractAsync()`, `Sound.loadSfxAsync()`, `Font.loadAsync()`...
+ * Jobs run on a small shared pool of worker threads while frames keep
+ * coming. Every job can be awaited, polled, waited for and cancelled; the
+ * module functions (`MemoryCard.poll(job)`, ...) do the same.
+ *
+ * @example
+ * ```js
+ * const font = await Font.loadAsync("fonts/title.ttf", { size: 40 });
+ *
+ * const job = Archive.extractAsync("dlc.zip", "mass:/GAME/dlc");
+ * Loop.run(() => {
+ *     const status = job.poll();          // { state, result | error, ...progress }
+ *     if (status.state === "running") drawProgress(status.bytesDone, status.bytesTotal);
+ * });
+ * ```
+ */
+interface AthenaJob<T, Status extends AthenaJobStatus<T> = AthenaJobStatus<T>> extends PromiseLike<T> {
+    /** State without blocking; the result or error is converted once and kept. */
+    poll(): Status;
+    /** Blocks until the job settles or `timeoutMs` passes, then polls. */
+    wait(timeoutMs?: number): Status;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    cancel(): void;
+}
+
+interface AthenaJobStatus<T> {
+    state: 'running' | 'done' | 'failed' | 'cancelled';
+    /** When `state` is `'done'`. The same value on every later poll. */
+    result?: T;
+    /** When `state` is `'failed'` or `'cancelled'`. */
+    error?: Error;
 }
 
 
@@ -3030,593 +1867,6 @@ declare namespace Gamepad {
 }
 
 
-/* === Module: Screen (screen) === */
-/**
- * Display, frame synchronization, VRAM statistics and GS state controls.
- *
- * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
- * Most numeric constants are raw PS2 GS values and are intended to be passed
- * back to this module rather than interpreted as application-level units.
- */
-declare namespace Screen {
-    /** Current video configuration accepted by `getMode()` and `setMode()`. */
-    interface VideoMode {
-        /** Video mode identifier such as `NTSC` or `PAL`. */
-        mode: number;
-        /** Visible width in pixels. */
-        width: number;
-        /** Visible height in pixels. */
-        height: number;
-        /** Color pixel storage format such as `CT32` or `CT24`. */
-        psm: number;
-        /** Interlaced/progressive mode. */
-        interlace: number;
-        /** Field/frame timing mode. */
-        field: number;
-        /** Depth-buffer pixel storage format. */
-        psmz: number;
-        /** Enables depth buffering. */
-        zbuffering: boolean;
-        /** Enables double-buffered presentation. */
-        double_buffering: boolean;
-        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
-        pass_count?: number;
-    }
-
-    /** Arguments for the GS alpha blend equation. */
-    interface AlphaEquation {
-        a: number;
-        b: number;
-        c: number;
-        d: number;
-        fix: number;
-    }
-
-    /** Pixel bounds used by the GS scissor register. */
-    interface ScissorBounds {
-        x0: number;
-        y0: number;
-        x1: number;
-        y1: number;
-    }
-
-    /** Presents the completed draw buffer and synchronizes the frame. */
-    function flip(): void;
-    /** Clears the current draw buffer using a packed RGBA color. */
-    function clear(color?: number): void;
-    /** Blocks until the next vertical blank starts. */
-    function waitVblankStart(): void;
-    /** Enables or disables synchronization with vertical blank. */
-    function setVSync(enabled: boolean): void;
-    /** Enables or disables the on-screen frame counter. */
-    function setFrameCounter(enabled: boolean): void;
-    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
-    function getMemoryStats(mode?: number): number;
-    /** Returns currently unallocated VRAM in bytes. */
-    function getFreeVRAM(): number;
-    /** Returns the measured FPS over the requested positive frame interval. */
-    function getFPS(interval: number): number;
-    /** Returns the active video configuration. */
-    function getMode(): VideoMode;
-    /** Reconfigures the video mode and render targets; invalid modes throw. */
-    function setMode(mode: VideoMode): void;
-    /** Packs the five GS alpha-equation fields into a register value. */
-    function alphaEquation(a: number, b: number, c: number, d: number,
-        fix: number): bigint;
-    /** Reads a supported GS parameter by its `Screen` constant. */
-    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
-    /** Writes a supported GS parameter by its `Screen` constant. */
-    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
-    /** Switches the active GS context and returns its native result code. */
-    function switchContext(): number;
-    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
-    function flush(): void;
-
-    const VRAM_SIZE: number;
-    const VRAM_USED_TOTAL: number;
-    const VRAM_USED_STATIC: number;
-    const VRAM_USED_DYNAMIC: number;
-    const ALPHA_TEST_ENABLE: number;
-    const ALPHA_TEST_METHOD: number;
-    const ALPHA_TEST_REF: number;
-    const ALPHA_TEST_FAIL: number;
-    const DST_ALPHA_TEST_ENABLE: number;
-    const DST_ALPHA_TEST_METHOD: number;
-    const DEPTH_TEST_ENABLE: number;
-    const DEPTH_TEST_METHOD: number;
-    const ALPHA_BLEND_EQUATION: number;
-    const SCISSOR_BOUNDS: number;
-    const PIXEL_ALPHA_BLEND_ENABLE: number;
-    const COLOR_CLAMP_MODE: number;
-    const ALPHA_NEVER: number;
-    const ALPHA_ALWAYS: number;
-    const ALPHA_LESS: number;
-    const ALPHA_LEQUAL: number;
-    const ALPHA_EQUAL: number;
-    const ALPHA_GEQUAL: number;
-    const ALPHA_GREATER: number;
-    const ALPHA_NEQUAL: number;
-    const ALPHA_FAIL_NO_UPDATE: number;
-    const ALPHA_FAIL_FB_ONLY: number;
-    const ALPHA_FAIL_ZB_ONLY: number;
-    const ALPHA_FAIL_RGB_ONLY: number;
-    const DST_ALPHA_ZERO: number;
-    const DST_ALPHA_ONE: number;
-    const DEPTH_NEVER: number;
-    const DEPTH_ALWAYS: number;
-    const DEPTH_GEQUAL: number;
-    const DEPTH_GREATER: number;
-    const SRC_RGB: number;
-    const DST_RGB: number;
-    const ZERO_RGB: number;
-    const SRC_ALPHA: number;
-    const DST_ALPHA: number;
-    const ALPHA_FIX: number;
-    const BLEND_DEFAULT: bigint;
-    const BLEND_ADD_NOALPHA: bigint;
-    const BLEND_ADD: bigint;
-    const NTSC: number;
-    const PAL: number;
-    const DTV_480p: number;
-    const DTV_576p: number;
-    const DTV_720p: number;
-    const DTV_1080i: number;
-    const INTERLACED: number;
-    const PROGRESSIVE: number;
-    const FIELD: number;
-    const FRAME: number;
-    const CT32: number;
-    const CT24: number;
-    const CT16: number;
-    const CT16S: number;
-    const Z32: number;
-    const Z24: number;
-    const Z16: number;
-    const Z16S: number;
-    const DRAW_BUFFER: number;
-    const DISPLAY_BUFFER: number;
-    const DEPTH_BUFFER: number;
-}
-
-
-/* === Module: System Core (system) === */
-/**
- * PS2 system, filesystem, timing and hardware helpers.
- *
- * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
- * Return values from filesystem and device operations are native result codes;
- * callers should check them before continuing.
- *
- * Example:
- * ```js
- * console.log(System.bootPath);
- * for (const entry of System.listDir('host:/')) {
- *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
- * }
- * System.sleep(16);
- * ```
- */
-declare namespace System {
-    /** One directory entry returned by `listDir()`. */
-    interface DirectoryEntry {
-        /** File or directory name. */
-        name: string;
-        /** File size in bytes; directory sizes may be zero. */
-        size: number;
-        /** True when this entry is a directory. */
-        dir: boolean;
-    }
-
-    /** Memory counters returned by `getMemoryStats()`. */
-    interface MemoryStats {
-        /** Core/binary footprint in bytes. */
-        core: number;
-        /** Reserved native stack in bytes. */
-        nativeStack: number;
-        /** Current native allocations in bytes. */
-        allocs: number;
-        /** Total reported usage in bytes. */
-        used: number;
-        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
-        jsHeap: number;
-        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
-        jsLimit: number;
-        /** Live JavaScript objects. */
-        jsObjects: number;
-    }
-
-    /** EE CPU information returned by `getCPUInfo()`. */
-    interface CPUInfo {
-        /** EE CPU implementation identifier. */
-        implementation: number;
-        /** EE CPU revision identifier. */
-        revision: number;
-        /** Installed EE RAM size in bytes. */
-        RAMSize: number;
-        /** EE bus clock frequency. */
-        BUSClock: number;
-        /** EE CPU clock frequency. */
-        CPUClock: number;
-        /** PS2 machine type identifier. */
-        MachineType: number;
-    }
-
-    /** Memory-card status returned by `getMCInfo()`. */
-    interface MemoryCardInfo {
-        /** Memory-card type identifier. */
-        type: number;
-        /** Free memory reported by the card driver. */
-        freemem: number;
-        /** Format/status flag reported by the card driver. */
-        format: number;
-    }
-
-    /** GS GPU information returned by `getGPUInfo()`. */
-    interface GPUInfo {
-        revision: number;
-        id: number;
-    }
-
-    /** One registered filesystem/device entry. */
-    interface DeviceInfo {
-        name: string;
-        desc: string;
-    }
-
-    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
-    const bootPath: string;
-    /** Legacy alias for bootPath. */
-    const boot_path: string;
-
-    /** Lists entries in a directory or path relative to `bootPath`. */
-    function listDir(path?: string): DirectoryEntry[];
-
-    /** Removes an empty directory and returns the underlying system result. */
-    function removeDirectory(path: string): number;
-
-    /** Copies a file and returns zero on success. */
-    function copyFile(source: string, destination: string): number;
-
-    /** Moves or renames a file and returns zero on success. */
-    function moveFile(source: string, destination: string): number;
-    /** Renames a file or directory and returns the native result code. */
-    function rename(source: string, destination: string): number;
-
-    /** Returns raw EE CPU clock ticks. */
-    function getTicks(): number;
-
-    /** Returns high-resolution elapsed time in milliseconds. */
-    function getMilliseconds(): number;
-
-    /** Suspends the current EE thread for the specified milliseconds. */
-    function sleep(ms: number): void;
-
-    /** Returns currently used EE RAM in bytes. */
-    function getUsedMemory(): number;
-
-    /** Returns remaining available EE RAM in bytes. */
-    function getFreeMemory(): number;
-
-    /** Yields briefly to the EE scheduler. */
-    function delay(): void;
-
-    /** Returns memory counters from the legacy System API. */
-    function getMemoryStats(): MemoryStats;
-
-    /** Returns basic EE CPU and memory information. */
-    function getCPUInfo(): CPUInfo;
-
-    /** Returns basic GS GPU information. */
-    function getGPUInfo(): GPUInfo;
-
-    /** Returns the console temperature in Celsius when supported. */
-    function getTemperature(): number | undefined;
-
-    /** Returns memory-card information for a controller port (0 or 1). */
-    function getMCInfo(port?: number): MemoryCardInfo;
-
-    /** Returns information about a mass-storage block device. */
-    function getBDMInfo(device: string): { name: string; index: number } | undefined;
-
-    /** Returns currently registered file-system devices. */
-    function devices(): DeviceInfo[];
-
-    /** Mounts a block device at a file-system mount point. */
-    function mount(mountpoint: string, blockdev: string, mode?: number): number;
-
-    /** Unmounts a file-system device. */
-    function umount(device: string): number;
-
-    /** Loads an ELF using the legacy Athena loader. */
-    function loadELF(path: string, args?: string[]): number;
-
-    /** Enables or disables the legacy dark-mode flag. */
-    function setDarkMode(enabled: boolean): void;
-
-    /** Forces a QuickJS garbage-collection cycle. */
-    function gc(): void;
-
-    /** Exit application to the PS2 browser/OSDSYS */
-    function exit(): void;
-
-    /** Alias for exiting to the PS2 browser/OSDSYS. */
-    function exitToBrowser(): void;
-}
-
-
-/* === Module: Debug (debug) === */
-/**
- * On-screen diagnostics, for the console where there is no terminal.
- *
- * Everything is drawn after the game's draw by a Loop system that exists only
- * while something is on. Games with their own loop call `Debug.frame(dt)`
- * after drawing. The overlay text refreshes 4 times per second and is laid
- * out once per refresh; the frame-time graph, the console tail and the
- * rects, lines and circles are computed and drawn in C, so a hitbox per
- * entity per frame allocates nothing. The overlay shows its own cost
- * ("debug x ms").
- *
- * It never takes the game down: arguments are checked at the call (a bad
- * color throws there), and an error while drawing turns the module off and
- * is logged once. Shapes are capped at 2048 (texts too); the oldest go and
- * the overlay counts them.
- *
- * The panels stay inside the title-safe area (5% of each edge), which CRT
- * TVs do not cut, and use the built-in font at 16 px.
- *
- * Not in the default build: `node tools/modules.js configure --modules=debug,...`
- *
- * Example:
- * ```js
- * Debug.overlay(true);                          // FPS, CPU, RAM, JS heap, VRAM, graph
- * Debug.console(true, { lines: 6 });            // last lines of console.log
- * Debug.watch("player", () => `${player.x | 0},${player.y | 0} ${player.state}`);
- * Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide everything
- *
- * // In update(): hitboxes for a second, in world coordinates.
- * Debug.rect(enemy.x, enemy.y, 16, 16, Color.new(255, 0, 0), { seconds: 1, space: "world" });
- * Debug.text(enemy.x, enemy.y - 10, "hit!", { seconds: 0.5, space: "world" });
- * ```
- */
-declare namespace Debug {
-    interface ShapeOptions {
-        /** How long it stays, in real seconds (default 0: this frame only). */
-        seconds?: number;
-        /** "screen" (default) or "world", through `setView()`. */
-        space?: "screen" | "world";
-        /** Filled instead of an outline (rect and circle). */
-        filled?: boolean;
-    }
-
-    interface TextOptions extends ShapeOptions {
-        /** Text color (default white). */
-        color?: Color.Value;
-    }
-
-    interface ConsoleOptions {
-        /** Screen lines shown, 1 to 40 (default 8). */
-        lines?: number;
-    }
-
-    interface View {
-        /** World point at the top-left corner of the screen (default 0). */
-        x?: number;
-        y?: number;
-        /** Screen pixels per world unit (default 1). */
-        scale?: number;
-    }
-
-    interface Config {
-        /**
-         * Frame budget in milliseconds for the graph colors. 0 (default)
-         * derives it from the video mode (60 Hz, or 50 Hz for PAL and 576p)
-         * and `vsyncInterval`.
-         */
-        budgetMs?: number;
-        /** The `vsyncInterval` given to Loop.run(), 1 to 4 (default 1; 2 for 30 fps). */
-        vsyncInterval?: number;
-        /**
-         * Distance from the screen edges in pixels, one number or { x, y }.
-         * null (default) is the title-safe area, 5% of each side.
-         */
-        margin?: number | { x: number; y: number } | null;
-        /** Font of every text (default the built-in font at 16 px). */
-        font?: Font;
-    }
-
-    /** Figures of the frame-time graph. */
-    interface FrameStats {
-        samples: number;
-        frameAvg: number;
-        frameMax: number;
-        cpuAvg: number;
-        cpuMax: number;
-    }
-
-    /**
-     * Shows or hides the stats panel: FPS, CPU and frame time (average and
-     * peak of the last 60 frames) and the frame budget, RAM, free VRAM, the
-     * module's own cost, the watches, and a frame-time graph: green under 75% of the budget, yellow up to it, red
-     * over it, magenta for a dropped frame. Returns whether it is on.
-     * Measured on the PS2: about 1.1 ms per frame with the console (0.95 ms
-     * compact; the graph is about 0.45 ms of it). The overlay shows its own
-     * cost as "debug x ms".
-     */
-    function overlay(on?: boolean, options?: OverlayOptions): boolean;
-
-    interface OverlayOptions {
-        /** Draw the frame-time graph (default true). */
-        graph?: boolean;
-        /** Only the FPS line and the watches (default false). */
-        compact?: boolean;
-        /**
-         * Adds the JavaScript heap size and object count (default false).
-         * Reading them walks the whole heap: 6.7 ms in one frame on the PS2,
-         * so it happens every 5 seconds, and is off by default because a
-         * busy game would drop a frame each time.
-         */
-        heap?: boolean;
-    }
-
-    /**
-     * Shows or hides the last lines the script printed (console.log, print,
-     * errors), wrapped to the screen; lines that look like errors are red.
-     * Returns whether it is on.
-     */
-    function console(on?: boolean, options?: ConsoleOptions): boolean;
-
-    /**
-     * Adds `name: read()` to the overlay, evaluated 4 times per second;
-     * errors show inline and long values are cut at 48 characters.
-     */
-    function watch(name: string, read: () => unknown): void;
-    /** Removes a watch; returns whether it existed. */
-    function unwatch(name: string): boolean;
-
-    /** Rectangle outline (or filled), for this frame or `seconds`. Default color red. */
-    function rect(x: number, y: number, width: number, height: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    function line(x1: number, y1: number, x2: number, y2: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    function circle(x: number, y: number, radius: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    /**
-     * Many rectangles in one call, from a Float32Array of x, y, width,
-     * height groups (length a multiple of 4), checked and queued in C: for
-     * the hitboxes of many entities, far cheaper than one `rect()` each.
-     * Groups with a value that is not finite are skipped. Returns how many
-     * were queued.
-     */
-    function rects(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
-    /** Many lines in one call, from x1, y1, x2, y2 groups; see `rects()`. */
-    function lines(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
-    function text(x: number, y: number, text: unknown, options?: TextOptions): void;
-    /** Removes every shape and text still on screen. */
-    function clear(): void;
-
-    /**
-     * Shows and hides everything when the `buttons` combination is pressed
-     * on the controller of `port` (0 or 1). The pad is read without
-     * Gamepad.update(), so the game's justPressed() is unaffected. `null`
-     * removes the shortcut.
-     */
-    function toggleWith(buttons: number | null, port?: 0 | 1): void;
-    /** Shows or hides everything, like the shortcut; returns whether shown. */
-    function show(on?: boolean): boolean;
-
-    /**
-     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
-     * Used without a camera: while `Camera2D.getCurrent()` has one, world
-     * shapes and texts follow it (zoom and rotation included) instead.
-     */
-    function setView(view: View): void;
-    function configure(options: Config): void;
-
-    /**
-     * For games that do not use Loop.run(): call after drawing, before
-     * Screen.flip(). `dt` is the frame time in seconds; `cpuMs` (optional)
-     * feeds the graph. Not needed with Loop.run(): there it does nothing and
-     * warns once.
-     */
-    function frame(dt: number, cpuMs?: number): void;
-
-    /** Figures of the graph over the last `frames` frames (default 60). */
-    function frameStats(frames?: number): FrameStats;
-}
-
-
-/* === Module: Ease (ease) === */
-/**
- * Easing curves and interpolation helpers.
- *
- * A curve maps the progress `t` of an animation to a value, with `f(0) = 0`
- * and `f(1) = 1`; `back` and `elastic` curves overshoot in between. Every
- * curve clamps `t` to [0, 1] first, so a last frame past the end still gives
- * a valid value. Curves have short names (`outBack`) and the long names of
- * easings.net (`easeOutBack`); `Tween` accepts either as a string.
- *
- * @example
- * ```js
- * const y = Ease.lerp(400, 120, Ease.outBack(elapsed / 0.6));
- * camera.x = Ease.damp(camera.x, player.x, 10, dt);   // same speed at 30 and 60 FPS
- * ```
- */
-declare namespace Ease {
-    /** A curve: progress (clamped to 0..1) to eased value. */
-    type Curve = (t: number) => number;
-    /** A curve, or the name of one (`"outBack"`, `"easeOutBack"`). */
-    type Easing = Curve | string;
-
-    /** The three forms of a curve family. */
-    interface Family {
-        in: Curve;
-        out: Curve;
-        inOut: Curve;
-    }
-
-    const linear: Curve;
-    const inQuad: Curve, outQuad: Curve, inOutQuad: Curve;
-    const inCubic: Curve, outCubic: Curve, inOutCubic: Curve;
-    const inQuart: Curve, outQuart: Curve, inOutQuart: Curve;
-    const inQuint: Curve, outQuint: Curve, inOutQuint: Curve;
-    const inSine: Curve, outSine: Curve, inOutSine: Curve;
-    const inExpo: Curve, outExpo: Curve, inOutExpo: Curve;
-    const inCirc: Curve, outCirc: Curve, inOutCirc: Curve;
-    /** Overshoot of 1.70158 (times 1.525 in `inOutBack`, as easings.net); see `back()`. */
-    const inBack: Curve, outBack: Curve, inOutBack: Curve;
-    /** Amplitude 1, period 0.3; see `elastic()`. */
-    const inElastic: Curve, outElastic: Curve, inOutElastic: Curve;
-    const inBounce: Curve, outBounce: Curve, inOutBounce: Curve;
-
-    /** Long names (easings.net), the same functions as the short ones. */
-    const easeInQuad: Curve, easeOutQuad: Curve, easeInOutQuad: Curve;
-    const easeInCubic: Curve, easeOutCubic: Curve, easeInOutCubic: Curve;
-    const easeInQuart: Curve, easeOutQuart: Curve, easeInOutQuart: Curve;
-    const easeInQuint: Curve, easeOutQuint: Curve, easeInOutQuint: Curve;
-    const easeInSine: Curve, easeOutSine: Curve, easeInOutSine: Curve;
-    const easeInExpo: Curve, easeOutExpo: Curve, easeInOutExpo: Curve;
-    const easeInCirc: Curve, easeOutCirc: Curve, easeInOutCirc: Curve;
-    const easeInBack: Curve, easeOutBack: Curve, easeInOutBack: Curve;
-    const easeInElastic: Curve, easeOutElastic: Curve, easeInOutElastic: Curve;
-    const easeInBounce: Curve, easeOutBounce: Curve, easeInOutBounce: Curve;
-
-    /** Every name `get()` accepts. */
-    const names: readonly string[];
-
-    /** Returns the curve named `ease`, or `ease` itself when it is a function. Throws on unknown names. */
-    function get(ease: Easing): Curve;
-
-    /** Back curves with another overshoot (times 1.525 in `inOut`); 0 is a cubic, larger values overshoot more. */
-    function back(overshoot?: number): Family;
-    /** Elastic curves; `amplitude` >= 1 (default 1), `period` > 0 (default 0.3). */
-    function elastic(options?: { amplitude?: number; period?: number }): Family;
-    /** `count` equal jumps, for frame-by-frame motion; reaches 1 only at t = 1. */
-    function steps(count: number): Curve;
-    /** CSS `cubic-bezier(x1, y1, x2, y2)`; `x1` and `x2` within [0, 1]. */
-    function cubicBezier(x1: number, y1: number, x2: number, y2: number): Curve;
-    /** The curve played backwards: `1 - f(1 - t)`. */
-    function reverse(ease: Easing): Curve;
-    /** The curve forward then back: 0 → 1 → 0, for pulses. */
-    function mirror(ease: Easing): Curve;
-
-    /** `a + (b - a) * t`; `t` is not clamped. */
-    function lerp(a: number, b: number, t: number): number;
-    /** The `t` for which `lerp(a, b, t)` is `value`; 0 when `a === b`. */
-    function inverseLerp(a: number, b: number, value: number): number;
-    /** Maps `value` from [inMin, inMax] to [outMin, outMax], without clamping. */
-    function remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
-    function clamp(value: number, min: number, max: number): number;
-    /** 0 below `edge0`, 1 above `edge1`, a smooth S-curve in between. */
-    function smoothstep(edge0: number, edge1: number, x: number): number;
-    /**
-     * Moves `current` towards `target`, closing the same share of the gap per
-     * second at any frame rate. `lambda` is the speed (about 5 to 15 for a
-     * camera or UI follow); `dt` is the frame delta in seconds.
-     */
-    function damp(current: number, target: number, lambda: number, dt: number): number;
-}
-
-
 /* === Module: Image (image) === */
 /**
  * Image loading, CPU pixel access and textured 2D drawing.
@@ -3787,6 +2037,46 @@ interface ImageLoadError {
     stage: "open" | "decode" | "surface" | "upload";
     /** Human-readable description. */
     message: string;
+}
+
+
+/* === Module: Mutex (mutex) === */
+/**
+ * Native EE mutex primitives.
+ *
+ * Mutexes protect native/application data shared by callbacks or threads.
+ * They do not make arbitrary QuickJS runtime access thread-safe; JavaScript
+ * execution must still follow AthenaEnv's runtime-gate rules.
+ *
+ * Example:
+ * ```js
+ * const lock = Mutex.new();
+ * Mutex.lock(lock);
+ * try {
+ *     // Update shared native/application state.
+ * } finally {
+ *     Mutex.unlock(lock);
+ *     Mutex.destroy(lock);
+ * }
+ * ```
+ */
+declare namespace Mutex {
+    /** Opaque handle returned by `Mutex.new()`. */
+    interface Handle {
+        readonly __brand: 'Mutex';
+    }
+
+    /** Creates an unlocked native mutex. */
+    function new(): Handle;
+
+    /** Blocks until acquired and returns the native EE result code. */
+    function lock(mutex: Handle): number;
+
+    /** Releases the mutex and returns the native EE result code. */
+    function unlock(mutex: Handle): number;
+
+    /** Releases the native mutex. Do not use `mutex` afterwards. */
+    function destroy(mutex: Handle): void;
 }
 
 
@@ -3977,217 +2267,6 @@ declare class ImageList {
      * `stats()` keeps working. Calling it again does nothing.
      */
     close(): void;
-}
-
-
-/* === Module: IOP (iop) === */
-/**
- * IOP module and module-manager bindings.
- *
- * IOP module identifiers are numeric registry IDs. A module can be queried
- * by either its name or ID. Loading a module may start its dependencies.
- *
- * Example:
- * ```js
- * const fileXio = IOP.getModule('fileXio');
- * if (fileXio && !fileXio.started) IOP.loadModule(fileXio.id);
- * console.log(IOP.getMemoryStats().free);
- * ```
- */
-declare namespace IOP {
-    /** Metadata for one module registered with the IOP manager. */
-    interface Module {
-        /** Numeric registry identifier. */
-        id: number;
-        /** Registered module name. */
-        name: string;
-        /** True after the module has initialized successfully. */
-        started: boolean;
-        /** True when the module is part of the boot-time set. */
-        startAtBoot: boolean;
-    }
-
-    /** Snapshot of IOP memory usage in bytes. */
-    interface MemoryStats {
-        /** Available IOP RAM. */
-        free: number;
-        /** RAM currently in use by IOP modules. */
-        used: number;
-    }
-
-    /** Returns a snapshot of all registered IOP modules. */
-    function getModules(): Module[];
-    /** Resolves a module by its name or numeric registry ID. */
-    function getModule(nameOrId: string | number): Module;
-    /** Loads and initializes a module and its dependencies. */
-    function loadModule(nameOrId: string | number): number;
-    /** Resets the IOP and reinstalls the registered boot modules. */
-    function reset(): void;
-    /** Returns free and used IOP RAM in bytes. */
-    function getMemoryStats(): MemoryStats;
-}
-
-
-/* === Module: Vector (vector) === */
-/**
- * PS2-aligned vector types.
- *
- * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
- * by the `Vector` module. Arithmetic methods return new vectors and do not
- * mutate their operands. `div()` rejects zero components.
- *
- * Example:
- * ```js
- * import * as Vector from 'Vector';
- * const direction = new Vector.Vector3(3, 4, 0);
- * console.log(direction.norm());
- * const right = direction.cross(new Vector.Vector3(0, 0, 1));
- * ```
- */
-declare class Vector2 {
-    /** Creates a two-component vector. */
-    constructor(x: number, y: number);
-    /** Horizontal component. */
-    x: number;
-    /** Vertical component. */
-    y: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector2): number;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector2): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector2): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector2): Vector2;
-    /** Returns the component-wise difference. */
-    sub(value: Vector2): Vector2;
-    /** Returns the component-wise product. */
-    mul(value: Vector2): Vector2;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector2): Vector2;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector3 {
-    /** Creates a three-component vector. */
-    constructor(x: number, y: number, z: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector3): number;
-    /** Returns the 3D cross product. */
-    cross(value: Vector3): Vector3;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector3): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector3): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector3): Vector3;
-    /** Returns the component-wise difference. */
-    sub(value: Vector3): Vector3;
-    /** Returns the component-wise product. */
-    mul(value: Vector3): Vector3;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector3): Vector3;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector4 {
-    /** Creates a homogeneous four-component vector. */
-    constructor(x: number, y: number, z: number, w: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Homogeneous component: commonly 1 for points and 0 for directions. */
-    w: number;
-    /** Returns four-dimensional Euclidean length. */
-    norm(): number;
-    /** Returns the four-component dot product. */
-    dot(value: Vector4): number;
-    /** Returns the cross product with homogeneous component cleared. */
-    cross(value: Vector4): Vector4;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector4): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector4): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector4): Vector4;
-    /** Returns the component-wise difference. */
-    sub(value: Vector4): Vector4;
-    /** Returns the component-wise product. */
-    mul(value: Vector4): Vector4;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector4): Vector4;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-
-/* === Module: Matrix4 (matrix4) === */
-/**
- * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
- *
- * Values are stored in column-major order. Translation components are at
- * indices 12, 13 and 14; index 15 is the homogeneous component.
- *
- * Example:
- * ```js
- * const transform = new Matrix4();
- * transform.set(12, 10).set(13, 20).set(14, 30);
- * const inverse = transform.clone().invert();
- * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
- * ```
- */
-declare class Matrix4 {
-    /** Creates identity matrix, or initializes all 16 values when supplied. */
-    constructor();
-    constructor(
-        m00: number, m01: number, m02: number, m03: number,
-        m10: number, m11: number, m12: number, m13: number,
-        m20: number, m21: number, m22: number, m23: number,
-        m30: number, m31: number, m32: number, m33: number
-    );
-    /** Number of scalar components in the matrix. */
-    readonly length: 16;
-    /** Reads a scalar component at index 0..15. */
-    get(index: number): number;
-    /** Writes a scalar component at index 0..15 and returns this matrix. */
-    set(index: number, value: number): this;
-    /** Compares all 16 components exactly. */
-    equals(value: Matrix4): boolean;
-    /** Compares all components using an absolute epsilon tolerance. */
-    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
-    /** Returns the 16 components as a new array. */
-    toArray(): number[];
-    /** Copies 16 values from an array-like object into this matrix. */
-    fromArray(values: ArrayLike<number>): this;
-    /** Returns an independent copy of this matrix. */
-    clone(): Matrix4;
-    /** Copies another matrix into this matrix. */
-    copy(value: Matrix4): this;
-    /** Returns this * value (column vectors); neither operand is mutated. */
-    multiply(value: Matrix4): Matrix4;
-    /** Replaces this matrix with identity. */
-    identity(): this;
-    /** Transposes this matrix in place. */
-    transpose(): this;
-    /** Inverts this matrix in place; throws for a singular matrix. */
-    invert(): this;
-    /** Returns a readable 16-value representation. */
-    toString(): string;
 }
 
 
@@ -4525,314 +2604,152 @@ declare namespace MemoryCard {
 }
 
 
-/* === Module: Random (random) === */
+/* === Module: Screen (screen) === */
 /**
- * Seedable pseudo-random numbers (xoshiro128**, computed in C).
+ * Display, frame synchronization, VRAM statistics and GS state controls.
  *
- * Unlike `Math.random()`, a generator created with a seed always produces the
- * same sequence: a generated map, a roguelike run or a bug can be
- * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
- * bit-exact on every platform; floats with bounds and gaussians may differ in
- * the last bits between the PS2 and a PC.
- *
- * The module functions (`Random.int()`, `Random.float()`...) use a generator
- * of the script (each script and worker has its own) seeded from the clock;
- * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
- * (NaN, Infinity) throw a RangeError.
- *
- * Example:
- * ```js
- * const rng = new Random.Generator(1234);    // or a string: "level-3"
- * const die = rng.int(1, 6);
- * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
- * const team = rng.sample(players, 3);
- * rng.shuffle(deck);
- *
- * // Particles: one call instead of a loop of 500.
- * rng.fill(speeds, 40, 90);
- * rng.fillGaussian(spread, 0, 0.3);
- *
- * const saved = rng.state();                 // JSON-friendly: save it
- * rng.setState(saved);                       // and continue later
- * ```
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
  */
-declare namespace Random {
-    /** Seed: a number (integers map one-to-one) or a string (hashed). */
-    type Seed = number | string;
-
-    /** The four 32-bit words of a generator state, as returned by `state()`. */
-    type State = [number, number, number, number];
-
-    /** Typed arrays of numbers. */
-    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
-        Int16Array | Uint16Array | Int32Array | Uint32Array |
-        Float32Array | Float64Array;
-
-    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
-    type List<T> = T[] | NumberArray;
-
-    interface Source {
-        /** Restarts the sequence from `seed`; without one, from the clock. */
-        seed(seed?: Seed): void;
-        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
-        int(min: number, max: number): number;
-        /** Float in [0, 1). */
-        float(): number;
-        /** Float in [0, max). */
-        float(max: number): number;
-        /** Float in [min, max). */
-        float(min: number, max: number): number;
-        /** True with probability `p` (default 0.5). */
-        bool(p?: number): boolean;
-        /** Normally distributed number (default mean 0, standard deviation 1). */
-        gaussian(mean?: number, stddev?: number): number;
-        /** Angle in radians, in [0, 2 pi). */
-        angle(): number;
-        /**
-         * Random element, or `undefined` for an empty array. With `weights`
-         * (one per item), drawn with probability proportional to its weight.
-         */
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        /** `count` different elements in random order, as a new array. */
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        /** Shuffles in place (Fisher-Yates) and returns the same array. */
-        shuffle<A extends List<any>>(items: A): A;
-        /**
-         * Index drawn with probability proportional to its weight. Weights
-         * must be finite and non-negative, with at least one above zero.
-         */
-        weighted(weights: number[] | Float32Array): number;
-        /**
-         * Fills a typed array in one call and returns it. Float arrays get
-         * floats in [min, max) (default [0, 1); one bound is the max); integer
-         * arrays get integers in [min, max], by default the whole range of
-         * the type (random bytes for a Uint8Array).
-         */
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        /** Fills a float array with normally distributed numbers and returns it. */
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        /** Copy of the current state, for saving. */
-        state(): State;
-        /** Restores a state returned by `state()`. */
-        setState(state: State): void;
+declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
+    interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
+        mode: number;
+        /** Visible width in pixels. */
+        width: number;
+        /** Visible height in pixels. */
+        height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
+        psm: number;
+        /** Interlaced/progressive mode. */
+        interlace: number;
+        /** Field/frame timing mode. */
+        field: number;
+        /** Depth-buffer pixel storage format. */
+        psmz: number;
+        /** Enables depth buffering. */
+        zbuffering: boolean;
+        /** Enables double-buffered presentation. */
+        double_buffering: boolean;
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
+        pass_count?: number;
     }
 
-    /** Independent generator. */
-    class Generator implements Source {
-        /** Seeded with `seed`, or from the clock without one. */
-        constructor(seed?: Seed);
-        seed(seed?: Seed): void;
-        int(min: number, max: number): number;
-        float(): number;
-        float(max: number): number;
-        float(min: number, max: number): number;
-        bool(p?: number): boolean;
-        gaussian(mean?: number, stddev?: number): number;
-        angle(): number;
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        shuffle<A extends List<any>>(items: A): A;
-        weighted(weights: number[] | Float32Array): number;
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        state(): State;
-        setState(state: State): void;
-        /** New generator at the same point of the sequence. */
-        clone(): Generator;
+    /** Arguments for the GS alpha blend equation. */
+    interface AlphaEquation {
+        a: number;
+        b: number;
+        c: number;
+        d: number;
+        fix: number;
     }
 
-    /** The script's generator: see `Source`. */
-    function seed(seed?: Seed): void;
-    function int(min: number, max: number): number;
-    function float(): number;
-    function float(max: number): number;
-    function float(min: number, max: number): number;
-    function bool(p?: number): boolean;
-    function gaussian(mean?: number, stddev?: number): number;
-    function angle(): number;
-    function pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-    function pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-    function sample<T>(items: T[], count: number): T[];
-    function sample(items: NumberArray, count: number): number[];
-    function shuffle<A extends List<any>>(items: A): A;
-    function weighted(weights: number[] | Float32Array): number;
-    function fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-    function fillGaussian<A extends Float32Array | Float64Array>(array: A,
-        mean?: number, stddev?: number): A;
-    function state(): State;
-    function setState(state: State): void;
-}
-
-
-/* === Module: Noise (noise) === */
-/**
- * Procedural noise computed in C, in single precision: Perlin and simplex in
- * 2D and 3D, Worley (cellular), and fractal sums of them (fBm, ridged,
- * billow), optionally domain-warped.
- *
- * The module functions use the script's noise (each script and worker has
- * its own), seed 0 until `Noise.seed()` changes it, so the same coordinates
- * always give the same value. A `Noise.Generator` is an independent noise
- * with the same methods: one per layer (height, moisture...) without
- * reseeding. For whole maps, `fill()` samples a grid into a `Float32Array`
- * in one call and `Noise.toTiles()` turns it into tile ids for
- * `TileMap.Instance.setTiles()`, without a per-cell loop in JavaScript.
- *
- * Determinism: the same seed gives the same noise on the same platform, but
- * not bit for bit between a PC and the PS2 (the EE rounds floats toward
- * zero), so a cell right on a `toTiles()` threshold can differ. Generate
- * maps on the console, or store them, when they must match exactly.
- *
- * Example:
- * ```js
- * const W = 64, H = 64;
- * const height = new Noise.Generator("island-7");
- * const heights = height.fill(new Float32Array(W * H), W, H, { scale: 0.05 });
- *
- * const tiles = new Uint16Array(W * H);
- * Noise.toTiles(tiles, heights, [0.3, 0.5, 0.8], [WATER, SAND, GRASS, ROCK]);
- * map.setTiles(0, tiles);
- *
- * const wind = Noise.perlin2(time * 0.5, 0);  // smooth value in about [-1, 1]
- * const peaks = Noise.fbm2(x, y, { mode: "ridged", warp: 0.5 });
- * ```
- */
-declare namespace Noise {
-    /** Seed: a number (integers map one-to-one) or a string (hashed). */
-    type Seed = number | string;
-
-    type Type = "perlin" | "simplex" | "worley";
-
-    /**
-     * How each octave is shaped: "fbm" is the noise itself, "ridged" makes
-     * sharp crests (mountains), "billow" rounded bumps (clouds, dunes).
-     * Ridged and billow need "perlin" or "simplex".
-     */
-    type Mode = "fbm" | "ridged" | "billow";
-
-    interface FractalOptions {
-        /** Base noise (default "simplex"). */
-        type?: Type;
-        /** Octave shape (default "fbm"). */
-        mode?: Mode;
-        /** Number of layers, 1 to 16 (default 4). */
-        octaves?: number;
-        /** Frequency multiplier per octave (default 2). */
-        lacunarity?: number;
-        /** Amplitude multiplier per octave (default 0.5). */
-        gain?: number;
-        /**
-         * Domain warp in noise units (default 0, off): moves each point by
-         * simplex noise first, twisting straight features into organic ones
-         * (coasts, rivers, marble). Costs two or three extra samples.
-         */
-        warp?: number;
+    /** Pixel bounds used by the GS scissor register. */
+    interface ScissorBounds {
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
     }
 
-    interface FillOptions extends FractalOptions {
-        /** Noise units per cell (default 1/16): smaller is smoother. */
-        scale?: number;
-        /**
-         * Offset in cells. A chunk filled with `x: chunkX * width` continues
-         * the one on its left seamlessly.
-         */
-        x?: number;
-        y?: number;
-        /** Samples a slice of the 3D noise at this depth, in cells (scaled like x and y). */
-        z?: number;
-        /** Seed for this fill only; the generator's tables by default. */
-        seed?: Seed;
-        /** Output range (default 0 to 1); values are clamped to it. */
-        min?: number;
-        max?: number;
-        /**
-         * Stretches the values actually produced onto [min, max], instead of
-         * the nominal range of the noise (Perlin rarely reaches its ends).
-         * Separately filled chunks then no longer match at the seams.
-         */
-        normalize?: boolean;
-    }
+    /** Presents the completed draw buffer and synchronizes the frame. */
+    function flip(): void;
+    /** Clears the current draw buffer using a packed RGBA color. */
+    function clear(color?: number): void;
+    /** Blocks until the next vertical blank starts. */
+    function waitVblankStart(): void;
+    /** Enables or disables synchronization with vertical blank. */
+    function setVSync(enabled: boolean): void;
+    /** Enables or disables the on-screen frame counter. */
+    function setFrameCounter(enabled: boolean): void;
+    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
+    function getMemoryStats(mode?: number): number;
+    /** Returns currently unallocated VRAM in bytes. */
+    function getFreeVRAM(): number;
+    /** Returns the measured FPS over the requested positive frame interval. */
+    function getFPS(interval: number): number;
+    /** Returns the active video configuration. */
+    function getMode(): VideoMode;
+    /** Reconfigures the video mode and render targets; invalid modes throw. */
+    function setMode(mode: VideoMode): void;
+    /** Packs the five GS alpha-equation fields into a register value. */
+    function alphaEquation(a: number, b: number, c: number, d: number,
+        fix: number): bigint;
+    /** Reads a supported GS parameter by its `Screen` constant. */
+    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
+    /** Writes a supported GS parameter by its `Screen` constant. */
+    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
+    /** Switches the active GS context and returns its native result code. */
+    function switchContext(): number;
+    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
+    function flush(): void;
 
-    /** Sampling functions shared by the module and every Generator. */
-    interface Source {
-        /** Rebuilds the tables for `seed`; without one, from the clock. */
-        seed(seed?: Seed): void;
-
-        /** Perlin noise, about [-1, 1]; 0 at integer coordinates. */
-        perlin2(x: number, y: number): number;
-        perlin3(x: number, y: number, z: number): number;
-
-        /** Simplex noise, about [-1, 1]; fewer grid artifacts than Perlin. */
-        simplex2(x: number, y: number): number;
-        simplex3(x: number, y: number, z: number): number;
-
-        /**
-         * Worley (cellular) noise: distance to the nearest of one random
-         * point per cell, from 0 up to about 1.2. Stones, cells, caves.
-         */
-        worley2(x: number, y: number): number;
-        worley3(x: number, y: number, z: number): number;
-
-        /**
-         * Fractal sum of octaves of `type`, normalized to its range (about
-         * [-1, 1], or [0, 1.2] for Worley).
-         */
-        fbm2(x: number, y: number, options?: FractalOptions): number;
-        fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
-
-        /**
-         * Samples `width * height` cells row by row into `out` and returns
-         * it. Cell (col, row) is at ((col + x) * scale, (row + y) * scale).
-         * The noise range is mapped onto [min, max]. Blocks the frame: a
-         * 128x128 grid of 4 octaves takes about 60 ms on the PS2.
-         */
-        fill(out: Float32Array, width: number, height: number,
-            options?: FillOptions): Float32Array;
-    }
-
-    /** Independent noise with the tables of its own seed. */
-    class Generator implements Source {
-        /** Tables of `seed`, or from the clock without one. */
-        constructor(seed?: Seed);
-        seed(seed?: Seed): void;
-        perlin2(x: number, y: number): number;
-        perlin3(x: number, y: number, z: number): number;
-        simplex2(x: number, y: number): number;
-        simplex3(x: number, y: number, z: number): number;
-        worley2(x: number, y: number): number;
-        worley3(x: number, y: number, z: number): number;
-        fbm2(x: number, y: number, options?: FractalOptions): number;
-        fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
-        fill(out: Float32Array, width: number, height: number,
-            options?: FillOptions): Float32Array;
-    }
-
-    /** The script's noise (seed 0 at start): see `Source`. */
-    function seed(seed?: Seed): void;
-    function perlin2(x: number, y: number): number;
-    function perlin3(x: number, y: number, z: number): number;
-    function simplex2(x: number, y: number): number;
-    function simplex3(x: number, y: number, z: number): number;
-    function worley2(x: number, y: number): number;
-    function worley3(x: number, y: number, z: number): number;
-    function fbm2(x: number, y: number, options?: FractalOptions): number;
-    function fbm3(x: number, y: number, z: number, options?: FractalOptions): number;
-    function fill(out: Float32Array, width: number, height: number,
-        options?: FillOptions): Float32Array;
-
-    /**
-     * Classifies `values` into tile ids and returns `out`: each value gets
-     * `tiles[k]`, where k is how many of the ascending `thresholds` are
-     * <= the value. `tiles` has one entry more than `thresholds`.
-     */
-    function toTiles(out: Uint16Array, values: Float32Array,
-        thresholds: number[] | Float32Array, tiles: number[] | Uint16Array): Uint16Array;
+    const VRAM_SIZE: number;
+    const VRAM_USED_TOTAL: number;
+    const VRAM_USED_STATIC: number;
+    const VRAM_USED_DYNAMIC: number;
+    const ALPHA_TEST_ENABLE: number;
+    const ALPHA_TEST_METHOD: number;
+    const ALPHA_TEST_REF: number;
+    const ALPHA_TEST_FAIL: number;
+    const DST_ALPHA_TEST_ENABLE: number;
+    const DST_ALPHA_TEST_METHOD: number;
+    const DEPTH_TEST_ENABLE: number;
+    const DEPTH_TEST_METHOD: number;
+    const ALPHA_BLEND_EQUATION: number;
+    const SCISSOR_BOUNDS: number;
+    const PIXEL_ALPHA_BLEND_ENABLE: number;
+    const COLOR_CLAMP_MODE: number;
+    const ALPHA_NEVER: number;
+    const ALPHA_ALWAYS: number;
+    const ALPHA_LESS: number;
+    const ALPHA_LEQUAL: number;
+    const ALPHA_EQUAL: number;
+    const ALPHA_GEQUAL: number;
+    const ALPHA_GREATER: number;
+    const ALPHA_NEQUAL: number;
+    const ALPHA_FAIL_NO_UPDATE: number;
+    const ALPHA_FAIL_FB_ONLY: number;
+    const ALPHA_FAIL_ZB_ONLY: number;
+    const ALPHA_FAIL_RGB_ONLY: number;
+    const DST_ALPHA_ZERO: number;
+    const DST_ALPHA_ONE: number;
+    const DEPTH_NEVER: number;
+    const DEPTH_ALWAYS: number;
+    const DEPTH_GEQUAL: number;
+    const DEPTH_GREATER: number;
+    const SRC_RGB: number;
+    const DST_RGB: number;
+    const ZERO_RGB: number;
+    const SRC_ALPHA: number;
+    const DST_ALPHA: number;
+    const ALPHA_FIX: number;
+    const BLEND_DEFAULT: bigint;
+    const BLEND_ADD_NOALPHA: bigint;
+    const BLEND_ADD: bigint;
+    const NTSC: number;
+    const PAL: number;
+    const DTV_480p: number;
+    const DTV_576p: number;
+    const DTV_720p: number;
+    const DTV_1080i: number;
+    const INTERLACED: number;
+    const PROGRESSIVE: number;
+    const FIELD: number;
+    const FRAME: number;
+    const CT32: number;
+    const CT24: number;
+    const CT16: number;
+    const CT16S: number;
+    const Z32: number;
+    const Z24: number;
+    const Z16: number;
+    const Z16S: number;
+    const DRAW_BUFFER: number;
+    const DISPLAY_BUFFER: number;
+    const DEPTH_BUFFER: number;
 }
 
 
@@ -5493,6 +3410,151 @@ declare namespace Sound {
         /** Sample rate in Hz. */
         readonly rate: number;
     }
+}
+
+
+/* === Module: Random (random) === */
+/**
+ * Seedable pseudo-random numbers (xoshiro128**, computed in C).
+ *
+ * Unlike `Math.random()`, a generator created with a seed always produces the
+ * same sequence: a generated map, a roguelike run or a bug can be
+ * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
+ * bit-exact on every platform; floats with bounds and gaussians may differ in
+ * the last bits between the PS2 and a PC.
+ *
+ * The module functions (`Random.int()`, `Random.float()`...) use a generator
+ * of the script (each script and worker has its own) seeded from the clock;
+ * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
+ * (NaN, Infinity) throw a RangeError.
+ *
+ * Example:
+ * ```js
+ * const rng = new Random.Generator(1234);    // or a string: "level-3"
+ * const die = rng.int(1, 6);
+ * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
+ * const team = rng.sample(players, 3);
+ * rng.shuffle(deck);
+ *
+ * // Particles: one call instead of a loop of 500.
+ * rng.fill(speeds, 40, 90);
+ * rng.fillGaussian(spread, 0, 0.3);
+ *
+ * const saved = rng.state();                 // JSON-friendly: save it
+ * rng.setState(saved);                       // and continue later
+ * ```
+ */
+declare namespace Random {
+    /** Seed: a number (integers map one-to-one) or a string (hashed). */
+    type Seed = number | string;
+
+    /** The four 32-bit words of a generator state, as returned by `state()`. */
+    type State = [number, number, number, number];
+
+    /** Typed arrays of numbers. */
+    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
+        Int16Array | Uint16Array | Int32Array | Uint32Array |
+        Float32Array | Float64Array;
+
+    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
+    type List<T> = T[] | NumberArray;
+
+    interface Source {
+        /** Restarts the sequence from `seed`; without one, from the clock. */
+        seed(seed?: Seed): void;
+        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
+        int(min: number, max: number): number;
+        /** Float in [0, 1). */
+        float(): number;
+        /** Float in [0, max). */
+        float(max: number): number;
+        /** Float in [min, max). */
+        float(min: number, max: number): number;
+        /** True with probability `p` (default 0.5). */
+        bool(p?: number): boolean;
+        /** Normally distributed number (default mean 0, standard deviation 1). */
+        gaussian(mean?: number, stddev?: number): number;
+        /** Angle in radians, in [0, 2 pi). */
+        angle(): number;
+        /**
+         * Random element, or `undefined` for an empty array. With `weights`
+         * (one per item), drawn with probability proportional to its weight.
+         */
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        /** `count` different elements in random order, as a new array. */
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        /** Shuffles in place (Fisher-Yates) and returns the same array. */
+        shuffle<A extends List<any>>(items: A): A;
+        /**
+         * Index drawn with probability proportional to its weight. Weights
+         * must be finite and non-negative, with at least one above zero.
+         */
+        weighted(weights: number[] | Float32Array): number;
+        /**
+         * Fills a typed array in one call and returns it. Float arrays get
+         * floats in [min, max) (default [0, 1); one bound is the max); integer
+         * arrays get integers in [min, max], by default the whole range of
+         * the type (random bytes for a Uint8Array).
+         */
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        /** Fills a float array with normally distributed numbers and returns it. */
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        /** Copy of the current state, for saving. */
+        state(): State;
+        /** Restores a state returned by `state()`. */
+        setState(state: State): void;
+    }
+
+    /** Independent generator. */
+    class Generator implements Source {
+        /** Seeded with `seed`, or from the clock without one. */
+        constructor(seed?: Seed);
+        seed(seed?: Seed): void;
+        int(min: number, max: number): number;
+        float(): number;
+        float(max: number): number;
+        float(min: number, max: number): number;
+        bool(p?: number): boolean;
+        gaussian(mean?: number, stddev?: number): number;
+        angle(): number;
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        shuffle<A extends List<any>>(items: A): A;
+        weighted(weights: number[] | Float32Array): number;
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        state(): State;
+        setState(state: State): void;
+        /** New generator at the same point of the sequence. */
+        clone(): Generator;
+    }
+
+    /** The script's generator: see `Source`. */
+    function seed(seed?: Seed): void;
+    function int(min: number, max: number): number;
+    function float(): number;
+    function float(max: number): number;
+    function float(min: number, max: number): number;
+    function bool(p?: number): boolean;
+    function gaussian(mean?: number, stddev?: number): number;
+    function angle(): number;
+    function pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+    function pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+    function sample<T>(items: T[], count: number): T[];
+    function sample(items: NumberArray, count: number): number[];
+    function shuffle<A extends List<any>>(items: A): A;
+    function weighted(weights: number[] | Float32Array): number;
+    function fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+    function fillGaussian<A extends Float32Array | Float64Array>(array: A,
+        mean?: number, stddev?: number): A;
+    function state(): State;
+    function setState(state: State): void;
 }
 
 
@@ -6290,6 +4352,171 @@ declare namespace Sprite {
 }
 
 
+/* === Module: System Core (system) === */
+/**
+ * PS2 system, filesystem, timing and hardware helpers.
+ *
+ * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
+ * Return values from filesystem and device operations are native result codes;
+ * callers should check them before continuing.
+ *
+ * Example:
+ * ```js
+ * console.log(System.bootPath);
+ * for (const entry of System.listDir('host:/')) {
+ *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
+ * }
+ * System.sleep(16);
+ * ```
+ */
+declare namespace System {
+    /** One directory entry returned by `listDir()`. */
+    interface DirectoryEntry {
+        /** File or directory name. */
+        name: string;
+        /** File size in bytes; directory sizes may be zero. */
+        size: number;
+        /** True when this entry is a directory. */
+        dir: boolean;
+    }
+
+    /** Memory counters returned by `getMemoryStats()`. */
+    interface MemoryStats {
+        /** Core/binary footprint in bytes. */
+        core: number;
+        /** Reserved native stack in bytes. */
+        nativeStack: number;
+        /** Current native allocations in bytes. */
+        allocs: number;
+        /** Total reported usage in bytes. */
+        used: number;
+        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
+        jsHeap: number;
+        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
+        jsLimit: number;
+        /** Live JavaScript objects. */
+        jsObjects: number;
+    }
+
+    /** EE CPU information returned by `getCPUInfo()`. */
+    interface CPUInfo {
+        /** EE CPU implementation identifier. */
+        implementation: number;
+        /** EE CPU revision identifier. */
+        revision: number;
+        /** Installed EE RAM size in bytes. */
+        RAMSize: number;
+        /** EE bus clock frequency. */
+        BUSClock: number;
+        /** EE CPU clock frequency. */
+        CPUClock: number;
+        /** PS2 machine type identifier. */
+        MachineType: number;
+    }
+
+    /** Memory-card status returned by `getMCInfo()`. */
+    interface MemoryCardInfo {
+        /** Memory-card type identifier. */
+        type: number;
+        /** Free memory reported by the card driver. */
+        freemem: number;
+        /** Format/status flag reported by the card driver. */
+        format: number;
+    }
+
+    /** GS GPU information returned by `getGPUInfo()`. */
+    interface GPUInfo {
+        revision: number;
+        id: number;
+    }
+
+    /** One registered filesystem/device entry. */
+    interface DeviceInfo {
+        name: string;
+        desc: string;
+    }
+
+    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
+    const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in a directory or path relative to `bootPath`. */
+    function listDir(path?: string): DirectoryEntry[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    /** Renames a file or directory and returns the native result code. */
+    function rename(source: string, destination: string): number;
+
+    /** Returns raw EE CPU clock ticks. */
+    function getTicks(): number;
+
+    /** Returns high-resolution elapsed time in milliseconds. */
+    function getMilliseconds(): number;
+
+    /** Suspends the current EE thread for the specified milliseconds. */
+    function sleep(ms: number): void;
+
+    /** Returns currently used EE RAM in bytes. */
+    function getUsedMemory(): number;
+
+    /** Returns remaining available EE RAM in bytes. */
+    function getFreeMemory(): number;
+
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): MemoryStats;
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): CPUInfo;
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): GPUInfo;
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): MemoryCardInfo;
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): DeviceInfo[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
+    /** Forces a QuickJS garbage-collection cycle. */
+    function gc(): void;
+
+    /** Exit application to the PS2 browser/OSDSYS */
+    function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
+}
+
+
 /* === Module: Timer (timer) === */
 /**
  * Manual native timer objects.
@@ -6442,219 +4669,4 @@ declare namespace Tween {
      * advance them twice.
      */
     function update(dt: number, realDt?: number): void;
-}
-
-
-/* === Module: Video (video) === */
-/** Stable `error.code` of the InternalError thrown by `new Video()` and `Video.probe()`. */
-type VideoErrorCode =
-    /** The file could not be opened. */
-    | "open_failed"
-    /** Another Video is still open; `free()` it first. */
-    | "busy"
-    /** Not an MPEG-1/2 elementary video stream, or no decodable picture. */
-    | "invalid_format"
-    /** Valid stream the decoder cannot play: over 1024x1024, not 4:2:0 or a forbidden frame rate. */
-    | "unsupported_format"
-    /** Not enough memory for the decoder buffers. */
-    | "out_of_memory"
-    /** The decoder thread could not be started (constructor only). */
-    | "thread_failed";
-
-/** Options of `Video.draw(x, y, options)`. */
-type VideoDrawOptions = {
-    /** Destination width in pixels; 0 or omitted uses the source rectangle's width. */
-    width?: number;
-    /** Destination height in pixels; 0 or omitted uses the source rectangle's height. */
-    height?: number;
-    /** Source rectangle's left edge in picture pixels (default 0). */
-    startx?: number;
-    /** Source rectangle's top edge in picture pixels (default 0). */
-    starty?: number;
-    /** Source rectangle's right edge; 0 or omitted is the picture's width. */
-    endx?: number;
-    /** Source rectangle's bottom edge; 0 or omitted is the picture's height. */
-    endy?: number;
-    /** Rotation in radians. */
-    angle?: number;
-    /** Packed RGBA tint from `Color.new()`; alpha 64 draws half transparent. */
-    color?: number;
-};
-
-/**
- * What `Video.audio` uses of its stream. `Sound.Stream` has all of it;
- * spelled out so this module does not depend on Sound.
- */
-type VideoAudioSource = {
-    /** Milliseconds heard. */
-    readonly position: number;
-    readonly ended: boolean;
-    loop: boolean;
-    play(): void;
-    pause(): void;
-    stop(): void;
-    rewind(): void;
-};
-
-/** Stream information returned by `Video.probe()`. */
-type VideoInfo = {
-    /** Picture size in pixels. */
-    width: number;
-    height: number;
-    /** Decoded texture size: the picture rounded up to 16x16 macroblocks. */
-    codedWidth: number;
-    codedHeight: number;
-    /** Frame rate; 0 when the header holds a forbidden value. */
-    fps: number;
-    /** Whole frames in the file. */
-    frames: number;
-    /** `frames / fps`, in seconds; 0 when `fps` is 0. */
-    duration: number;
-    /** MPEG-2 (true) or MPEG-1 (false). */
-    mpeg2: boolean;
-    progressive: boolean;
-    chroma: "4:2:0" | "4:2:2" | "4:4:4" | "unknown";
-    /** Whether `new Video()` accepts the stream. */
-    supported: boolean;
-};
-
-/**
- * MPEG-1/2 video playback decoded by the PS2's IPU.
- *
- * `Video` reads a raw MPEG-1/2 elementary video stream (`.m2v`, video only,
- * 4:2:0 chroma, no container and no audio). Frames are decoded at the
- * stream's own frame rate by `update()` and drawn with `draw()` or through
- * the `frame` Image.
- *
- * The decoder is a single hardware resource: only one `Video` can be open at
- * a time. Call `free()` before opening another one.
- *
- * Supported streams: 4:2:0 chroma, at most 1024x1024 (the largest GS
- * texture) and a standard frame rate. Others are refused on construction.
- *
- * Encode a compatible file with:
- * `ffmpeg -i input.mp4 -vf scale=640:360 -c:v mpeg2video -b:v 2000k -g 15 -an video.m2v`
- *
- * @example
- * ```js
- * const video = new Video('video.m2v');
- * video.play();
- * while (!video.ended) {
- *     Screen.clear(Color.new(0, 0, 0));
- *     video.update();
- *     video.draw(0, 0, 640, 448);
- *     Screen.flip();
- * }
- * video.free();
- * ```
- */
-declare class Video {
-    /**
-     * Opens `path` and decodes its first frame.
-     * Throws an InternalError with a `code` (see `VideoErrorCode`) when the
-     * file cannot be opened or played, or another Video is still open.
-     */
-    constructor(path: string);
-
-    /**
-     * Reads the stream's headers without opening the decoder, so it works
-     * while another Video is open. Reads the whole file to count frames,
-     * which takes a while on disc. Throws like the constructor
-     * (`open_failed`, `invalid_format`, `out_of_memory`); an unplayable
-     * stream is reported by `supported` instead.
-     */
-    static probe(path: string): VideoInfo;
-
-    /** Picture width in pixels. */
-    readonly width: number;
-    /**
-     * Picture height in pixels. The decoded texture is rounded up to whole
-     * 16x16 macroblocks (`frame.texHeight`); the padding is never drawn.
-     */
-    readonly height: number;
-    /** Frame rate read from the sequence header. */
-    readonly fps: number;
-    /** True once the first frame has been decoded. */
-    readonly ready: boolean;
-    /** True once playback reached the end of the stream while not looping. */
-    readonly ended: boolean;
-    /** True while playing (not stopped, paused or ended). */
-    readonly playing: boolean;
-    /**
-     * Restart from the beginning instead of ending. With `audio` set, it also
-     * sets the stream's `loop`, and the video restarts when the audio wraps.
-     */
-    loop: boolean;
-    /** Index of the picture shown: 0 is the first, again after a rewind or loop. */
-    readonly currentFrame: number;
-    /** Times playback looped; reset by `stop()` and by `play()` after the end. */
-    readonly loopCount: number;
-    /**
-     * The current frame as an Image that follows playback; the same object
-     * is returned on every access, sized to the picture. It borrows the
-     * decoder's buffer: setting its pixels, palette, bpp, texWidth or
-     * texHeight throws a TypeError and `optimize()` returns false. Once the
-     * Video is freed it is no longer loaded: `ready()` is false and
-     * `draw()` throws.
-     */
-    readonly frame: Image | null;
-    /**
-     * Audio track playback follows (lip sync), usually a `Sound.Stream` of
-     * the video's soundtrack, or null. While set:
-     * - the picture shown is picked from `audio.position` (the time heard),
-     *   so audio stalls, pauses and emulator speed keep both in step;
-     * - `play()`, `pause()` and `stop()` also drive the stream (`play()`
-     *   rewinds it when the video starts over), and `loop` sets its `loop`;
-     * - a looping video restarts when the audio wraps; one shorter than its
-     *   audio holds its last picture until then;
-     * - once the audio has ended, the remaining pictures play on the EE
-     *   clock, so the video always ends.
-     *
-     * Can only be changed while the video is not playing. The stream is not
-     * freed or stopped by `free()`. Do not seek the stream while attached:
-     * seeking back restarts the video, and seeking ahead makes it decode
-     * every picture up to there.
-     */
-    audio: VideoAudioSource | null;
-
-    /**
-     * Called by `update()` when playback reaches the end while not looping,
-     * with the Video as `this`. An exception it throws is thrown by
-     * `update()`. Setting a non-function other than undefined/null makes
-     * `update()` throw a TypeError when the event happens.
-     */
-    onEnd?: (() => void) | null;
-    /**
-     * Called by `update()` each time a looping video restarts, with the new
-     * `loopCount`. Same rules as `onEnd`.
-     */
-    onLoop?: ((loopCount: number) => void) | null;
-
-    /** Starts or resumes playback. Restarts from the beginning once ended. */
-    play(): void;
-    /** Pauses on the current frame. */
-    pause(): void;
-    /** Stops and rewinds to the beginning. */
-    stop(): void;
-    /**
-     * Advances playback by the time elapsed since the last call, following
-     * the stream's frame rate whatever the render rate. When the loop falls
-     * behind, late frames are decoded and skipped (up to 3 per call). Runs
-     * `onLoop`/`onEnd`. Call once per rendered frame. Returns true when the
-     * picture changed.
-     */
-    update(): boolean;
-    /**
-     * Draws the current frame. `width`/`height` of 0 (the default) use the
-     * picture size.
-     */
-    draw(x?: number, y?: number, width?: number, height?: number): void;
-    /**
-     * Draws the current frame with a source rectangle, size, rotation or
-     * tint. Throws a RangeError when the source rectangle is empty or goes
-     * outside the picture.
-     */
-    draw(x: number, y: number, options: VideoDrawOptions): void;
-    /** Releases the decoder and buffers. The Video cannot be used afterwards. */
-    free(): void;
 }

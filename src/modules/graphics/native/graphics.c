@@ -14,6 +14,7 @@
 #include <athena/graphics/owl_packet.h>
 
 #include <athena/graphics/texture_manager.h>
+#include <athena/graphics/sync.h>
 
 static const u64 BLACK_RGBAQ   = GS_SETREG_RGBAQ(0x00,0x00,0x00,0x80,0x00);
 
@@ -652,6 +653,7 @@ uint64_t get_screen_param(uint8_t param) {
 
 void set_finish()
 {
+    graphics_finish_begin();
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 4);
  
 	owl_add_cnt_tag(packet, 3, 0);
@@ -668,6 +670,11 @@ void set_finish()
 
 void set_register(int reg_id, uint64_t data) {
 	if (gs_reg_cache[reg_id] == data) return;
+	set_register_force(reg_id, data);
+}
+
+/* Direct texture writers (for example TileMap) can bypass the cache. */
+void set_register_force(int reg_id, uint64_t data) {
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 4);
  
@@ -933,10 +940,7 @@ static void flipScreenDoubleBuffering()
 
 	sync_screen(gsGlobal);
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -957,10 +961,7 @@ static void flipScreenDoubleBufferingPerf()
 
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -1011,10 +1012,7 @@ static void flipScreenDoubleBufferingNoVSync()
 	set_finish();
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	flip_screen(gsGlobal);
@@ -1032,10 +1030,7 @@ static void flipScreenDoubleBufferingPerfNoVSync()
 
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -1542,6 +1537,7 @@ fail:
 }
 
 int setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 field, bool zbuffering, int psmz, bool double_buffering, uint8_t pass_count) {
+    if(draw_buffer.Width) graphics_wait_idle();
 	gsGlobal->Mode = mode;
 	gsGlobal->Width = width;
 	if ((interlace == GS_INTERLACED) && (field == GS_FRAME))

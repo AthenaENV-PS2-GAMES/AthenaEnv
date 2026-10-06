@@ -26,7 +26,7 @@ int athena_main(int argc,char **argv) {
     if(athena_screen_set_mode(&mode,NULL)!=ATHENA_SCREEN_OK) return 1;
     AthenaCamera3D camera; athena_camera3d_init(&camera);
     if(!athena_camera3d_set_projection(&camera,60,(float)mode.width/height,0.1f,300)) return 1;
-    AthenaGeometry3D geometry={positions,8,colors,8,indices,36};
+    AthenaGeometry3D geometry={.positions=positions,.vertex_count=8,.colors=colors,.color_count=8,.indices=indices,.index_count=36};
     AthenaMesh3D *mesh=NULL;
     if(athena_mesh3d_create(&geometry,&mesh)<0) return 1;
     AthenaInstance3D *left=athena_instance3d_create(mesh),*right=athena_instance3d_create(mesh);

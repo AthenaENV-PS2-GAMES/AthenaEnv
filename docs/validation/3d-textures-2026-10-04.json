@@ -1,0 +1,209 @@
+{
+  "date": "2026-10-04",
+  "increment": "Model3D 1.2 / Render3D 1.4 opaque textures and UVs",
+  "buildEnvironment": "Ubuntu WSL / Docker localhost/ps2swf-dev:m0",
+  "testEnvironment32Bit": "Docker localhost/ps2swf-host32:m0",
+  "buildModuleCount": 17,
+  "restoredModuleCount": 36,
+  "automatedPass": {
+    "sixEEBuilds": true,
+    "fullHostUBSan": true,
+    "host3D32BitASanUBSan": true,
+    "fullQuickJS32BitASanUBSan": true,
+    "fiveOpenVCLProgramsMatchAssembly": true,
+    "textureJSChecksPerRuntime": 27,
+    "freshRuntimes": 2,
+    "nativeCoverage": [
+      "immutable aligned pixels and UV copies",
+      "texture retention through mesh, instance and batch release",
+      "OBJ vt and glTF TEXCOORD_0 import",
+      "relative external-image resolution using a host image stand-in",
+      "homogeneous UV interpolation with unequal W",
+      "inline VIF UV streams and texture/depth register restoration",
+      "production GS texture backend against simulated surface/DMA/decoder",
+      "FINISH serialization, reset, re-upload and final resource release"
+    ]
+  },
+  "visualPass": {
+    "native": true,
+    "quickjs": true,
+    "realPS2": null
+  },
+  "pcsx2IncrementStatus": "complete",
+  "nativeAcceptance": {
+    "target": "PCSX2",
+    "emulatorVersion": null,
+    "evidence": "User supplied the complete native scene log and confirmed the visual test was correct.",
+    "completedStages": 9,
+    "completionLogTime": 10600.2959,
+    "textureHandleReleasedLogTime": 10592.8057,
+    "videoResetLogTime": 10598.8125,
+    "observations": [
+      {
+        "stage": "unlit",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920
+      },
+      {
+        "stage": "diffuse",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 2880
+      },
+      {
+        "stage": "perspective",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920
+      },
+      {
+        "stage": "clip-sweep",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 28,
+        "clippedTriangles": 2,
+        "vuBatches": 3,
+        "geometryBytes": 2064
+      },
+      {
+        "stage": "clip-sweep",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920
+      },
+      {
+        "stage": "filters",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920
+      },
+      {
+        "stage": "camera-tile-camera",
+        "reportedScope": "first cube only",
+        "submittedObjects": 1,
+        "sourceTriangles": 12,
+        "triangles": 12,
+        "clippedTriangles": 0,
+        "vuBatches": 1,
+        "geometryBytes": 864
+      },
+      {
+        "stage": "retained-texture",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920,
+        "unchangedAfterHandleRelease": true
+      },
+      {
+        "stage": "recreate",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920
+      },
+      {
+        "stage": "video-reset",
+        "submittedObjects": 3,
+        "sourceTriangles": 26,
+        "triangles": 26,
+        "clippedTriangles": 0,
+        "vuBatches": 3,
+        "geometryBytes": 1920,
+        "unchangedAfterVideoReset": true
+      }
+    ]
+  },
+  "quickjsAcceptance": {
+    "target": "PCSX2",
+    "emulatorVersion": null,
+    "evidence": "User supplied the complete QuickJS scene log and confirmed that it also passed visually.",
+    "elfPath": "host:athena_3d_js.elf",
+    "emulatorReportedCRC": "6C059702",
+    "completedStages": 9,
+    "completionLogTime": 10810.0039,
+    "textureHandleReleasedLogTime": 10802.5283,
+    "videoResetLogTime": 10808.5361,
+    "reportedCountersMatchNative": true,
+    "matchingFields": [
+      "submittedObjects",
+      "sourceTriangles",
+      "triangles",
+      "clippedTriangles",
+      "vuBatches",
+      "geometryBytes"
+    ],
+    "culledObjectsAtReportedSamples": 0,
+    "rejectedTrianglesAtReportedSamples": 0,
+    "drawPassesAtReportedSamples": {
+      "camera-tile-camera": 1,
+      "otherStages": 3
+    },
+    "unchangedAfterHandleRelease": true,
+    "unchangedAfterVideoReset": true
+  },
+  "isPerformanceBaseline": false,
+  "sceneStages": [
+    "unlit",
+    "diffuse",
+    "perspective",
+    "clip-sweep",
+    "filters",
+    "camera-tile-camera",
+    "retained-texture",
+    "recreate",
+    "video-reset"
+  ],
+  "artifacts": [
+    {
+      "file": "bin/athena_3d_js.elf",
+      "bytes": 2082980,
+      "sha256": "56da99b3136758bec53603da6f6a2c82edf3138e069f2064dc6e3eafce4f99c8"
+    },
+    {
+      "file": "bin/athena_3d_textures_native.elf",
+      "bytes": 1030436,
+      "sha256": "1c1591c6aff535b7c4f08f14df096847fbeb5d5ebb56e4ae83c5d4779df070dd"
+    }
+  ],
+  "assets": [
+    {
+      "file": "bin/models/textured_cube.glb",
+      "bytes": 2136,
+      "sha256": "88f3d03652caacfe6bc7db76771c259c5edfcfd590f22651990dfd1a98c35ee8"
+    },
+    {
+      "file": "bin/models/checker.png",
+      "bytes": 239,
+      "width": 64,
+      "height": 64,
+      "sha256": "ea2fbf0167fad1f6090bc81fa8ff69ec02c92ca6d86c65a5ec8167ba3fe42e40"
+    }
+  ],
+  "limitations": "Host stand-ins do not execute VU1 or rasterize pixels. Native and QuickJS PCSX2 visual acceptance is complete; real PS2 remains pending. These diagnostic logs are not a performance baseline. Uploads/releases are synchronous, textures stay locked in VRAM, and full parsing/upload budgets remain future work.",
+  "recheck20261006": {
+    "reason": "C clipper and per-vertex lighting moved from double to float",
+    "visualPass": true,
+    "countersMatch": "All stages equal earlier runs: clip-sweep 26 -> 28 triangles, 2064 bytes; 1920 unlit, 2880 diffuse, 864 camera-tile-camera"
+  }
+}

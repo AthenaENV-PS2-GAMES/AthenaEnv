@@ -78,8 +78,10 @@ int athena_camera3d_box_relation(AthenaCamera3D *c,const AthenaMatrix4 *model,co
         unsigned flags=(v.x < -v.w?1u:0u)|(v.x>v.w?2u:0u)|(v.y < -v.w?4u:0u)|
             (v.y>v.w?8u:0u)|(v.z < -v.w?16u:0u)|(v.z>v.w?32u:0u);
         common &= flags;
-        double inner=(double)v.w-fabs((double)v.w)*1e-5;
-        if(v.w<=0 || fabs((double)v.x)>=inner || fabs((double)v.y)>=inner || fabs((double)v.z)>=inner)
+        /* Float: the R5900 emulates double in software. The 1e-5 relative
+         * margin stays far above float rounding (~6e-8). */
+        float inner=v.w-fabsf(v.w)*1e-5f;
+        if(v.w<=0 || fabsf(v.x)>=inner || fabsf(v.y)>=inner || fabsf(v.z)>=inner)
             contained=0;
     }
     return common?ATHENA_FRUSTUM3D_OUTSIDE:contained?ATHENA_FRUSTUM3D_INSIDE:ATHENA_FRUSTUM3D_INTERSECT;

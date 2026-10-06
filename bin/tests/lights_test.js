@@ -1,0 +1,66 @@
+import * as Lights from "Lights";
+import * as Model3D from "Model3D";
+import * as Render3D from "Render3D";
+import {Camera} from "Camera3D";
+let checks = 0;
+function assert(ok, label) { checks++; if (!ok) throw new Error(label); }
+function throws(fn, label) { let raised = false; try { fn(); } catch (_) { raised = true; } assert(raised, label); }
+const lights = new Lights.Set();
+assert(Lights.MAX_DIRECTIONAL === 4, "four bounded slots");
+const initial = lights.revision;
+assert(lights.setAmbient(.1,.2,.3) === lights, "chainable ambient");
+assert(lights.revision === initial + 1, "revision changes on update");
+lights.setAmbient(.1,.2,.3);
+assert(lights.revision === initial + 1, "identical update keeps revision");
+lights.setDirectional(3,0,0,10,1,1,1);
+const revision = lights.revision;
+for (const slot of [-1,4,.5,NaN,Infinity]) throws(() => lights.setDirectional(slot,0,0,1,1,1,1), "invalid slot");
+throws(() => lights.setDirectional(0,0,0,0,1,1,1), "zero direction");
+throws(() => lights.setDirectional(0,Infinity,0,1,1,1,1), "nonfinite direction");
+throws(() => lights.setAmbient(2,0,0), "intensity range");
+throws(() => lights.setAmbient("1",0,0), "strict numbers");
+assert(lights.revision === revision, "failed updates are atomic");
+lights.disable(3); const disabled = lights.revision; lights.disable(3);
+assert(lights.revision === disabled, "idempotent disable");
+const positions = new Float32Array([-.2,-.2,0,.2,-.2,0,0,.2,0]);
+const normals = new Float32Array([99,99,99, 0,0,10,0,0,10,0,0,10]);
+const tint = new Float32Array([.25,.5,1,1]);
+const material = {shading: Model3D.DIFFUSE, baseColor: tint};
+const mesh = Model3D.Mesh.fromGeometry({positions, normals: normals.subarray(3), material});
+const instance = mesh.createInstance().setScale(2,1,1);
+mesh.dispose(); normals.fill(NaN); tint.fill(NaN); material.shading = 42;
+const camera = new Camera({near: 1, far: 10, aspect: 1});
+const stats = Render3D.draw(instance,camera,Render3D.CULL_NONE,lights);
+assert(stats.triangles === 1 && stats.geometryBytes === 112, "diffuse path includes packed normals after source disposal/mutation");
+const batch = new Render3D.Batch().add(instance);
+instance.dispose(); std.gc();
+assert(batch.draw(camera,undefined,lights).geometryBytes === 112, "batch retains mesh, normal and material resources");
+assert(batch.draw(camera).triangles === 1, "omitted lights mean zero illumination");
+throws(() => batch.draw(camera,0,{}), "wrong light class");
+const badLights = new Lights.Set(); badLights.dispose(); badLights.dispose();
+throws(() => badLights.setAmbient(0,0,0), "disposed lights");
+throws(() => batch.draw(camera,0,badLights), "disposed lights in draw");
+throws(() => Lights.Set.prototype.dispose.call({}), "foreign receiver");
+for (const n of [new Float32Array(6),new Float32Array(9),new Float64Array(9),new Float32Array([0,0,1,0,0,NaN,0,0,1])])
+    throws(() => Model3D.Mesh.fromGeometry({positions,normals:n,material:{shading:Model3D.DIFFUSE}}), "invalid normal stream");
+for (const descriptor of [{shading:2},{baseColor:new Float32Array(3)},{baseColor:new Float32Array([1,2,1,1])},null])
+    throws(() => Model3D.Mesh.fromGeometry({positions,material:descriptor}), "invalid material descriptor");
+throws(() => Model3D.Mesh.fromGeometry({positions:new Float32Array(9),material:{shading:Model3D.DIFFUSE}}), "degenerate generated normal");
+const flat = Model3D.Mesh.fromGeometry({positions,material:{shading:Model3D.DIFFUSE}});
+flat.dispose();
+const singularMesh = Model3D.Mesh.fromGeometry({positions,material:{shading:Model3D.DIFFUSE}});
+const singular = singularMesh.createInstance().setScale(0,1,1); singularMesh.dispose();
+throws(() => Render3D.draw(singular,camera,0,lights), "singular diffuse normal matrix"); singular.dispose();
+const mutated = new Float32Array(positions);
+throws(() => Model3D.Mesh.fromGeometry({positions:mutated,material:{get shading() {
+    mutated.fill(NaN); return Model3D.DIFFUSE;
+}}}), "material getter mutation must be validated before copying geometry");
+const loaded = Model3D.load("models/lit_cube.glb",{shading:Model3D.DIFFUSE});
+assert(loaded.vertexCount === 36, "GLB normals and material override"); loaded.dispose();
+const clipCamera = new Camera({near:1,far:10,aspect:1}); clipCamera.lookAt(0,0,-1).setPosition(0,0,0);
+const clipMesh = Model3D.Mesh.fromGeometry({positions:new Float32Array([-.1,-.1,-.5,.3,-.1,-2,-.1,.3,-2]),material:{shading:Model3D.DIFFUSE}});
+const clip = clipMesh.createInstance(); clipMesh.dispose();
+const clipped = Render3D.draw(clip,clipCamera,0,lights);
+assert(clipped.clippedTriangles === 1 && clipped.triangles === 2 && clipped.geometryBytes === 160, "clipped diffuse uses pre-lit color payload");
+clip.dispose(); clipCamera.dispose(); batch.dispose(); camera.dispose(); lights.dispose(); std.gc();
+console.log("3D lighting tests passed (" + checks + " checks)");

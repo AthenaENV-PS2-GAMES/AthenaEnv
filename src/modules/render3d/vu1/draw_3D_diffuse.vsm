@@ -1,0 +1,203 @@
+		.vu
+		.align 4
+		.global	VU1Draw3DDiffuse_CodeStart
+		.global	VU1Draw3DDiffuse_CodeEnd
+VU1Draw3DDiffuse_CodeStart:
+                    nop                             lq VF01, 1(VI00)
+                    nop                             lq VF05, 5(VI00)
+                    nop                             lq VF02, 2(VI00)
+                    nop                             lq VF03, 3(VI00)
+                    nop                             lq VF04, 4(VI00)
+                    mulax.xyzw ACC, VF01, VF05x     lq VF06, 6(VI00)
+                    madday.xyzw ACC, VF02, VF05y    lq VF07, 7(VI00)
+                    maddaz.xyzw ACC, VF03, VF05z    lq VF08, 8(VI00)
+                    maddw.xyzw VF09, VF04, VF05w    lq.w VF10, 26(VI00)
+                    mulax.xyzw ACC, VF01, VF06x     ilw.w VI02, 15(VI00)
+                    madday.xyzw ACC, VF02, VF06y    ilw.y VI03, 26(VI00)
+                    maddaz.xyzw ACC, VF03, VF06z    loi 0x45000000
+                    maddw.xyzw VF05, VF04, VF06w    nop
+                    mulax.xyzw ACC, VF01, VF07x     nop
+                    madday.xyzw ACC, VF02, VF07y    nop
+                    maddaz.xyzw ACC, VF03, VF07z    nop
+                    maddw.xyzw VF06, VF04, VF07w    nop
+                    mulax.xyzw ACC, VF01, VF08x     lq VF07, 30(VI00)
+                    madday.xyzw ACC, VF02, VF08y    lq VF07, 0(VI00)
+                    maddaz.xyzw ACC, VF03, VF08z    lq VF02, 27(VI00)
+                    maddw.xyzw VF01, VF04, VF08w    lq VF03, 28(VI00)
+                    addi.xy VF08, VF00, i           lq VF04, 29(VI00)
+                    add.zw VF08, VF00, VF00         nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF08, VF07, VF08        nop
+                    ftoi0.w VF11, VF10              nop
+                    nop                             mtir VI04, VF11w
+                    nop                             nop
+                    nop                             ibeq VI04, VI00, ignore_face_culling
+                    nop                             nop
+                    nop                             iaddiu VI04, VI00, 0x20
+ignore_face_culling:
+                    nop                             xtop VI05
+                    nop                             lq VF14, 0(VI05)
+                    nop                             iaddiu VI06, VI05, 194
+                    nop                             move VF13, VF00
+                    nop                             xitop VI01
+                    nop                             sq VF14, 0(VI06)
+                    nop                             iaddiu VI08, VI01, 0x7fff
+                    nop                             iaddiu VI08, VI08, 1
+                    nop                             isw.x VI08, 0(VI06)
+                    nop                             move VF11, VF00
+                    nop                             move VF12, VF00
+                    nop                             move VF13, VF00
+                    nop                             fcset 0
+                    nop                             iaddiu VI07, VI06, 1
+                    nop                             iadd VI08, VI00, VI01
+vertexLoop:
+                    nop                             lq VF14, 2(VI05)
+                    nop                             nop
+                    nop                             ibne VI03, VI00, clipped_vertex
+                    nop                             nop
+                    nop                             move.w VF14, VF00
+                    nop                             nop
+                    mulax.xyzw ACC, VF09, VF14x     nop
+                    madday.xyzw ACC, VF05, VF14y    nop
+                    maddaz.xyzw ACC, VF06, VF14z    nop
+                    maddw.xyzw VF14, VF01, VF14w    nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    clipw.xyz VF14, VF14w           nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             fcand VI01, 0x3ffff
+                    nop                             b project_vertex
+                    nop                             iaddiu VI09, VI01, 0x7fff
+clipped_vertex:
+                    nop                             iaddiu VI09, VI00, 0x7fff
+project_vertex:
+                    nop                             lq VF15, 98(VI05)
+                    nop                             loi 0x3b808081
+                    nop                             nop
+                    nop                             nop
+                    itof0.xyzw VF16, VF15           nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    muli.xyzw VF15, VF16, i         nop
+                    nop                             lq VF16, 50(VI05)
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    mulax.xyzw ACC, VF02, VF16x     nop
+                    madday.xyzw ACC, VF03, VF16y    nop
+                    maddz.xyzw VF17, VF04, VF16z    nop
+                    sub.w VF17, VF00, VF00          nop
+                    nop                             nop
+                    nop                             nop
+                    mul.xyz VF16, VF17, VF17        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    addy.x VF16, VF16, VF16y        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    addz.x VF16, VF16, VF16z        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             rsqrt q, VF00w, VF16x
+                    nop                             lq VF16, 14(VI00)
+                    mulq.xyz VF17, VF17, q          waitq
+                    nop                             nop
+                    nop                             ibeq VI02, VI00, lights_done
+                    nop                             iadd VI01, VI00, VI00
+lightLoop:
+                    nop                             lq VF18, 10(VI01)
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    mul.xyz VF19, VF17, VF18        nop
+                    nop                             lq VF18, 18(VI01)
+                    nop                             iaddiu VI01, VI01, 1
+                    nop                             nop
+                    addy.x VF19, VF19, VF19y        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    addz.x VF19, VF19, VF19z        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    maxx.x VF19, VF19, VF00x        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    mulx.xyz VF18, VF18, VF19x      nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF16, VF16, VF18        ibne VI01, VI02, lightLoop
+                    nop                             nop
+lights_done:
+                    nop                             div q, VF00w, VF14w
+                    nop                             move.xyz VF12, VF11
+                    mul.xyz VF15, VF15, VF16        nop
+                    nop                             move VF16, VF13
+                    nop                             nop
+                    nop                             nop
+                    miniw.xyz VF15, VF15, VF00w     nop
+                    nop                             nop
+                    mulq.xyz VF14, VF14, q          nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    mul.xyz VF14, VF14, VF07        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF14, VF14, VF08        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             move VF13, VF14
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    sub.xyz VF11, VF13, VF16        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    opmula.xyz ACC, VF11, VF12      nop
+                    opmsub.xyz VF13, VF12, VF11     nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    mulw.z VF13, VF13, VF10w        nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             fmand VI01, VI04
+                    ftoi4.xy VF14, VF14             loi 0x437f0000
+                    muli.xyz VF15, VF15, i          iaddiu VI01, VI01, 0x7fe0
+                    ftoi0.z VF14, VF14              loi 0x43000000
+                    muli.w VF15, VF15, i            ior VI09, VI09, VI01
+                    nop                             mfir.w VF14, VI09
+                    nop                             sq VF00, 0(VI07)
+                    nop                             iaddiu VI05, VI05, 1
+                    ftoi0.xyzw VF13, VF15           iaddi VI08, VI08, -1
+                    nop                             nop
+                    nop                             sq VF14, 2(VI07)
+                    nop                             nop
+                    nop                             sq VF13, 1(VI07)
+                    nop                             iaddiu VI07, VI07, 3
+                    nop                             nop
+                    nop                             ibne VI08, VI00, vertexLoop
+                    nop                             nop
+                    nop                             xgkick VI06
+                    nop[E]                          nop
+                    nop                             nop
+		.align 4
+VU1Draw3DDiffuse_CodeEnd:

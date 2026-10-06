@@ -6,12 +6,15 @@
 #include "render3d_clip.h"
 static uint32_t seed=12345;
 static double random_value(void) { seed=seed*1664525u+1013904223u; return (double)(seed>>8)/16777216.0; }
+/* Float clipping: positions may exceed a plane by a few ulps; colors and UVs
+ * are clamped exactly into range. */
 static void check_polygon(const AthenaClipVertex3D *vertices,int count) {
     assert(count==0 || (count>=3 && count<=9));
     for(int i=0;i<count;i++) {
-        double w=vertices[i].position[3]; assert(w>0);
-        for(unsigned j=0;j<3;j++) assert(fabs(vertices[i].position[j])<=w+1e-9);
-        for(unsigned j=0;j<4;j++) assert(vertices[i].color[j]>=-1e-9 && vertices[i].color[j]<=255+1e-9);
+        float w=vertices[i].position[3]; assert(w>0);
+        for(unsigned j=0;j<3;j++) assert(fabsf(vertices[i].position[j])<=w*(1+1e-5f));
+        for(unsigned j=0;j<4;j++) assert(vertices[i].color[j]>=0 && vertices[i].color[j]<=255);
+        for(unsigned j=0;j<2;j++) assert(vertices[i].texcoord[j]>=0 && vertices[i].texcoord[j]<=1);
     }
 }
 static double area(const AthenaClipVertex3D *a,const AthenaClipVertex3D *b,const AthenaClipVertex3D *c) {
@@ -36,7 +39,10 @@ static int refuse(const AthenaVector4 *p,const AthenaColor3D *c,uint32_t n,void 
     (void)p; (void)c; (void)n; (void)unused; return -2;
 }
 int main(void) {
-    AthenaClipVertex3D input[3]={{{-.5,-.5,0,1},{255,0,0,255}},{{.5,-.5,0,1},{0,0,255,255}},{{-.5,.5,0,1},{0,255,0,255}}};
+    AthenaClipVertex3D input[3]={
+        {.position={-.5,-.5,0,1},.color={255,0,0,255}},
+        {.position={.5,-.5,0,1},.color={0,0,255,255}},
+        {.position={-.5,.5,0,1},.color={0,255,0,255}}};
     struct { uint64_t before; AthenaClipVertex3D data[12]; uint64_t after; } output={.before=123,.after=456};
     int changed=-1;
     assert(athena_render3d_clip_triangle(input,output.data,&changed)==3 && !changed);
@@ -46,11 +52,14 @@ int main(void) {
     assert(count==4 && changed); check_polygon(output.data,count);
     int intersections=0;
     for(int i=0;i<count;i++) if(output.data[i].position[0]==1) {
-        assert(fabs(output.data[i].color[2]-153)<1e-9);
-        assert(fabs(output.data[i].color[0]+output.data[i].color[1]-102)<1e-9); intersections++;
+        assert(fabsf(output.data[i].color[2]-153)<1e-3f);
+        assert(fabsf(output.data[i].color[0]+output.data[i].color[1]-102)<1e-3f); intersections++;
     }
     assert(intersections==2);
-    const AthenaClipVertex3D base[3]={{{-.5,-.5,0,1},{255,0,0,255}},{{.5,-.5,0,1},{0,0,255,255}},{{-.5,.5,0,1},{0,255,0,255}}};
+    const AthenaClipVertex3D base[3]={
+        {.position={-.5,-.5,0,1},.color={255,0,0,255}},
+        {.position={.5,-.5,0,1},.color={0,0,255,255}},
+        {.position={-.5,.5,0,1},.color={0,255,0,255}}};
     for(unsigned axis=0;axis<3;axis++) for(int sign=-1;sign<=1;sign+=2) {
         memcpy(input,base,sizeof(input));
         for(unsigned i=0;i<3;i++) input[i].position[axis]=sign*2;
@@ -64,6 +73,20 @@ int main(void) {
     input[0].position[0]=INFINITY; assert(athena_render3d_clip_triangle(input,output.data,&changed)==-1);
     input[0].position[0]=0; input[0].color[0]=256;
     assert(athena_render3d_clip_triangle(input,output.data,&changed)==-1); input[0].color[0]=255;
+    /* Finite but w+x overflows float: rejected rather than clipped to NaN. */
+    input[0].position[0]=FLT_MAX; input[0].position[3]=FLT_MAX;
+    assert(athena_render3d_clip_triangle(input,output.data,&changed)==-1);
+    memcpy(input,base,sizeof(input));
+    /* Saturated colors and UVs on a clipped edge stay inside their ranges. */
+    for(unsigned i=0;i<3;i++) {
+        for(unsigned j=0;j<4;j++) input[i].color[j]=255;
+        input[i].texcoord[0]=1; input[i].texcoord[1]=i==1?0:1;
+    }
+    input[1].position[0]=2.7f; input[2].position[1]=1.3f;
+    count=athena_render3d_clip_triangle(input,output.data,&changed);
+    assert(count>=4 && changed); check_polygon(output.data,count);
+    for(int i=0;i<count;i++) for(unsigned j=0;j<4;j++) assert(output.data[i].color[j]==255);
+    memcpy(input,base,sizeof(input));
     for(unsigned run=0;run<20000;run++) {
         for(unsigned i=0;i<3;i++) {
             for(unsigned j=0;j<3;j++) input[i].position[j]=(random_value()-.5)*8;
@@ -71,8 +94,9 @@ int main(void) {
         }
         count=athena_render3d_clip_triangle(input,output.data,&changed);
         check_polygon(output.data,count);
+        /* Orientation is preserved; float rounding allows only sliver noise. */
         double original=area(&input[0],&input[1],&input[2]);
-        for(int i=1;i<count-1;i++) assert(original*area(&output.data[0],&output.data[i],&output.data[i+1])>=-1e-9);
+        for(int i=1;i<count-1;i++) assert(original*area(&output.data[0],&output.data[i],&output.data[i+1])>=-1e-7);
         assert(output.before==123 && output.after==456);
     }
     AthenaCamera3D camera; athena_camera3d_init(&camera);

@@ -8,12 +8,12 @@
 #include "cgltf/cgltf.h"
 
 /* Stage 1 deliberately rejects unsupported features, never silently discards
- * skins, texture materials, strips, multiple meshes or node transforms. */
-static int load_obj(const char *path,AthenaMesh3D **out) {
+ * skins, advanced materials, strips, multiple meshes or node transforms. */
+static int load_obj(const char *path,const AthenaMaterial3D *material_override,AthenaMesh3D **out) {
     fastObjMesh *obj=fast_obj_read(path);
     if(!obj) return ATHENA_MODEL3D_EFORMAT;
     int result=ATHENA_MODEL3D_EUNSUPPORTED;
-    float *positions=NULL,*colors=NULL;
+    float *positions=NULL,*colors=NULL,*normals=NULL,*texcoords=NULL;
     if(obj->strip_count||!obj->face_count||obj->index_count>ATHENA_MODEL3D_MAX_VERTICES) goto done;
     for(uint32_t i=0;i<obj->face_count;i++) if(obj->face_vertices[i]!=3) goto done;
     if(obj->face_count>ATHENA_MODEL3D_MAX_VERTICES/3||obj->index_count!=obj->face_count*3) {
@@ -26,26 +26,48 @@ static int load_obj(const char *path,AthenaMesh3D **out) {
     }
     positions=malloc(obj->index_count*3*sizeof(float));
     colors=malloc(obj->index_count*4*sizeof(float));
-    if(!positions||!colors) { result=ATHENA_MODEL3D_ENOMEM; goto done; }
+    int all_normals=1,all_uvs=1;
+    for(uint32_t i=0;i<obj->index_count;i++) {
+        uint32_t n=obj->indices[i].n;
+        if(n>=obj->normal_count) { result=ATHENA_MODEL3D_EFORMAT; goto done; }
+        if(!n) all_normals=0;
+        uint32_t uv=obj->indices[i].t;
+        if(uv>=obj->texcoord_count) { result=ATHENA_MODEL3D_EFORMAT; goto done; }
+        if(!uv) all_uvs=0;
+    }
+    /* Mixed missing normals use consistent flat generation for the whole mesh. */
+    if(all_normals) normals=malloc(obj->index_count*3*sizeof(float));
+    if(all_uvs) texcoords=malloc(obj->index_count*2*sizeof(float));
+    if(!positions||!colors||(all_normals&&!normals)||(all_uvs&&!texcoords)) { result=ATHENA_MODEL3D_ENOMEM; goto done; }
     for(uint32_t i=0;i<obj->index_count;i++) {
         uint32_t p=obj->indices[i].p;
         if(p==0||p>=obj->position_count) { result=ATHENA_MODEL3D_EFORMAT; goto done; }
         memcpy(&positions[i*3],&obj->positions[p*3],3*sizeof(float));
+        if(normals) memcpy(&normals[i*3],&obj->normals[obj->indices[i].n*3],3*sizeof(float));
+        if(texcoords) {
+            texcoords[i*2]=obj->texcoords[obj->indices[i].t*2];
+            texcoords[i*2+1]=1-obj->texcoords[obj->indices[i].t*2+1];
+        }
         uint32_t material=obj->face_materials[i/3];
         if(obj->material_count && material<obj->material_count) {
             memcpy(&colors[i*4],obj->materials[material].Kd,3*sizeof(float));
         } else colors[i*4]=colors[i*4+1]=colors[i*4+2]=1;
         colors[i*4+3]=1;
     }
-    AthenaGeometry3D g={positions,obj->index_count,colors,obj->index_count,NULL,0};
+    AthenaGeometry3D g={.positions=positions,.vertex_count=obj->index_count,.colors=colors,.color_count=obj->index_count,
+        .normals=normals,.normal_count=normals?obj->index_count:0,.material=material_override,
+        .texcoords=texcoords,.texcoord_count=texcoords?obj->index_count:0};
     result=athena_mesh3d_create(&g,out);
 done:
-    free(positions); free(colors); fast_obj_destroy(obj); return result;
+    free(positions); free(colors); free(normals); free(texcoords); fast_obj_destroy(obj); return result;
 }
 
-static int load_gltf(const char *path,AthenaMesh3D **out) {
+static int load_gltf(const char *path,const AthenaMaterial3D *material_override,AthenaMesh3D **out) {
     cgltf_options options={0}; cgltf_data *data=NULL;
-    float *positions=NULL,*colors=NULL; uint32_t *indices=NULL;
+    float *positions=NULL,*colors=NULL,*normals=NULL,*texcoords=NULL; uint32_t *indices=NULL;
+    AthenaMaterial3D material; athena_material3d_default(&material);
+    if(material_override) material=*material_override;
+    AthenaTexture3D *loaded_texture=NULL;
     int result=ATHENA_MODEL3D_EFORMAT;
     cgltf_result parsed=cgltf_parse_file(&options,path,&data);
     if(parsed!=cgltf_result_success)
@@ -70,7 +92,7 @@ static int load_gltf(const char *path,AthenaMesh3D **out) {
     if(prim->material) {
         cgltf_material *mat=prim->material;
         if(mat->alpha_mode!=cgltf_alpha_mode_opaque||mat->normal_texture.texture||mat->emissive_texture.texture||
-            mat->pbr_metallic_roughness.base_color_texture.texture||mat->pbr_metallic_roughness.metallic_roughness_texture.texture||
+            mat->pbr_metallic_roughness.metallic_roughness_texture.texture||
             mat->has_pbr_specular_glossiness||mat->has_transmission||mat->has_clearcoat||mat->has_sheen||
             mat->has_volume||mat->has_ior||mat->has_specular||mat->has_emissive_strength||mat->has_iridescence||
             mat->has_diffuse_transmission||mat->has_anisotropy||mat->has_dispersion||mat->occlusion_texture.texture||
@@ -78,27 +100,64 @@ static int load_gltf(const char *path,AthenaMesh3D **out) {
             result=ATHENA_MODEL3D_EUNSUPPORTED; goto done;
         }
         if(mat->has_pbr_metallic_roughness) memcpy(factor,mat->pbr_metallic_roughness.base_color_factor,sizeof(factor));
+        cgltf_texture_view *view=&mat->pbr_metallic_roughness.base_color_texture;
+        if(view->texture) {
+            if(view->texcoord!=0||view->has_transform) { result=ATHENA_MODEL3D_EUNSUPPORTED; goto done; }
+            if(!material.texture) {
+                const cgltf_texture *texture=view->texture;
+                const cgltf_sampler *sampler=texture->sampler;
+                const char *uri=texture->image?texture->image->uri:NULL;
+                /* This cut supports external images and explicit clamp-only
+                 * samplers. Embedded/data URIs and repeat/mipmaps are explicit
+                 * errors; a caller may provide its own Texture override. */
+                if(!uri||texture->has_basisu||texture->has_webp||!sampler||
+                    sampler->wrap_s!=33071||sampler->wrap_t!=33071||
+                    (sampler->min_filter!=9728&&sampler->min_filter!=9729)||
+                    (sampler->mag_filter!=9728&&sampler->mag_filter!=9729)||
+                    sampler->min_filter!=sampler->mag_filter||strchr(uri,':')||strchr(uri,'%')||uri[0]=='/'||uri[0]=='\\') {
+                    result=ATHENA_MODEL3D_EUNSUPPORTED; goto done;
+                }
+                const char *slash=strrchr(path,'/'),*backslash=strrchr(path,'\\');
+                if(backslash&&(!slash||backslash>slash)) slash=backslash;
+                size_t prefix=slash?(size_t)(slash-path)+1:0;
+                char image_path[1024];
+                if(prefix+strlen(uri)>=sizeof(image_path)) { result=ATHENA_MODEL3D_EUNSUPPORTED; goto done; }
+                memcpy(image_path,path,prefix); strcpy(image_path+prefix,uri);
+                result=athena_texture3d_load(image_path,sampler->min_filter==9729?ATHENA_TEXTURE3D_LINEAR:ATHENA_TEXTURE3D_NEAREST,&loaded_texture);
+                if(result<0) goto done;
+                material.texture=loaded_texture;
+                result=ATHENA_MODEL3D_EFORMAT;
+            }
+        }
     }
-    cgltf_accessor *pos=NULL,*col=NULL;
+    cgltf_accessor *pos=NULL,*col=NULL,*normal=NULL,*uv=NULL;
     for(cgltf_size a=0;a<prim->attributes_count;a++) {
         if(prim->attributes[a].type==cgltf_attribute_type_position) pos=prim->attributes[a].data;
         if(prim->attributes[a].type==cgltf_attribute_type_color && prim->attributes[a].index==0) col=prim->attributes[a].data;
+        if(prim->attributes[a].type==cgltf_attribute_type_normal && prim->attributes[a].index==0) normal=prim->attributes[a].data;
+        if(prim->attributes[a].type==cgltf_attribute_type_texcoord && prim->attributes[a].index==0) uv=prim->attributes[a].data;
     }
     if(!pos||pos->type!=cgltf_type_vec3||pos->count==0||pos->count>ATHENA_MODEL3D_MAX_VERTICES||
-        (col&&(col->count!=pos->count||(col->type!=cgltf_type_vec3&&col->type!=cgltf_type_vec4)))) goto done;
+        (col&&(col->count!=pos->count||(col->type!=cgltf_type_vec3&&col->type!=cgltf_type_vec4)))||
+        (normal&&(normal->count!=pos->count||normal->type!=cgltf_type_vec3))||
+        (uv&&(uv->count!=pos->count||uv->type!=cgltf_type_vec2))) goto done;
     cgltf_size count=prim->indices?prim->indices->count:pos->count;
     if(!count||count%3||count>ATHENA_MODEL3D_MAX_VERTICES) goto done;
     parsed=cgltf_load_buffers(&options,data,path);
     if(parsed!=cgltf_result_success) { result=parsed==cgltf_result_out_of_memory?ATHENA_MODEL3D_ENOMEM:ATHENA_MODEL3D_EIO; goto done; }
     if(cgltf_validate(data)!=cgltf_result_success) goto done;
-    if(pos->is_sparse||(col&&col->is_sparse)||(prim->indices&&prim->indices->is_sparse)) {
+    if(pos->is_sparse||(col&&col->is_sparse)||(normal&&normal->is_sparse)||(uv&&uv->is_sparse)||(prim->indices&&prim->indices->is_sparse)) {
         result=ATHENA_MODEL3D_EUNSUPPORTED; goto done;
     }
     positions=malloc(pos->count*3*sizeof(float)); colors=malloc(pos->count*4*sizeof(float));
+    if(normal) normals=malloc(pos->count*3*sizeof(float));
+    if(uv) texcoords=malloc(pos->count*2*sizeof(float));
     if(prim->indices) indices=malloc(count*sizeof(uint32_t));
-    if(!positions||!colors||(prim->indices&&!indices)) { result=ATHENA_MODEL3D_ENOMEM; goto done; }
+    if(!positions||!colors||(normal&&!normals)||(uv&&!texcoords)||(prim->indices&&!indices)) { result=ATHENA_MODEL3D_ENOMEM; goto done; }
     for(cgltf_size i=0;i<pos->count;i++) {
         if(!cgltf_accessor_read_float(pos,i,&positions[i*3],3)) goto done;
+        if(normal&&!cgltf_accessor_read_float(normal,i,&normals[i*3],3)) goto done;
+        if(uv&&!cgltf_accessor_read_float(uv,i,&texcoords[i*2],2)) goto done;
         float c[4]={1,1,1,1};
         if(col&&!cgltf_accessor_read_float(col,i,c,col->type==cgltf_type_vec3?3:4)) goto done;
         for(int j=0;j<4;j++) colors[i*4+j]=c[j]*factor[j];
@@ -108,20 +167,25 @@ static int load_gltf(const char *path,AthenaMesh3D **out) {
         if(index>=pos->count) goto done;
         indices[i]=index;
     }
-    AthenaGeometry3D g={positions,pos->count,colors,pos->count,indices,indices?count:0};
+    AthenaGeometry3D g={.positions=positions,.vertex_count=pos->count,.colors=colors,.color_count=pos->count,
+        .indices=indices,.index_count=indices?count:0,.normals=normals,.normal_count=normal?pos->count:0,
+        .material=&material,.texcoords=texcoords,.texcoord_count=uv?pos->count:0};
     result=athena_mesh3d_create(&g,out);
 done:
-    free(positions); free(colors); free(indices); cgltf_free(data); return result;
+    free(positions); free(colors); free(normals); free(texcoords); free(indices);
+    athena_texture3d_release(loaded_texture); cgltf_free(data); return result;
 }
 
-int athena_mesh3d_load(const char *path,AthenaMesh3D **out) {
+int athena_mesh3d_load_with_material(const char *path,const AthenaMaterial3D *material,AthenaMesh3D **out) {
     if(!out) return ATHENA_MODEL3D_EINVAL;
     *out=NULL;
+    if(material&&!athena_material3d_validate(material)) return ATHENA_MODEL3D_EINVAL;
     if(!path||!*path) return ATHENA_MODEL3D_EINVAL;
     const char *ext=strrchr(path,'.');
     if(!ext) return ATHENA_MODEL3D_EUNSUPPORTED;
     if(strcmp(ext,".obj")&&strcmp(ext,".gltf")&&strcmp(ext,".glb")) return ATHENA_MODEL3D_EUNSUPPORTED;
     FILE *file=fopen(path,"rb"); if(!file) return ATHENA_MODEL3D_EIO;
     fclose(file);
-    return !strcmp(ext,".obj")?load_obj(path,out):load_gltf(path,out);
+    return !strcmp(ext,".obj")?load_obj(path,material,out):load_gltf(path,material,out);
 }
+int athena_mesh3d_load(const char *path,AthenaMesh3D **out) { return athena_mesh3d_load_with_material(path,NULL,out); }

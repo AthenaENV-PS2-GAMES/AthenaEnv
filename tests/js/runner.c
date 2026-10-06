@@ -32,6 +32,9 @@ JSModuleDef *athena_quaternion_js_init(JSContext *ctx);
 JSModuleDef *athena_camera3d_js_init(JSContext *ctx);
 JSModuleDef *athena_model3d_js_init(JSContext *ctx);
 JSModuleDef *athena_render3d_js_init(JSContext *ctx);
+JSModuleDef *athena_lights_js_init(JSContext *ctx);
+JSModuleDef *athena_scene3d_js_init(JSContext *ctx);
+void athena_scene3d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
@@ -526,6 +529,8 @@ static int run_script(int argc, char **argv) {
     athena_camera3d_js_init(ctx);
     athena_model3d_js_init(ctx);
     athena_render3d_js_init(ctx);
+    athena_lights_js_init(ctx);
+    athena_scene3d_js_init(ctx);
     athena_noise_init(ctx);
     athena_debug_init(ctx);
     athena_camera2d_js_init(ctx);
@@ -564,6 +569,7 @@ static int run_script(int argc, char **argv) {
     athena_collision_js_cleanup(ctx);
     athena_sprite_js_cleanup(ctx);
     athena_camera2d_js_cleanup(ctx);
+    athena_scene3d_js_cleanup(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return ret < 0 ? 1 : 0;

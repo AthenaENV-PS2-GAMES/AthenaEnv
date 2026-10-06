@@ -6,23 +6,38 @@ void athena_quaternion_identity(AthenaQuaternion *out) {
     *out = (AthenaQuaternion){0, 0, 0, 1};
 }
 
+/* The R5900 FPU is single precision; double is emulated in software at
+ * ~1.4 us per operation. Scaling by the largest component keeps the float
+ * sum of squares in [1,4], so large or tiny inputs neither overflow nor
+ * underflow. Lengths at or below 1e-20 are rejected as before. */
+static float scaled_length(float x,float y,float z,float w,float *largest) {
+    float m=fabsf(x);
+    if(fabsf(y)>m) m=fabsf(y);
+    if(fabsf(z)>m) m=fabsf(z);
+    if(fabsf(w)>m) m=fabsf(w);
+    *largest=m;
+    if(m<=1e-20f) return 0;
+    x/=m; y/=m; z/=m; w/=m;
+    return sqrtf(x*x+y*y+z*z+w*w);
+}
+
 int athena_quaternion_normalize(AthenaQuaternion *out, const AthenaQuaternion *in) {
     if(!athena_float_isfinite(in->x)||!athena_float_isfinite(in->y)||
         !athena_float_isfinite(in->z)||!athena_float_isfinite(in->w)) return 0;
-    double n = sqrt((double)in->x*in->x + (double)in->y*in->y +
-        (double)in->z*in->z + (double)in->w*in->w);
-    if (!athena_double_isfinite(n) || n <= 1e-20) return 0;
-    *out = (AthenaQuaternion){in->x/n, in->y/n, in->z/n, in->w/n};
+    float m, n = scaled_length(in->x, in->y, in->z, in->w, &m);
+    if (n == 0) return 0;
+    float inverse = 1/n;
+    *out = (AthenaQuaternion){in->x/m*inverse, in->y/m*inverse, in->z/m*inverse, in->w/m*inverse};
     return 1;
 }
 
 int athena_quaternion_axis_angle(AthenaQuaternion *out, float x, float y, float z, float radians) {
     if(!athena_float_isfinite(x)||!athena_float_isfinite(y)||!athena_float_isfinite(z)||
         !athena_float_isfinite(radians)) return 0;
-    double n = sqrt((double)x*x + (double)y*y + (double)z*z);
-    if (!athena_double_isfinite(n) || n <= 1e-20) return 0;
-    double s = sin((double)radians/2)/n;
-    *out = (AthenaQuaternion){x*s, y*s, z*s, cos((double)radians/2)};
+    float m, n = scaled_length(x, y, z, 0, &m);
+    if (n == 0) return 0;
+    float s = sinf(radians/2)/n;
+    *out = (AthenaQuaternion){x/m*s, y/m*s, z/m*s, cosf(radians/2)};
     return 1;
 }
 

@@ -15,6 +15,7 @@ typedef struct { owl_qword *base; owl_channel channel; size_t size; owl_qword *p
 #define DMA_END 7
 #define DMA_TAG(q,p,id,irq,addr,spr) ((uint64_t)(q)|((uint64_t)(id)<<28))
 #define UNPACK_V3_32 8
+#define UNPACK_V2_32 4
 #define UNPACK_V4_32 12
 #define UNPACK_V4_8 14
 #define VIF_NOP 0
@@ -27,8 +28,8 @@ typedef struct { owl_qword *base; owl_channel channel; size_t size; owl_qword *p
 #define VIF_MSCALF 21
 #define VIF_CODE(imm,num,cmd,irq) ((uint32_t)(imm)|((uint32_t)(num)<<16)|((uint32_t)(cmd)<<24))
 #define DRAW_STQ2_REGLIST 0x512u
-#define register_vu_program(name) static uint32_t test_vu_code[16]
-#define embed_vu_code_ptr(name) test_vu_code
+#define register_vu_program(name) static uint32_t test_vu_code_##name[16]
+#define embed_vu_code_ptr(name) test_vu_code_##name
 #define embed_vu_code_size(name) 16
 void SyncDCache(void *,void *);
 void dmaKit_wait(owl_channel,int);

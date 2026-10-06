@@ -1,0 +1,195 @@
+{
+  "date": "2026-10-05",
+  "target": "PCSX2",
+  "emulatorVersion": null,
+  "evidence": "User supplied native and QuickJS logs; visual result confirmed for both runtimes, again after the float conversion with a steady 60 FPS.",
+  "visualPass": {
+    "native": true,
+    "quickjs": true
+  },
+  "isPerformanceBaseline": false,
+  "nativeObservations": [
+    {
+      "stage": "hierarchy",
+      "visited": 5,
+      "worldUpdates": 4,
+      "queued": 3,
+      "submitted": 3,
+      "culled": 0,
+      "culledSubtrees": 0,
+      "triangles": 25,
+      "geometryBytes": 2080,
+      "meanUpdateMs": 0.274,
+      "meanDrawMs": 0.554
+    },
+    {
+      "stage": "reparent",
+      "moonParents": [
+        "sun",
+        "planet",
+        "sun"
+      ],
+      "queued": 3,
+      "triangles": 25,
+      "geometryBytes": 2080,
+      "meanUpdateMs": 0.275,
+      "meanDrawMs": 0.554
+    },
+    {
+      "stage": "visibility",
+      "queuedHidden": 1,
+      "queuedVisible": 3,
+      "trianglesHidden": 12,
+      "geometryBytesHidden": 1008,
+      "meanUpdateMs": 0.249,
+      "meanDrawMs": 0.452
+    },
+    {
+      "stage": "subtree-cull",
+      "offscreen": {
+        "queued": 1,
+        "submitted": 3,
+        "culled": 3,
+        "culledSubtrees": 1,
+        "triangles": 0,
+        "geometryBytes": 0
+      },
+      "meanUpdateMs": 0.275,
+      "meanDrawMs": 1.27
+    },
+    {
+      "stage": "many-nodes",
+      "visited": 74,
+      "worldUpdates": 73,
+      "queued": 64,
+      "submitted": 64,
+      "triangles": [
+        768,
+        774,
+        776
+      ],
+      "geometryBytes": [
+        64512,
+        64624,
+        64128
+      ],
+      "meanUpdateMs": 4.649,
+      "meanDrawMs": 20.485
+    },
+    {
+      "stage": "loop-system",
+      "visitedByDraw": 0,
+      "queued": 3,
+      "triangles": 25,
+      "geometryBytes": 2080,
+      "meanUpdateMs": 0.275,
+      "meanDrawMs": 0.554
+    },
+    {
+      "stage": "recreate",
+      "worldUpdates": 5,
+      "queued": 3,
+      "triangles": 25,
+      "geometryBytes": 2080,
+      "meanUpdateMs": 0.275,
+      "meanDrawMs": 0.555
+    }
+  ],
+  "notes": [
+    "subtree-cull off screen: the planet subtree (planet + moon) is rejected by its bounds; the sun's world AABB still intersects, is queued, and Render3D rejects it with its precise per-object test.",
+    "many-nodes: 774/776 output triangles mean a few cubes take the clipping path in some frames.",
+    "Timings are single-run diagnostics, not a baseline; loop-system includes the Loop system run in its update time.",
+    "Timer.getTime() returns clock() ticks; with CLOCKS_PER_SEC = 1000000 (ps2dev machine/time.h) JS values are microseconds, comparable to native milliseconds x 1000.",
+    "many-nodes: JS 4.69/20.62 ms versus native 4.65/20.49 ms update/draw, so the cost is native work, not the binding."
+  ],
+  "completionLogTime": {
+    "native": 368.1682,
+    "quickjs": 483.4398
+  },
+  "realPS2Pass": null,
+  "countersMatch": "QuickJS counters equal native counters in every logged frame of the seven stages.",
+  "quickjsMeanTimingsUs": {
+    "clockTicksPerSecond": 1000000,
+    "hierarchy": {
+      "update": 317.7,
+      "draw": 693.1
+    },
+    "reparent": {
+      "update": 317.9,
+      "draw": 694.2
+    },
+    "visibility": {
+      "update": 292.1,
+      "draw": 592.3
+    },
+    "subtree-cull": {
+      "update": 318,
+      "draw": 1409.3
+    },
+    "many-nodes": {
+      "update": 4693.6,
+      "draw": 20624.4
+    },
+    "loop-system": {
+      "update": 6,
+      "draw": 693.9,
+      "note": "update runs in the Loop POST_UPDATE system, outside this measurement"
+    },
+    "recreate": {
+      "update": 318.6,
+      "draw": 693.2
+    }
+  },
+  "afterFloatConversion": {
+    "visualPass": true,
+    "steady60Fps": true,
+    "countersMatchBefore": "Every logged counter equals the earlier native run.",
+    "meanMs": {
+      "hierarchy": {
+        "update": 0.024,
+        "draw": 0.061
+      },
+      "reparent": {
+        "update": 0.024,
+        "draw": 0.061
+      },
+      "visibility": {
+        "update": 0.023,
+        "draw": 0.052
+      },
+      "subtree-cull": {
+        "update": 0.024,
+        "draw": 1.042
+      },
+      "many-nodes": {
+        "update": 0.3,
+        "draw": 9.838
+      },
+      "loop-system": {
+        "update": 0.024,
+        "draw": 0.061
+      },
+      "recreate": {
+        "update": 0.024,
+        "draw": 0.061
+      }
+    },
+    "note": "subtree-cull draw stays ~1 ms: the sun is queued from an intersecting AABB and rejected by the precise per-object test."
+  },
+  "afterClipFloat": {
+    "date": "2026-10-06",
+    "visualPass": true,
+    "countersMatchBefore": true,
+    "meanMs": {
+      "subtree-cull": {
+        "update": 0.024,
+        "draw": 0.099
+      },
+      "many-nodes": {
+        "update": 0.3,
+        "draw": 1.706
+      }
+    },
+    "note": "Other stages unchanged at 0.024/0.061 ms."
+  }
+}

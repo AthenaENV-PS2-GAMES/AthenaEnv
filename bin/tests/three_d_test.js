@@ -79,6 +79,7 @@ assert(stats.submittedObjects === 2 && stats.culledObjects === 1 && stats.triang
     "batch retains disposed wrappers; frustum culling is native");
 assert(stats.sourceTriangles === 1 && stats.clippedTriangles === 0 && stats.rejectedTriangles === 0,
     "contained objects keep the interior path");
+assert(stats.geometryBytes === 64, "contained DMA payload includes padding and excludes culled objects");
 const clipCamera = new Camera({near: 1, far: 10, aspect: 1});
 clipCamera.lookAt(0, 0, -1).setPosition(0, 0, 0);
 const clipMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([-.1,-.1,.5, .3,-.1,-2, -.1,.3,-2])});
@@ -86,6 +87,7 @@ const clipInstance = clipMesh.createInstance(); clipMesh.dispose();
 const clipStats = Render3D.draw(clipInstance, clipCamera, Render3D.CULL_NONE);
 assert(clipStats.sourceTriangles === 1 && clipStats.triangles === 2 && clipStats.clippedTriangles === 1 &&
     clipStats.rejectedTriangles === 0 && clipStats.vuBatches === 1, "near-plane clipping expands a triangle natively");
+assert(clipStats.geometryBytes === 160, "clipped DMA payload uses xyzw and padding");
 clipInstance.dispose(); clipCamera.dispose();
 const rejectMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([
     -100,-.5,0, -100,.5,0, -101,0,0, 100,-.5,0, 100,.5,0, 101,0,0
@@ -94,6 +96,7 @@ const rejectInstance = rejectMesh.createInstance(); rejectMesh.dispose();
 const rejected = Render3D.draw(rejectInstance, camera, Render3D.CULL_NONE);
 assert(rejected.culledObjects === 0 && rejected.sourceTriangles === 2 && rejected.rejectedTriangles === 2 &&
     rejected.triangles === 0 && rejected.vuBatches === 0, "triangle rejection after conservative AABB test");
+assert(rejected.geometryBytes === 0, "rejected triangles emit no geometry payload");
 rejectInstance.dispose();
 throws(() => instance.setPosition(0, 0, 0), "disposed instance");
 throws(() => batch.draw(camera, 20), "invalid cull mode");

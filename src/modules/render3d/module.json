@@ -1,8 +1,8 @@
 {
-  "id": "render3d", "name": "Render3D", "description": "Experimental opaque color renderer with precise native clipping, VU1 interior path, retained batches and inline DMA geometry.",
-  "category": "Graphics", "version": "1.1.0", "default": false,
-  "sources": ["native/render3d.c", "native/render3d_clip.c", "native/render3d_gs.c", "vu1/draw_3D_colors.vsm"],
-  "dependencies": {"modules": ["graphics", "model3d", "camera3d"], "iop": [], "ee_libs": []},
+  "id": "render3d", "name": "Render3D", "description": "Opaque color and perspective-correct textured rendering, Gouraud diffuse lighting, precise native clipping, retained batches, explicit-matrix mesh draws and inline DMA geometry.",
+  "category": "Graphics", "version": "1.5.0", "default": false,
+  "sources": ["native/render3d.c", "native/render3d_clip.c", "native/render3d_shade.c", "native/render3d_gs.c", "vu1/draw_3D_colors.vsm", "vu1/draw_3D_diffuse.vsm", "vu1/draw_3D_texture.vsm"],
+  "dependencies": {"modules": ["graphics", "model3d", "camera3d", "lights"], "iop": [], "ee_libs": []},
   "native": {"shutdown": "athena_render3d_module_shutdown"},
   "quickjs": {"sources": ["quickjs/ath_render3d.c"], "module_name": "Render3D", "global_alias": "Render3D", "init_func": "athena_render3d_js_init"},
   "types": "render3d.d.ts"

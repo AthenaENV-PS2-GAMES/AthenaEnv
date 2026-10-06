@@ -2,6 +2,7 @@
 #include <athena/render3d.h>
 #include <athena/js/model3d.h>
 #include <athena/js/camera3d.h>
+#include <athena/js/lights.h>
 #include "ath_render3d.h"
 static JSClassID batch_id;
 static AthenaBatch3D *get_batch(JSContext *ctx,JSValueConst self) {
@@ -55,14 +56,15 @@ static JSValue stats_value(JSContext *ctx,int code,const AthenaRender3DStats *s)
         JS_SetPropertyStr(ctx,obj,"vuBatches",JS_NewUint32(ctx,s->vu_batches))<0||
         JS_SetPropertyStr(ctx,obj,"sourceTriangles",JS_NewUint32(ctx,s->source_triangles))<0||
         JS_SetPropertyStr(ctx,obj,"clippedTriangles",JS_NewUint32(ctx,s->clipped_triangles))<0||
-        JS_SetPropertyStr(ctx,obj,"rejectedTriangles",JS_NewUint32(ctx,s->rejected_triangles))<0) {
+        JS_SetPropertyStr(ctx,obj,"rejectedTriangles",JS_NewUint32(ctx,s->rejected_triangles))<0||
+        JS_SetPropertyStr(ctx,obj,"geometryBytes",JS_NewFloat64(ctx,(double)s->geometry_bytes))<0) {
         JS_FreeValue(ctx,obj); return JS_EXCEPTION;
     }
     return obj;
 }
 static int cull_option(JSContext *ctx,int argc,JSValueConst *argv,AthenaRender3DCull *out) {
     *out=ATHENA_RENDER3D_CULL_BACK;
-    if(argc==3) {
+    if(argc>=3&&!JS_IsUndefined(argv[2])) {
         float value;
         if(!athena_js_float(ctx,argv[2],&value,"cullMode")) return 0;
         if(value!=0&&value!=1&&value!=-1) { JS_ThrowRangeError(ctx,"Invalid cullMode"); return 0; }
@@ -72,24 +74,28 @@ static int cull_option(JSContext *ctx,int argc,JSValueConst *argv,AthenaRender3D
 }
 static JSValue draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
-    if(!athena_js_argc(ctx,argc,2,3,"Render3D.draw")) return JS_EXCEPTION;
+    if(!athena_js_argc(ctx,argc,2,4,"Render3D.draw")) return JS_EXCEPTION;
     AthenaRender3DCull cull; if(!cull_option(ctx,argc,argv,&cull)) return JS_EXCEPTION;
     AthenaInstance3D *i=athena_instance3d_from_value(ctx,argv[0]);
     AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[1]); if(!i||!c) return JS_EXCEPTION;
-    AthenaRender3DStats s={0}; int result=athena_render3d_draw(i,c,cull,&s); return stats_value(ctx,result,&s);
+    AthenaLights *lights=NULL;
+    if(argc==4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
+    AthenaRender3DStats s={0}; int result=athena_render3d_draw_lit(i,c,lights,cull,&s); return stats_value(ctx,result,&s);
 }
 static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
-    if(!athena_js_argc(ctx,argc,1,2,"Batch.draw")) return JS_EXCEPTION;
-    AthenaBatch3D *b=get_batch(ctx,self);
-    AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[0]); if(!b||!c) return JS_EXCEPTION;
+    if(!athena_js_argc(ctx,argc,1,3,"Batch.draw")) return JS_EXCEPTION;
     AthenaRender3DCull cull=ATHENA_RENDER3D_CULL_BACK;
-    if(argc==2) {
+    if(argc>=2&&!JS_IsUndefined(argv[1])) {
         float value;
         if(!athena_js_float(ctx,argv[1],&value,"cullMode")) return JS_EXCEPTION;
         if(value!=0&&value!=1&&value!=-1) return JS_ThrowRangeError(ctx,"Invalid cullMode");
         cull=(int)value;
     }
-    AthenaRender3DStats s={0}; int result=athena_batch3d_draw(b,c,cull,&s); return stats_value(ctx,result,&s);
+    AthenaBatch3D *b=get_batch(ctx,self);
+    AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[0]); if(!b||!c) return JS_EXCEPTION;
+    AthenaLights *lights=NULL;
+    if(argc==3&&!JS_IsUndefined(argv[2])) { lights=athena_lights_from_value(ctx,argv[2]); if(!lights) return JS_EXCEPTION; }
+    AthenaRender3DStats s={0}; int result=athena_batch3d_draw_lit(b,c,lights,cull,&s); return stats_value(ctx,result,&s);
 }
 static JSClassDef class_def={"Render3D.Batch",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={

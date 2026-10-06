@@ -265,6 +265,7 @@ typedef enum {
 uint64_t get_register(int reg_id);
 
 void set_register(int reg_id, uint64_t data);
+void set_register_force(int reg_id, uint64_t data);
 
 uint64_t get_screen_param(uint8_t param);
 
@@ -369,6 +370,9 @@ typedef u64 Color;
 
 void init_graphics();
 void graphics_service_init();
+/* Drains VIF/GIF and waits for raster completion before releasing/reusing VRAM.
+ * Main thread only; does not flip or wait for VSync. */
+void graphics_wait_idle(void);
 
 void clearScreen(Color color);
 

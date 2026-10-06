@@ -22,12 +22,15 @@ int athena_batch3d_add(AthenaBatch3D *b,AthenaInstance3D *i) {
     b->items[b->count++]=i; athena_instance3d_retain(i); return 0;
 }
 uint32_t athena_batch3d_size(const AthenaBatch3D *b) { return b?b->count:0; }
-int athena_batch3d_draw(AthenaBatch3D *b,AthenaCamera3D *c,AthenaRender3DCull cull,AthenaRender3DStats *s) {
+int athena_batch3d_draw_lit(AthenaBatch3D *b,AthenaCamera3D *c,const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *s) {
     if(!b||!c||!s||(cull!=0&&cull!=1&&cull!=-1)) return -1;
     memset(s,0,sizeof(*s));
     for(uint32_t n=0;n<b->count;n++) {
-        int result=athena_render3d_draw(b->items[n],c,cull,s);
+        int result=athena_render3d_draw_lit(b->items[n],c,lights,cull,s);
         if(result<0) return result;
     }
     return 0;
+}
+int athena_batch3d_draw(AthenaBatch3D *b,AthenaCamera3D *c,AthenaRender3DCull cull,AthenaRender3DStats *s) {
+    return athena_batch3d_draw_lit(b,c,NULL,cull,s);
 }

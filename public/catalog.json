@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-03T19:15:04.993Z",
+  "generatedAt": "2026-10-06T01:20:04.841Z",
   "modules": [
     {
       "id": "archive",
@@ -326,7 +326,7 @@
       "name": "Graphics",
       "description": "PS2 GS initialization, frame control, colors, and 2D primitives.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": true,
       "dependencies": {
@@ -459,6 +459,25 @@
       }
     },
     {
+      "id": "lights",
+      "name": "Lights",
+      "description": "Independent ambient and four directional lights, validated linear intensities, normalized world directions and revision tracking.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Lights",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "loop",
       "name": "Loop",
       "description": "Game loop driven by the runtime: clears the screen, calls a per-frame callback with the native delta time and flips.",
@@ -531,14 +550,15 @@
     {
       "id": "model3d",
       "name": "Model3D",
-      "description": "Immutable copied triangle meshes, compact colors and independent reference-counted instances. Static OBJ/glTF geometry with explicit unsupported-feature errors.",
+      "description": "Immutable meshes, copied materials, normals, UVs and retained opaque textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.2.0",
       "required": false,
       "default": false,
       "dependencies": {
         "modules": [
-          "quaternion"
+          "quaternion",
+          "image"
         ],
         "iop": [],
         "ee_libs": []
@@ -678,16 +698,17 @@
     {
       "id": "render3d",
       "name": "Render3D",
-      "description": "Experimental opaque color renderer with precise native clipping, VU1 interior path, retained batches and inline DMA geometry.",
+      "description": "Opaque color and perspective-correct textured rendering, Gouraud diffuse lighting, precise native clipping, retained batches, explicit-matrix mesh draws and inline DMA geometry.",
       "category": "Graphics",
-      "version": "1.1.0",
+      "version": "1.5.0",
       "required": false,
       "default": false,
       "dependencies": {
         "modules": [
           "graphics",
           "model3d",
-          "camera3d"
+          "camera3d",
+          "lights"
         ],
         "iop": [],
         "ee_libs": []
@@ -719,6 +740,31 @@
       "global_alias": "Scene",
       "api": {
         "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "scene3d",
+      "name": "Scene3D",
+      "description": "Native 3D transform hierarchy with rejected cycles, dirty propagation, subtree bounds culling, pipeline-sorted render queue and optional Loop update system.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "render3d",
+          "model3d",
+          "camera3d",
+          "lights",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Scene3D",
+      "api": {
+        "native": true,
         "quickjs": true
       }
     },

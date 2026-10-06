@@ -4217,6 +4217,26 @@ declare namespace IOP {
 }
 
 
+/* === Module: Lights (lights) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=lights,... */
+/** Independent linear RGB lights. World directions point toward the source. */
+declare namespace Lights {
+    const MAX_DIRECTIONAL: 4;
+    class Set {
+        /** Starts with black ambient and all four directional slots disabled. */
+        constructor();
+        /** Changes only when effective state changes; invalid setters are atomic. */
+        readonly revision: number;
+        setAmbient(r: number, g: number, b: number): this;
+        /** Slots 0..3; nonzero direction normalized in native code. RGB in [0,1]. */
+        setDirectional(slot: number, x: number, y: number, z: number, r: number, g: number, b: number): this;
+        disable(slot: number): this;
+        clear(): this;
+        dispose(): void;
+    }
+}
+
+
 /* === Module: Memory Card (memcard) === */
 /**
  * Memory Card access on mc0: (port 0) and mc1: (port 1).
@@ -4573,11 +4593,40 @@ declare namespace Quaternion {
 
 /* === Module: Model3D (model3d) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=model3d,... */
-/** Stage 1: immutable static triangle meshes with colors; native resources are retained by instances/batches.
- * Geometry is copied. No mutation/freeze, textures, skins or async loader in this stage. */
+/** Immutable static meshes. Geometry and material descriptors are copied;
+ * instances/batches retain native resources, including textures. */
 declare namespace Model3D {
     const MAX_VERTICES: number;
-    interface Geometry { positions: Float32Array; colors?: Float32Array; indices?: Uint32Array; }
+    const UNLIT: 0; const DIFFUSE: 1;
+    class Texture {
+        private constructor();
+        static readonly NEAREST: 0; static readonly LINEAR: 1;
+        /** Copies 0xAABBGGRR pixels, alpha ignored. Power-of-two sizes 1..512;
+         * clamp-to-edge, no mipmaps. Honors subarray(); main thread only. */
+        static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1}): Texture;
+        /** Synchronous RGB/RGBA image decoding. Palette images unsupported. */
+        static load(path: string, filter?: 0 | 1): Texture;
+        readonly width: number; readonly height: number;
+        /** Existing meshes retain the texture. Final native release waits GS. */
+        dispose(): void;
+    }
+    interface Material {
+        /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
+        shading?: 0 | 1;
+        /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
+         * and stored as RGBA8. Defaults to white. Alpha is opaque in this pass. */
+        baseColor?: Float32Array;
+        texture?: Texture;
+    }
+    interface Geometry {
+        positions: Float32Array; colors?: Float32Array; indices?: Uint32Array;
+        /** One nonzero xyz normal per source vertex; normalized during copy.
+         * Missing DIFFUSE normals are generated per face, before expansion. */
+        normals?: Float32Array;
+        /** One finite uv pair in [0,1] per source vertex. Origin top-left. */
+        texcoords?: Float32Array;
+        material?: Material;
+    }
     class Mesh {
         private constructor();
         /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
@@ -4600,7 +4649,7 @@ declare namespace Model3D {
         dispose(): void;
     }
     /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset. */
-    function load(path: string): Mesh;
+    function load(path: string, material?: Material): Mesh;
 }
 
 
@@ -4917,8 +4966,8 @@ declare namespace Noise {
 
 /* === Module: Render3D (render3d) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=render3d,... */
-/** Native opaque color triangles with precise homogeneous clipping in C for
- * objects crossing the frustum; VU1 transforms fully contained objects.
+/** Native opaque unlit/diffuse and textured triangles with homogeneous clipping in C for
+ * crossing objects; VU1 transforms and lights fully contained objects.
  * Draw never advances animation/physics. Enable Screen zbuffering. */
 declare namespace Render3D {
     const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
@@ -4933,15 +4982,21 @@ declare namespace Render3D {
         clippedTriangles: number;
         /** Source triangles rejected by precise clipping. */
         rejectedTriangles: number;
+        /** Copied position/color/normal/UV DMA payload, including chunk padding.
+         * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
+        geometryBytes: number;
     }
-    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode): Stats;
+    /** Lights are borrowed for this call. Omitted lights mean black ambient and
+     * no directional lights. UNLIT materials ignore lights. Singular DIFFUSE
+     * normal transforms throw; drawing does not update lights or transforms. */
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set): Stats;
     class Batch {
         constructor();
         readonly size: number;
         /** Retains the native instance, independently of its JS handle. */
         add(instance: Model3D.Instance): this;
         clear(): this;
-        draw(camera: Camera3D.Camera, cullMode?: CullMode): Stats;
+        draw(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set): Stats;
         dispose(): void;
     }
 }
@@ -5323,6 +5378,78 @@ declare namespace Scene {
          * seconds long, for games without `Loop.run()`.
          */
         function update(dt?: number): void;
+    }
+}
+
+
+/* === Module: Scene3D (scene3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=scene3d,... */
+/** Native transform hierarchy. A Node is the scene-graph instance of a mesh;
+ * world = parent world * local TRS. Setters only mark dirty flags: call
+ * scene.update() (or attachLoop()) before draw and world queries, which throw
+ * while the scene is stale instead of returning outdated data. */
+declare namespace Scene3D {
+    /** Levels from the root, root included. Deeper hierarchies are rejected. */
+    const MAX_DEPTH: number;
+    interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    interface DrawStats extends Render3D.Stats {
+        /** Subtrees rejected by their world bounds; their meshes count as culled. */
+        culledSubtrees: number;
+        /** Meshes sent to Render3D, sorted by pipeline in traversal order. */
+        queuedObjects: number;
+    }
+    interface Bounds { min: [number, number, number]; max: [number, number, number]; }
+    class Node {
+        /** Retains the optional mesh natively, independently of its handle. */
+        constructor(mesh?: Model3D.Mesh);
+        /** Replaces the retained mesh; null removes it. */
+        setMesh(mesh: Model3D.Mesh | null): this;
+        readonly hasMesh: boolean;
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Hidden nodes and descendants are not drawn nor included in bounds. */
+        visible: boolean;
+        /** Reparents child, keeping its local transform; the parent retains it.
+         * Throws RangeError for cycles, scene roots and MAX_DEPTH overflow. */
+        add(child: Node): this;
+        /** Removes this node from its parent; harmless without one. */
+        detach(): this;
+        /** New handle for the parent, or null. Handles are not identical objects. */
+        getParent(): Node | null;
+        readonly childCount: number;
+        /** New handle for the child at index. */
+        getChild(index: number): Node;
+        /** Always current. Owned snapshot, or fills and returns out. */
+        getLocalTransform(out?: Matrix4): Matrix4;
+        /** Transform of the last update. Throws while stale or outside a scene. */
+        getWorldTransform(out?: Matrix4): Matrix4;
+        /** World AABB of visible meshes in the subtree, or null when empty.
+         * Throws while stale or outside a scene. */
+        getWorldBounds(): Bounds | null;
+        /** Drops this handle; parents and other handles keep the node alive. */
+        dispose(): void;
+    }
+    class Scene {
+        constructor();
+        /** New handle for the root node owned by the scene. */
+        readonly root: Node;
+        /** True when a node changed after the last update. */
+        readonly stale: boolean;
+        /** True while a Loop POST_UPDATE system updates this scene. */
+        readonly attached: boolean;
+        /** Recomputes dirty world transforms and subtree bounds. */
+        update(): UpdateStats;
+        /** Culls subtrees, queues meshes and draws them through Render3D.
+         * Never updates the scene; throws while stale. Lights are borrowed. */
+        draw(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set): DrawStats;
+        /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
+        attachLoop(priority?: number): this;
+        detachLoop(): this;
+        /** Also detaches from the Loop; existing node handles stay valid. */
+        dispose(): void;
     }
 }
 
