@@ -374,21 +374,63 @@ static JSValue athena_system_get_temperature(JSContext *ctx, JSValue this_val, i
     return JS_NewFloat64(ctx, (double)(raw / 128) + (double)(raw % 128) / 10.0);
 }
 
+/* Recompute the runtime heap ceiling from the current free EE memory while
+ * leaving a caller-selected native headroom. This is a snapshot: native
+ * allocations made later can consume that headroom. */
+static JSValue athena_system_set_native_memory_headroom(JSContext *ctx, JSValue this_val,
+    int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (!athena_system_require_argc(ctx, argc, 1, "System.setNativeMemoryHeadroom"))
+        return JS_EXCEPTION;
+    uint64_t requested = 0;
+    if (JS_ToIndex(ctx, &requested, argv[0]) < 0) return JS_EXCEPTION;
+    size_t total = GetMemorySize();
+    size_t used = get_used_memory();
+    size_t free_memory = used < total ? total - used : 0;
+    /* Keep enough room for JS bindings/errors after setting the new limit. */
+    const size_t minimum_js_headroom = 64u * 1024u;
+    if (requested > SIZE_MAX || free_memory < minimum_js_headroom ||
+        (size_t)requested > free_memory - minimum_js_headroom) {
+        return JS_ThrowRangeError(ctx,
+            "Native memory headroom must leave at least 64 KiB for QuickJS");
+    }
+    JSMemoryUsage usage;
+    JSRuntime *rt = JS_GetRuntime(ctx);
+    JS_ComputeMemoryUsage(rt, &usage);
+    size_t additional_js = free_memory - (size_t)requested;
+    if (usage.malloc_size > SIZE_MAX - additional_js)
+        return JS_ThrowRangeError(ctx, "QuickJS memory limit overflow");
+    size_t limit = usage.malloc_size + additional_js;
+    JS_SetMemoryLimit(rt, limit);
+    return JS_NewInt64(ctx, (int64_t)limit);
+}
+
 static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
+    (void)this_val; (void)argv;
     if (!athena_system_require_argc(ctx, argc, 0, "System.getMemoryStats")) return JS_EXCEPTION;
+    AthenaMemoryStats memory;
+    get_memory_stats(&memory);
     JSValue info = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info, "core", JS_NewUint32(ctx, (uint32_t)get_binary_size()));
     JS_SetPropertyStr(ctx, info, "nativeStack", JS_NewUint32(ctx, (uint32_t)get_stack_size()));
-    JS_SetPropertyStr(ctx, info, "allocs", JS_NewUint32(ctx, (uint32_t)get_allocs_size()));
+    JS_SetPropertyStr(ctx, info, "allocs", JS_NewUint32(ctx, (uint32_t)memory.allocs_size));
+    JS_SetPropertyStr(ctx, info, "allocsPeak", JS_NewInt64(ctx, (int64_t)memory.allocs_peak));
+    JS_SetPropertyStr(ctx, info, "allocationFailures",
+        JS_NewInt64(ctx, (int64_t)memory.allocation_failures));
     JS_SetPropertyStr(ctx, info, "used", JS_NewUint32(ctx, (uint32_t)get_used_memory()));
+    JS_SetPropertyStr(ctx, info, "heapReserved", JS_NewInt64(ctx, (int64_t)memory.heap_reserved));
+    JS_SetPropertyStr(ctx, info, "heapAllocated", JS_NewInt64(ctx, (int64_t)memory.heap_allocated));
+    JS_SetPropertyStr(ctx, info, "heapOverhead", JS_NewInt64(ctx,
+        (int64_t)(memory.heap_allocated > memory.allocs_size ?
+                  memory.heap_allocated - memory.allocs_size : 0)));
+    JS_SetPropertyStr(ctx, info, "heapFree", JS_NewInt64(ctx, (int64_t)memory.heap_free));
+    JS_SetPropertyStr(ctx, info, "heapFreeChunks", JS_NewInt64(ctx, (int64_t)memory.heap_free_chunks));
+    JS_SetPropertyStr(ctx, info, "heapTopFree", JS_NewInt64(ctx, (int64_t)memory.heap_top_free));
+    JS_SetPropertyStr(ctx, info, "heapNonTopFree", JS_NewInt64(ctx, (int64_t)memory.heap_non_top_free));
     {
         JSMemoryUsage usage;
         JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &usage);
-        /*
-         * QuickJS adds an estimated 8-byte header (MALLOC_OVERHEAD) to each
-         * live block; drop it so jsHeap is measured like allocs and the two
-         * can be subtracted.
-         */
+        /* QuickJS adds an estimated 8-byte header per block. */
         JS_SetPropertyStr(ctx, info, "jsHeap",
             JS_NewInt64(ctx, usage.malloc_size - 8 * usage.malloc_count));
         JS_SetPropertyStr(ctx, info, "jsLimit", JS_NewInt64(ctx, usage.malloc_limit));
@@ -460,6 +502,7 @@ static const JSCFunctionListEntry system_module_funcs[] = {
     JS_CFUNC_DEF("getGPUInfo", 0, athena_system_get_gpu_info),
     JS_CFUNC_DEF("getTemperature", 0, athena_system_get_temperature),
     JS_CFUNC_DEF("getMemoryStats", 0, athena_system_get_memory_stats),
+    JS_CFUNC_DEF("setNativeMemoryHeadroom", 1, athena_system_set_native_memory_headroom),
     JS_CFUNC_DEF("setDarkMode", 1, athena_system_set_dark_mode),
     JS_CFUNC_DEF("getTicks", 0, athena_system_get_ticks),
     JS_CFUNC_DEF("getMilliseconds", 0, athena_system_get_ms),

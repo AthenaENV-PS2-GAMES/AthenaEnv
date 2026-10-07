@@ -3,7 +3,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
-typedef struct { int ZBuffering,Height,Width,Interlace,Field,PSMZ,PrimContext; } GSCONTEXT;
+typedef struct { int ZBuffering,Height,Width,Interlace,Field,PSMZ,PrimContext,Mode;
+    int OffsetX,OffsetY,PrimAlphaEnable,PrimFogEnable,PrimAAEnable; } GSCONTEXT;
 #define GS_INTERLACED 1
 #define GS_FRAME 1
 #define GS_ZBUF_16 2

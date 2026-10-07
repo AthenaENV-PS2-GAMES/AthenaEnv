@@ -28,9 +28,9 @@ int athena_font_upload(GSCONTEXT *gsGlobal, GSFONT *gsFont)
         }
 		return 0;
 	}
-	else if( (gsFont->Type == FONT_TYPE_PNG_DAT) || 
-	         (gsFont->Type == FONT_TYPE_BMP_DAT) || 
-	         (gsFont->Type == FONT_TYPE_JPEG_DAT)) 
+	else if( (gsFont->Type == FONT_TYPE_PNG_DAT) ||
+	         (gsFont->Type == FONT_TYPE_BMP_DAT) ||
+	         (gsFont->Type == FONT_TYPE_JPEG_DAT))
 	{
 		if( load_image(gsFont->Texture, gsFont->Path, true) == -1) {
 			dbgprintf("Error uploading font texture: %s\n", gsFont->Path);
@@ -82,7 +82,7 @@ GSFONT *athena_init_font(u8 type, char *path)
 
 	GSFONT *gsFont = calloc(1, sizeof(GSFONT));
 	if (!gsFont) return NULL;
-	
+
 	gsFont->Texture = calloc(1, sizeof(GSSURFACE));
 	gsFont->Path = calloc(1, path_len);
 	gsFont->Additional = calloc(1, sizeof(short)*256);
@@ -98,8 +98,8 @@ GSFONT *athena_init_font(u8 type, char *path)
 	gsFont->Type = type;
 	strcpy(gsFont->Path, path);
 
-	if(gsFont->Type == FONT_TYPE_BMP_DAT || 
-	   gsFont->Type == FONT_TYPE_PNG_DAT || 
+	if(gsFont->Type == FONT_TYPE_BMP_DAT ||
+	   gsFont->Type == FONT_TYPE_PNG_DAT ||
 	   gsFont->Type == FONT_TYPE_JPEG_DAT)
 	{
 		gsFont->Path_DAT = calloc(1, path_len);
@@ -171,7 +171,7 @@ static void render_font_char_glyph(GSFONT *gsFont, unsigned char c, owl_packet *
 	charsiz = gsFont->Additional[(u8)c];
 
 	x1 = (float)pen_x - 0.5f;
-	
+
 	if (GetInterlacedFrameMode()) {
 		y1 = ((float)pen_y / 2.0f) - 0.5f;
 		y2 = (y1 + ((float)gsFont->CharHeight / 2.0f) * scale) - 0.5f;
@@ -179,7 +179,7 @@ static void render_font_char_glyph(GSFONT *gsFont, unsigned char c, owl_packet *
 		y1 = (float)pen_y - 0.5f;
 		y2 = y1 + ((float)gsFont->CharHeight * scale) - 0.5f;
 	}
-	
+
 	x2 = x1 + ((float)charsiz * scale) - 0.5f;
 
 	u1 = (float)(px * gsFont->CharWidth) + (0.5f * scale);
@@ -208,15 +208,15 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
                       float scale, unsigned long color, const char *String)
 {
 
-	if(gsFont->Type == FONT_TYPE_PNG_DAT || 
-	   gsFont->Type == FONT_TYPE_BMP_DAT || 
+	if(gsFont->Type == FONT_TYPE_PNG_DAT ||
+	   gsFont->Type == FONT_TYPE_BMP_DAT ||
 	   gsFont->Type == FONT_TYPE_JPEG_DAT ||
 	   gsFont->Type == FONT_TYPE_FNT)
 	{
 		int pen_x = (int)X;
 		int pen_y = (int)Y;
 		const char *text_to_render = String;
-		
+
 		owl_packet *packet = NULL;
 		int texture_id = -1;
 
@@ -266,95 +266,106 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 			glyph_batch_flush(gsFont, color);
 			return;
 		}
-		for (const char *p = String; *p; p++) {
-			if (*p != '\n') printable_chars++;
-		}
+        /* Leave room for the largest header and the ring's END tag.
+         * Every glyph contributes two QWs; keep each GIF/DMA batch bounded. */
+        size_t half = owl_get_controller()->size;
+        if (half <= 13) return;
+        size_t max_glyphs = (half - 13) / 2;
+        while (*text_to_render) {
+            const char *batch_end = text_to_render;
+            printable_chars = 0;
+            while (*batch_end && (size_t)printable_chars < max_glyphs) {
+                if (*batch_end != '\n') printable_chars++;
+                batch_end++;
+            }
+            if (!printable_chars) break;
 
-		texture_id = texture_manager_bind(gsGlobal, gsFont->Texture, true);
-		
-		int text_vert_size = printable_chars * 2;
-		packet = owl_query_packet(CHANNEL_VIF1, (texture_id != -1 ? 12 : 8) + text_vert_size);
+			texture_id = texture_manager_bind(gsGlobal, gsFont->Texture, true);
 
-		owl_add_cnt_tag(packet, (texture_id != -1 ? 11 : 7) + text_vert_size, 0);
+			int text_vert_size = printable_chars * 2;
+			packet = owl_query_packet(CHANNEL_VIF1, (texture_id != -1 ? 12 : 8) + text_vert_size);
 
-		if (texture_id != -1) {
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-			owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
+			owl_add_cnt_tag(packet, (texture_id != -1 ? 11 : 7) + text_vert_size, 0);
 
-			owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-			owl_add_tag(packet, GIF_NOP, 0);
+			if (texture_id != -1) {
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
+				owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
 
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
-		}
+				owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
+				owl_add_tag(packet, GIF_NOP, 0);
 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(6 + text_vert_size, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(4, 1, 0, 0, 0, 1));
-
-		int tw, th;
-		athena_set_tw_th(gsFont->Texture, &tw, &th);
-
-		owl_add_tag(packet,
-			GS_TEX0_1 + gsGlobal->PrimContext,
-			GS_SETREG_TEX0((gsFont->Texture->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK) / 256,
-				gsFont->Texture->TBW,
-				gsFont->Texture->PSM,
-				tw, th,
-				gsGlobal->PrimAlphaEnable,
-				COLOR_MODULATE,
-				(gsFont->Texture->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK) / 256,
-				gsFont->Texture->ClutPSM,
-				0, 0,
-				gsFont->Texture->VramClut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
-		);
-
-		owl_add_tag(packet, GS_TEX1_1 + gsGlobal->PrimContext, 
-			GS_SETREG_TEX1(1, 0, gsFont->Texture->Filter, gsFont->Texture->Filter, 0, 0, 0));
-
-		owl_add_tag(packet, GS_PRIM,
-			VU_GS_PRIM(GS_PRIM_PRIM_SPRITE,
-				0,
-				1,
-				gsGlobal->PrimFogEnable,
-				gsGlobal->PrimAlphaEnable,
-				gsGlobal->PrimAAEnable,
-				1,
-				gsGlobal->PrimContext,
-				0)
-		);
-
-		owl_add_tag(packet, GS_RGBAQ, color);
-
-		owl_add_tag(packet,
-			((uint64_t)(GS_UV) << 0 | (uint64_t)(GS_XYZ2) << 4),
-			VU_GS_GIFTAG(text_vert_size,
-				1, NO_CUSTOM_DATA, 0,
-				0,
-				1, 2)
-		);
-
-
-		for (; *text_to_render; ++text_to_render) {
-			unsigned char c = (unsigned char)*text_to_render;
-			
-			if (c == '\n') {
-				pen_x = (int)X;
-				pen_y += (int)((gsFont->CharHeight * scale) + 1);
-				continue;
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+				owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
+				owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
 			}
 
-			render_font_char_glyph(gsFont, c, packet, pen_x, pen_y, scale, color);
+			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+			owl_add_uint(packet, VIF_CODE(6 + text_vert_size, 0, VIF_DIRECT, 0));
 
-			pen_x += (int)((gsFont->Additional[(u8)c] * scale) + 1);
-		}
+			owl_add_tag(packet, GIF_AD, GIFTAG(4, 1, 0, 0, 0, 1));
+
+			int tw, th;
+			athena_set_tw_th(gsFont->Texture, &tw, &th);
+
+			owl_add_tag(packet,
+				GS_TEX0_1 + gsGlobal->PrimContext,
+				GS_SETREG_TEX0((gsFont->Texture->Vram & ~GRAPHICS_TRANSFER_REQUEST_MASK) / 256,
+					gsFont->Texture->TBW,
+					gsFont->Texture->PSM,
+					tw, th,
+					gsGlobal->PrimAlphaEnable,
+					COLOR_MODULATE,
+					(gsFont->Texture->VramClut & ~GRAPHICS_TRANSFER_REQUEST_MASK) / 256,
+					gsFont->Texture->ClutPSM,
+					0, 0,
+					gsFont->Texture->VramClut ? GS_CLUT_STOREMODE_LOAD : GS_CLUT_STOREMODE_NOLOAD)
+			);
+
+			owl_add_tag(packet, GS_TEX1_1 + gsGlobal->PrimContext,
+				GS_SETREG_TEX1(1, 0, gsFont->Texture->Filter, gsFont->Texture->Filter, 0, 0, 0));
+
+			owl_add_tag(packet, GS_PRIM,
+				VU_GS_PRIM(GS_PRIM_PRIM_SPRITE,
+					0,
+					1,
+					gsGlobal->PrimFogEnable,
+					gsGlobal->PrimAlphaEnable,
+					gsGlobal->PrimAAEnable,
+					1,
+					gsGlobal->PrimContext,
+					0)
+			);
+
+			owl_add_tag(packet, GS_RGBAQ, color);
+
+			owl_add_tag(packet,
+				((uint64_t)(GS_UV) << 0 | (uint64_t)(GS_XYZ2) << 4),
+				VU_GS_GIFTAG(text_vert_size,
+					1, NO_CUSTOM_DATA, 0,
+					0,
+					1, 2)
+			);
+
+
+			for (; text_to_render != batch_end; ++text_to_render) {
+				unsigned char c = (unsigned char)*text_to_render;
+
+				if (c == '\n') {
+					pen_x = (int)X;
+					pen_y += (int)((gsFont->CharHeight * scale) + 1);
+					continue;
+				}
+
+				render_font_char_glyph(gsFont, c, packet, pen_x, pen_y, scale, color);
+
+				pen_x += (int)((gsFont->Additional[(u8)c] * scale) + 1);
+			}
+        }
 	}
 }
 
@@ -430,7 +441,7 @@ GSFONT* loadFont(const char* path)
 				}
 			}
 		}
-		
+
 		if (!font) {
 		}
 	}
@@ -441,7 +452,7 @@ GSFONT* loadFont(const char* path)
 Coords athena_font_calc_dimensions(GSFONT *gsFont, float scale, const char *str)
 {
 	Coords size = {0, 0};
-	
+
 	if (!gsFont || !str) {
 		return size;
 	}
@@ -452,7 +463,7 @@ Coords athena_font_calc_dimensions(GSFONT *gsFont, float scale, const char *str)
 
 	for (const char *p = str; *p; ++p) {
 		unsigned char c = (unsigned char)*p;
-		
+
 		if (c == '\n') {
 			if (width > max_width) {
 				max_width = width;
@@ -480,7 +491,7 @@ void printFontText(GSFONT* font, const char* text, float x, float y, float scale
 	if (!font || !text) {
 		return;
 	}
-	
+
 	athena_font_print_scaled(gsGlobal, font, x - 0.5f, y - 0.5f, 1, scale, color, text);
 }
 
@@ -513,17 +524,17 @@ void printFontTextPlus(GSFONT* font, const char* text, float x, float y, float s
 	if (outline > 0.0f) {
 		float offsets[][2] = { {outline, outline}, {outline, -outline}, {-outline, outline}, {-outline, -outline} };
 		for (int i = 0; i < 4; i++) {
-			athena_font_print_scaled(gsGlobal, font, 
-				draw_x + offsets[i][0] - 0.5f, 
-				draw_y + offsets[i][1] - 0.5f, 
+			athena_font_print_scaled(gsGlobal, font,
+				draw_x + offsets[i][0] - 0.5f,
+				draw_y + offsets[i][1] - 0.5f,
 				1, scale, outline_color, text);
 		}
-	} 
+	}
 
 	else if (dropshadow > 0.0f) {
-		athena_font_print_scaled(gsGlobal, font, 
-			draw_x + dropshadow - 0.5f, 
-			draw_y + dropshadow - 0.5f, 
+		athena_font_print_scaled(gsGlobal, font,
+			draw_x + dropshadow - 0.5f,
+			draw_y + dropshadow - 0.5f,
 			1, scale, dropshadow_color, text);
 	}
 
@@ -564,7 +575,7 @@ void unloadFont(GSFONT* font)
 			free(font->Texture->Clut);
 			font->Texture->Clut = NULL;
 		}
-		
+
 		free(font->Texture);
 		font->Texture = NULL;
 	}

@@ -4330,8 +4330,17 @@ declare namespace Sprite {
      * `positions[2 * i + 1]` place instance i (and become its x and y);
      * without positions each draws at its own x and y. Rotated instances are
      * drawn one by one, keeping the order.
+     *
+     * With `{ stride: 3 }` the values are x, y and rotation per instance: the
+     * layout of Box2D's `world.readTransforms()`, so physics sprites need no
+     * loop in JavaScript:
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Sprite.drawAll(crates, transforms, { stride: 3 });
+     * ```
      */
-    function drawAll(instances: Instance[], positions?: Float32Array | number[]): void;
+    function drawAll(instances: Instance[], positions?: Float32Array | number[],
+        options?: { stride?: 2 | 3 }): void;
 
     /**
      * Draws the outline, origin and slices of every instance drawn from
@@ -4388,11 +4397,29 @@ declare namespace System {
         nativeStack: number;
         /** Current native allocations in bytes. */
         allocs: number;
+        /** Highest observed current native allocation total in bytes since startup. */
+        allocsPeak: number;
+        /** Failed nonzero native allocation requests since startup. */
+        allocationFailures: number;
         /** Total reported usage in bytes. */
         used: number;
+        /** Total arena and mapped regions requested from the EE heap. */
+        heapReserved: number;
+        /** Bytes in allocator in-use chunks, including chunk overhead. */
+        heapAllocated: number;
+        /** Approximate allocator metadata/alignment overhead in bytes. */
+        heapOverhead: number;
+        /** Bytes in reusable free chunks. */
+        heapFree: number;
+        /** Number of free chunks in the allocator. */
+        heapFreeChunks: number;
+        /** Free bytes in the topmost releasable chunk. */
+        heapTopFree: number;
+        /** Free bytes outside the top chunk; a fragmentation indicator. */
+        heapNonTopFree: number;
         /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
         jsHeap: number;
-        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
+        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
         jsLimit: number;
         /** Live JavaScript objects. */
         jsObjects: number;
@@ -4413,6 +4440,13 @@ declare namespace System {
         /** PS2 machine type identifier. */
         MachineType: number;
     }
+
+    /** Recalculates the QuickJS heap ceiling using current free EE memory and
+     * leaves `bytes` available for native assets at this snapshot. Call at a
+     * phase boundary before loading assets. Native allocations made later can
+     * consume this headroom. At least 64 KiB must remain available for JS.
+     * Returns the resulting QuickJS allocation limit in bytes. */
+    function setNativeMemoryHeadroom(bytes: number): number;
 
     /** Memory-card status returned by `getMCInfo()`. */
     interface MemoryCardInfo {

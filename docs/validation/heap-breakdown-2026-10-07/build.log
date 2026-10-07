@@ -1,0 +1,36 @@
+CC - src/core/boot.c
+CC - src/core/memory.c
+CC - src/runtime/quickjs/ath_env.c
+CC - src/modules/system/quickjs/ath_system.c
+src/core/boot.c: In function 'athena_boot':
+src/core/boot.c:178:65: warning: 'snprintf' output may be truncated before the last format character [-Wformat-truncation=]
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                                                                 ^
+src/core/boot.c:178:17: note: 'snprintf' output between 7 and 256 bytes into a destination of size 255
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CC - src/modules/system/native/system.c
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_heap_metrics.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]
+CC - src/core/boot.c
+CC - src/core/memory.c
+CC - src/runtime/quickjs/ath_env.c
+CC - src/modules/system/quickjs/ath_system.c
+src/core/boot.c: In function 'athena_boot':
+src/core/boot.c:178:65: warning: 'snprintf' output may be truncated before the last format character [-Wformat-truncation=]
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                                                                 ^
+src/core/boot.c:178:17: note: 'snprintf' output between 7 and 256 bytes into a destination of size 255
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CC - src/modules/system/native/system.c
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_heap_metrics_release.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]

@@ -21,6 +21,7 @@ uint32_t athena_test_dma_address(uintptr_t address);
 #define UNPACK_V2_32 4
 #define UNPACK_V4_32 12
 #define UNPACK_V4_8 14
+#define VIF_MPG 74
 #define VIF_NOP 0
 #define VIF_STCYCL 1
 #define VIF_BASE 3

@@ -714,53 +714,12 @@ uint64_t get_register(int reg_id) {
 	return gs_reg_cache[reg_id];
 }
 
+#include "page_clear.h"
+
 void page_clear(Color color) {
-	const uint32_t page_count = ((gsGlobal->Width + 63) / 64) *
-		((gsGlobal->Height + 31) / 32);
-
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 11+page_count);
-
-	owl_add_cnt_tag(packet, 10+page_count, 0);
-
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(9+page_count, 0, VIF_DIRECT, 0)); // 3 giftags
-
-	owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(4, 1, NULL, 1, 0, 0, 1));
-
-	owl_add_tag(packet, GS_TEST_1+gsGlobal->PrimContext, GS_SETREG_TEST(0, 0, 0, 0, 0, 0, 1, 1)); // Ignore cache because it is a single operation
-	//owl_add_tag(packet, GS_SCISSOR_1, GS_SETREG_SCISSOR(0, 64 - 1, 0, 2048 - 1));
-	owl_add_tag(packet, GS_XYOFFSET_1+gsGlobal->PrimContext, GS_SETREG_XYOFFSET(0, 0));
-
-	// Clear
-	owl_add_tag(packet, GS_RGBAQ, color);
-	owl_add_tag(packet, GS_PRIM, VU_GS_PRIM(GS_PRIM_PRIM_SPRITE, 0, 0, 0, 0, 0, 0, gsGlobal->PrimContext, 0));
-
-	owl_add_tag(packet, GS_XYZ2 | (GS_XYZ2 << 4), VU_GS_GIFTAG(page_count, 1, NULL, 1, 0, 1, 2));
-
-	for (int i = 0; i < gsGlobal->Width; i += 64)
-	{
-		for (int j = 0; j < gsGlobal->Height; j += 32)
-		{
-			asm volatile ( 	
-				"pcpyld   $7,     %[xy1],        %[xy2]      \n"
-				"psllh    $7,     $7,            4           \n"
-				"sq       $7,     0x00(%[ptr])               \n"
-				"daddiu   %[ptr], %[ptr],        0x10        \n" // packet->ptr++;
-				 : [ptr] "+r" (packet->ptr) : [xy1] "r" (GS_SETREG_XYZ(i, j, 0)), [xy2] "r" (GS_SETREG_XYZ(i+64, j+32, 0)): "$7", "memory");
-
-			//owl_add_tag(packet, GS_XYZ2, GS_SETREG_XYZ(i << 4, j << 4, 0));
-			//owl_add_tag(packet, GS_XYZ2, GS_SETREG_XYZ((i + 64) << 4, (j + 32) << 4, 0));
-		}
-	}
-
-	owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(2, 1, NULL, 0, 0, 0, 1));
-	
-	owl_add_tag(packet, GS_TEST_1+gsGlobal->PrimContext,
-		get_register(GS_CACHE_TEST+gsGlobal->PrimContext));
-	owl_add_tag(packet, GS_XYOFFSET_1+gsGlobal->PrimContext,
-		get_register(GS_CACHE_XYOFFSET+gsGlobal->PrimContext));
+    owl_page_clear(gsGlobal, color,
+        get_register(GS_CACHE_TEST + gsGlobal->PrimContext),
+        get_register(GS_CACHE_XYOFFSET + gsGlobal->PrimContext));
 }
 
 void clearScreen(Color color)

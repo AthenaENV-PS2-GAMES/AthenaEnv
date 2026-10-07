@@ -488,6 +488,15 @@ static uint32_t skin_capacity;
  * the skin scratch. Main thread only. */
 static AthenaPosition3D *morph_positions,*morph_normals;
 static uint32_t morph_capacity;
+/* Safe after draw returns: CPU-deformed views are serialized into packet data
+ * during draw and are never retained by DMA_REF. */
+void athena_scene3d_trim_scratch(void) {
+    free(skin_positions); free(skin_normals);
+    free(morph_positions); free(morph_normals);
+    skin_positions=skin_normals=morph_positions=morph_normals=NULL;
+    skin_capacity=morph_capacity=0;
+}
+void athena_scene3d_module_shutdown(void) { athena_scene3d_trim_scratch(); }
 static int scratch(AthenaPosition3D **positions,AthenaPosition3D **normals,uint32_t *capacity,uint32_t count) {
     if(count+4>*capacity) {
         AthenaPosition3D *p=memalign(16,(count+4)*sizeof(*p)),*q=memalign(16,(count+4)*sizeof(*q));

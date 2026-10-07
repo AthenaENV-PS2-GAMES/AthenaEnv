@@ -386,7 +386,14 @@ static const JSCFunctionListEntry node_methods[]={
     JS_CFUNC_MAGIC_DEF("getLocalTransform",0,node_matrix,0),JS_CFUNC_MAGIC_DEF("getWorldTransform",0,node_matrix,1),
     JS_CFUNC_DEF("getWorldBounds",0,node_bounds),JS_CFUNC_DEF("dispose",0,node_dispose),
     JS_CFUNC_DEF("setWeights",1,node_set_weights),JS_CFUNC_DEF("getWeights",0,node_get_weights)};
+static JSValue trim_scratch(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    (void)this_val; (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Scene3D.trimScratch")) return JS_EXCEPTION;
+    athena_scene3d_trim_scratch();
+    return JS_UNDEFINED;
+}
 static const JSCFunctionListEntry exports[]={
+    JS_CFUNC_DEF("trimScratch",0,trim_scratch),
     JS_CFUNC_MAGIC_DEF("setPositions",2,set_many,0),JS_CFUNC_MAGIC_DEF("setRotationsEuler",2,set_many,1),
     JS_CFUNC_MAGIC_DEF("setTransforms2D",2,set_many,2),
     JS_PROP_INT32_DEF("MAX_DEPTH",ATHENA_SCENE3D_MAX_DEPTH,JS_PROP_ENUMERABLE)};

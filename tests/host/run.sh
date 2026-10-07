@@ -9,6 +9,7 @@ cd "$(dirname "$0")/../.."
 CC=${CC:-gcc}
 OUT=${TMPDIR:-/tmp}/athena-host-tests
 mkdir -p "$OUT"
+sh tests/host/run_safety.sh
 CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -Wno-sign-compare -Werror -fsanitize=undefined -fsanitize-undefined-trap-on-error"
 

@@ -94,6 +94,9 @@ typedef struct {
     /* Subtrees rejected by their world bounds and meshes queued for draw. */
     uint32_t culled_subtrees,queued_objects;
 } AthenaScene3DDrawStats;
+/* Releases global CPU skin/morph scratch after scene transitions. Call on the
+ * main thread between draw calls; the next CPU deformation grows it on demand. */
+void athena_scene3d_trim_scratch(void);
 AthenaScene3D *athena_scene3d_create(void);
 void athena_scene3d_retain(AthenaScene3D *scene);
 void athena_scene3d_release(AthenaScene3D *scene);

@@ -1,0 +1,23 @@
+{
+  "runs": {
+    "host_memory_sanitizers": 0,
+    "i386_memory_sanitizers": 0,
+    "safety_sanitizers": 0,
+    "docker_debug_release": 0,
+    "native_workers_build": 0
+  },
+  "pcsx2": {
+    "workers": [
+      "[    1.4131] MEMORY_ACCOUNTING_EE: starting 4 native workers",
+      "[    2.9183] MEMORY_ACCOUNTING_EE: PASS baseline=420 final=420; 4 workers x 10000 rounds"
+    ],
+    "runtime": [
+      "[    6.2399] DRAW_LISTS_REGRESSION_VISUAL: PASS after 120 frames; 1920 sprites; 1344 glyphs; rotated outline"
+    ]
+  },
+  "sha256": {
+    "memory_accounting_ee.elf": "ad7b890331f945d46dfcb2cbeef660864c84a49ffa3f0e7f56f1beaad6b909f9",
+    "athena_accounting.elf": "8c5b1e573324a6748b46d2ca48bc2b16aa0bb340662d39ef0f21a219f874ab3b",
+    "athena_accounting_release.elf": "e48d1c061cc9047500edfe46de78afceb0f9d1952b50cfdd46f99158c0a23027"
+  }
+}

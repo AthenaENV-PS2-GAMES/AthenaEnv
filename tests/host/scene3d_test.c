@@ -81,12 +81,19 @@ static void deform_reuse_test(int skin,int morph,int flat) {
         assert(!athena_scene3d_update(scene,NULL));AthenaScene3DDrawStats ds;int error;
         assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&error)&&!error);
         assert(ds.render.source_triangles==2&&host_last_view.vertex_count==6);
+        if(skin||morph) {
+            athena_scene3d_trim_scratch();
+            assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&error)&&!error);
+            assert(ds.render.source_triangles==2&&host_last_view.vertex_count==6);
+        }
         if(!pass){memcpy(result_positions,host_last_view.positions,sizeof(result_positions));memcpy(result_normals,host_last_view.normals,sizeof(result_normals));
             memcpy(result_lo,host_last_view.minimum,sizeof(result_lo));memcpy(result_hi,host_last_view.maximum,sizeof(result_hi));}
         else{assert(!memcmp(result_positions,host_last_view.positions,sizeof(result_positions)));assert(!memcmp(result_normals,host_last_view.normals,sizeof(result_normals)));
             assert(!memcmp(result_lo,host_last_view.minimum,sizeof(result_lo)));assert(!memcmp(result_hi,host_last_view.maximum,sizeof(result_hi)));}
         athena_node3d_release(node);athena_scene3d_release(scene);
     }
+    athena_scene3d_trim_scratch();
+    athena_scene3d_trim_scratch(); /* idempotent */
     host_morph_refuse=0;athena_mesh3d_release(indexed);athena_mesh3d_release(expanded);
 }
 int main(void) {

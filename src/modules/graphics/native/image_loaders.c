@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <malloc.h>
 #include <math.h>
@@ -35,8 +36,12 @@ struct gsBitMapInfoHeader
 	u32 YPelsPerMeter;
 	u32 ColorUsed;
 	u32 ColorImportant;
-} __attribute__ ((packed));
+};
 typedef struct gsBitMapInfoHeader GSBMIHDR;
+/* This header naturally has the on-disk 40-byte layout. Keep it aligned:
+ * packed LWL/LWR loads on R5900 do not provide the register sign extension
+ * that GCC assumes when lowering the signed-height normalization. */
+_Static_assert(sizeof(GSBMIHDR) == 40, "BMP info header layout must be 40 bytes");
 
 struct gsBitMapClut
 {
@@ -57,711 +62,325 @@ struct gsBitmap
 typedef struct gsBitmap GSBITMAP;
 
 
-//2D drawing functions
-int athena_load_png(GSSURFACE* tex, FILE* File, bool delayed)
+/* Decode into the final EE buffer. The heap-owned cleanup state remains
+ * defined after libpng longjmp, unlike modified automatic local pointers. */
+typedef struct {
+    png_structp png;
+    png_infop info;
+    png_bytep *rows;
+} AthenaPngDecode;
+
+int athena_load_png(GSSURFACE *tex, FILE *file, bool delayed)
 {
-	if (File == NULL)
-	{
-		dbgprintf("Failed to load PNG file\n");
-		return -1;
-	}
-
-	png_structp png_ptr;
-	png_infop info_ptr;
-	png_uint_32 width, height;
-	png_bytep *row_pointers = NULL;
-	png_bytep row_data = NULL;
-
-	u32 sig_read = 0;
-        int row, i, k=0, j, bit_depth, color_type, interlace_type;
-
-	png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, (png_voidp) NULL, NULL, NULL);
-
-	if(!png_ptr)
-	{
-		dbgprintf("PNG Read Struct Init Failed\n");
-		fclose(File);
-		return -1;
-	}
-
-	info_ptr = png_create_info_struct(png_ptr);
-
-	if(!info_ptr)
-	{
-		dbgprintf("PNG Info Struct Init Failed\n");
-		fclose(File);
-		png_destroy_read_struct(&png_ptr, (png_infopp)NULL, (png_infopp)NULL);
-		return -1;
-	}
-
-	if(setjmp(png_jmpbuf(png_ptr)))
-	{
-		dbgprintf("Got PNG Error!\n");
-		free(row_data);
-		free(row_pointers);
-		free(tex->Mem);
-		free(tex->Clut);
-		tex->Mem = NULL;
-		tex->Clut = NULL;
-		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
-		fclose(File);
-		return -1;
-	}
-
-	png_init_io(png_ptr, File);
-
-	png_set_sig_bytes(png_ptr, sig_read);
-
-	png_read_info(png_ptr, info_ptr);
-
-	png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type,&interlace_type, NULL, NULL);
-	if (width == 0 || height == 0 || width > 1024 || height > 1024) {
-		dbgprintf("PNG dimensions exceed the PS2 texture limit\n");
-		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
-		fclose(File);
-		return -1;
-	}
-	if (color_type == PNG_COLOR_TYPE_PALETTE &&
-		bit_depth != 4 && bit_depth != 8) {
-		dbgprintf("PNG palette depth must be 4 or 8 bits\n");
-		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
-		fclose(File);
-		return -1;
-	}
-
-	if (bit_depth == 16) 
-		png_set_strip_16(png_ptr);
-
-	if (color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA || bit_depth < 4) 
-		png_set_expand(png_ptr);
-
-	if (color_type == PNG_COLOR_TYPE_GRAY)
-		png_set_gray_to_rgb(png_ptr);
-	if (color_type == PNG_COLOR_TYPE_GRAY)
-		png_set_filler(png_ptr, 0xff, PNG_FILLER_AFTER);
-
-	png_read_update_info(png_ptr, info_ptr);
-
-	tex->Width = width;
-	tex->Height = height;
-
-    tex->VramClut = 0;
+    (void)delayed;
+    if (!file) return -1;
+    if (!tex) { fclose(file); return -1; }
+    tex->Mem = NULL;
     tex->Clut = NULL;
-	tex->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
+    AthenaPngDecode *state = calloc(1, sizeof(*state));
+    if (!state) { fclose(file); return -1; }
+    state->png = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+    if (!state->png) goto fail;
+    state->info = png_create_info_struct(state->png);
+    if (!state->info) goto fail;
+    if (setjmp(png_jmpbuf(state->png))) goto fail;
 
-	color_type = png_get_color_type(png_ptr, info_ptr);
+    png_init_io(state->png, file);
+    png_read_info(state->png, state->info);
+    png_uint_32 width, height;
+    int depth, type, interlace;
+    png_get_IHDR(state->png, state->info, &width, &height, &depth, &type,
+                 &interlace, NULL, NULL);
+    if (!width || !height || width > 1024 || height > 1024) goto fail;
+    if (type == PNG_COLOR_TYPE_PALETTE) {
+        if ((depth != 4 && depth != 8) || (depth == 4 && (width & 1))) goto fail;
+    } else {
+        if (depth == 16) png_set_strip_16(state->png);
+        if (type == PNG_COLOR_TYPE_GRAY && depth < 8)
+            png_set_expand_gray_1_2_4_to_8(state->png);
+        if (type == PNG_COLOR_TYPE_GRAY || type == PNG_COLOR_TYPE_GRAY_ALPHA)
+            png_set_gray_to_rgb(state->png);
+        if (png_get_valid(state->png, state->info, PNG_INFO_tRNS))
+            png_set_tRNS_to_alpha(state->png);
+    }
+    /* png_read_image combines Adam7 passes in the persistent final rows. */
+    png_set_interlace_handling(state->png);
+    png_read_update_info(state->png, state->info);
+    type = png_get_color_type(state->png, state->info);
+    size_t stride = png_get_rowbytes(state->png, state->info);
+    size_t expected;
+    if (type == PNG_COLOR_TYPE_RGB_ALPHA) {
+        tex->PSM = GS_PSM_CT32; expected = (size_t)width * 4;
+    } else if (type == PNG_COLOR_TYPE_RGB) {
+        tex->PSM = GS_PSM_CT24; expected = (size_t)width * 3;
+    } else if (type == PNG_COLOR_TYPE_PALETTE) {
+        tex->PSM = depth == 4 ? GS_PSM_T4 : GS_PSM_T8;
+        expected = depth == 4 ? width / 2 : width;
+    } else goto fail;
+    if (stride != expected) goto fail;
+    tex->Width = width;
+    tex->Height = height;
+    tex->VramClut = 0;
+    tex->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
+    size_t size = athena_surface_size(width, height, tex->PSM);
+    if (!size || stride * height > size) goto fail;
+    /* Transfers may read the complete last DMA QW, including tiny textures. */
+    size = (size + 15u) & ~(size_t)15u;
+    tex->Mem = memalign(128, size);
+    if (!tex->Mem) goto fail;
+    memset(tex->Mem, 0, size);
+    state->rows = calloc(height, sizeof(*state->rows));
+    if (!state->rows) goto fail;
+    for (unsigned y = 0; y < height; y++)
+        state->rows[y] = (png_bytep)tex->Mem + y * stride;
+    png_read_image(state->png, state->rows);
 
-	if(color_type == PNG_COLOR_TYPE_RGB_ALPHA)
-	{
-		int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-		tex->PSM = GS_PSM_CT32;
-		tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
-		if (!tex->Mem)
-			goto png_fail;
-
-		row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
-		row_data = (png_bytep)malloc((size_t)row_bytes * height);
-		if (!row_pointers || !row_data)
-			goto png_fail;
-
-		for (row = 0; row < height; row++)
-			row_pointers[row] = row_data + row * row_bytes;
-
-		png_read_image(png_ptr, row_pointers);
-
-		struct pixel { u8 r,g,b,a; };
-		struct pixel *Pixels = (struct pixel *) tex->Mem;
-
-		for (i = 0; i < tex->Height; i++) {
-			for (j = 0; j < tex->Width; j++) {
-				memcpy(&Pixels[k], &row_pointers[i][4 * j], 3);
-				Pixels[k++].a = row_pointers[i][4 * j + 3] >> 1;
-			}
-		}
-
-		free(row_data);
-		free(row_pointers);
-		row_data = NULL;
-		row_pointers = NULL;
-	}
-	else if(color_type == PNG_COLOR_TYPE_RGB)
-	{
-		int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-		tex->PSM = GS_PSM_CT24;
-		tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
-		if (!tex->Mem)
-			goto png_fail;
-
-		row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
-		row_data = (png_bytep)malloc((size_t)row_bytes * height);
-		if (!row_pointers || !row_data)
-			goto png_fail;
-
-		for (row = 0; row < height; row++)
-			row_pointers[row] = row_data + row * row_bytes;
-
-		png_read_image(png_ptr, row_pointers);
-
-		struct pixel3 { u8 r,g,b; };
-		struct pixel3 *Pixels = (struct pixel3 *) tex->Mem;
-
-		for (i = 0; i < tex->Height; i++) {
-			for (j = 0; j < tex->Width; j++) {
-				memcpy(&Pixels[k++], &row_pointers[i][3 * j], 3);
-			}
-		}
-
-		free(row_data);
-		free(row_pointers);
-		row_data = NULL;
-		row_pointers = NULL;
-	}
-	else if(color_type == PNG_COLOR_TYPE_PALETTE){
-
-		struct png_clut { u8 r, g, b, a; };
-
-		png_colorp palette = NULL;
-		int num_pallete = 0;
-		png_bytep trans = NULL;
-		int num_trans = 0;
-
-        png_get_PLTE(png_ptr, info_ptr, &palette, &num_pallete);
-        png_get_tRNS(png_ptr, info_ptr, &trans, &num_trans, NULL);
+    if (type == PNG_COLOR_TYPE_RGB_ALPHA) {
+        unsigned char *pixels = (unsigned char *)tex->Mem;
+        for (size_t i = 3; i < stride * height; i += 4) pixels[i] >>= 1;
+    } else if (type == PNG_COLOR_TYPE_PALETTE) {
+        png_colorp palette = NULL;
+        png_bytep alpha = NULL;
+        int colors = 0, alphas = 0;
+        unsigned limit = depth == 4 ? 16 : 256;
+        if (!png_get_PLTE(state->png, state->info, &palette, &colors) ||
+            colors <= 0 || (unsigned)colors > limit) goto fail;
+        png_get_tRNS(state->png, state->info, &alpha, &alphas, NULL);
+        if (alphas < 0 || alphas > colors) goto fail;
+        size_t clut_size = athena_surface_size(depth == 4 ? 8 : 16,
+                                               depth == 4 ? 2 : 16, GS_PSM_CT32);
+        tex->Clut = memalign(128, clut_size);
+        if (!tex->Clut) goto fail;
+        memset(tex->Clut, 0, clut_size);
         tex->ClutPSM = GS_PSM_CT32;
-
-		if (bit_depth == 4) {
-            if (width & 1 || num_pallete > 16)
-                goto png_fail;
-
-            int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-            tex->PSM = GS_PSM_T4;
-            tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
-            if (!tex->Mem)
-                goto png_fail;
-
-            row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
-            row_data = (png_bytep)malloc((size_t)row_bytes * height);
-            if (!row_pointers || !row_data)
-                goto png_fail;
-
-            for (row = 0; row < height; row++)
-                row_pointers[row] = row_data + row * row_bytes;
-
-			png_read_image(png_ptr, row_pointers);
-
-            tex->Clut = memalign(128, athena_surface_size(8, 2, GS_PSM_CT32));
-            if (!tex->Clut)
-                goto png_fail;
-            memset(tex->Clut, 0, athena_surface_size(8, 2, GS_PSM_CT32));
-
-            unsigned char *pixel = (unsigned char *)tex->Mem;
-    		struct png_clut *clut = (struct png_clut *)tex->Clut;
-
-    		int i, j, k = 0;
-
-    		for (i = num_pallete; i < 16; i++) {
-    		    memset(&clut[i], 0, sizeof(clut[i]));
-    		}
-
-    		for (i = 0; i < num_pallete; i++) {
-    		    clut[i].r = palette[i].red;
-    		    clut[i].g = palette[i].green;
-    		    clut[i].b = palette[i].blue;
-    		    clut[i].a = 0x80;
-    		}
-
-    		for (i = 0; i < num_trans; i++)
-    		    clut[i].a = trans[i] >> 1;
-
-    		for (i = 0; i < tex->Height; i++) {
-    		    for (j = 0; j < tex->Width / 2; j++)
-    		        memcpy(&pixel[k++], &row_pointers[i][1 * j], 1);
-    		}
-
-    		int byte;
-    		unsigned char *tmpdst = (unsigned char *)tex->Mem;
-    		unsigned char *tmpsrc = (unsigned char *)pixel;
-
-    		for (byte = 0; byte < athena_surface_size(tex->Width, tex->Height, tex->PSM); byte++) tmpdst[byte] = (tmpsrc[byte] << 4) | (tmpsrc[byte] >> 4);
-
-			free(row_data);
-			free(row_pointers);
-			row_data = NULL;
-			row_pointers = NULL;
-
-        } else if (bit_depth == 8) {
-			if (num_pallete > 256)
-				goto png_fail;
-			int row_bytes = png_get_rowbytes(png_ptr, info_ptr);
-			tex->PSM = GS_PSM_T8;
-			tex->Mem = (uint32_t*)memalign(128, athena_surface_size(tex->Width, tex->Height, tex->PSM));
-			if (!tex->Mem)
-				goto png_fail;
-
-			row_pointers = (png_byte**)calloc(height, sizeof(png_bytep));
-			row_data = (png_bytep)malloc((size_t)row_bytes * height);
-			if (!row_pointers || !row_data)
-				goto png_fail;
-
-			for (row = 0; row < height; row++)
-				row_pointers[row] = row_data + row * row_bytes;
-
-			png_read_image(png_ptr, row_pointers);
-
-            tex->Clut = memalign(128, athena_surface_size(16, 16, GS_PSM_CT32));
-            if (!tex->Clut)
-                goto png_fail;
-            memset(tex->Clut, 0, athena_surface_size(16, 16, GS_PSM_CT32));
-
-            unsigned char *pixel = (unsigned char *)tex->Mem;
-    		struct png_clut *clut = (struct png_clut *)tex->Clut;
-
-    		int i, j, k = 0;
-
-    		for (i = num_pallete; i < 256; i++) {
-    		    memset(&clut[i], 0, sizeof(clut[i]));
-    		}
-
-    		for (i = 0; i < num_pallete; i++) {
-    		    clut[i].r = palette[i].red;
-    		    clut[i].g = palette[i].green;
-    		    clut[i].b = palette[i].blue;
-    		    clut[i].a = 0x80;
-    		}
-
-    		for (i = 0; i < num_trans; i++)
-    		    clut[i].a = trans[i] >> 1;
-
-    		// rotate clut
-    		for (i = 0; i < num_pallete; i++) {
-    		    if ((i & 0x18) == 8) {
-    		        struct png_clut tmp = clut[i];
-    		        clut[i] = clut[i + 8];
-    		        clut[i + 8] = tmp;
-    		    }
-    		}
-
-    		for (i = 0; i < tex->Height; i++) {
-    		    for (j = 0; j < tex->Width; j++) {
-    		        memcpy(&pixel[k++], &row_pointers[i][1 * j], 1);
-    		    }
-    		}
-
-			free(row_data);
-			free(row_pointers);
-			row_data = NULL;
-			row_pointers = NULL;
+        for (int i = 0; i < colors; i++) {
+            unsigned slot = i;
+            if (depth == 8) slot = (slot & ~0x18u) | ((slot & 8u) << 1) | ((slot & 16u) >> 1);
+            unsigned a = i < alphas ? alpha[i] >> 1 : 0x80;
+            tex->Clut[slot] = palette[i].red | ((uint32_t)palette[i].green << 8) |
+                             ((uint32_t)palette[i].blue << 16) | ((uint32_t)a << 24);
         }
-	}
-	else
-	{
-		dbgprintf("This texture depth is not supported yet!\n");
-		goto png_fail;
-	}
-
-	tex->Filter = GS_FILTER_NEAREST;
-	png_read_end(png_ptr, NULL);
-	png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp) NULL);
-	fclose(File);
-
-	athena_calculate_tbw(tex);
-
-	return 0;
-
-png_fail:
-	if (row_data)
-		free(row_data);
-	if (row_pointers)
-		free(row_pointers);
-	if (tex->Mem) {
-		free(tex->Mem);
-		tex->Mem = NULL;
-	}
-	if (tex->Clut) {
-		free(tex->Clut);
-		tex->Clut = NULL;
-	}
-	png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
-	fclose(File);
-	return -1;
+        if (depth == 4) {
+            unsigned char *pixels = (unsigned char *)tex->Mem;
+            for (size_t i = 0; i < stride * height; i++)
+                pixels[i] = (pixels[i] << 4) | (pixels[i] >> 4);
+        }
+    }
+    png_read_end(state->png, NULL);
+    tex->Filter = GS_FILTER_NEAREST;
+    free(state->rows);
+    png_destroy_read_struct(&state->png, &state->info, NULL);
+    free(state);
+    fclose(file);
+    athena_calculate_tbw(tex);
+    return 0;
+fail:
+    free(state->rows);
+    if (state->png) png_destroy_read_struct(&state->png, &state->info, NULL);
+    free(state);
+    free(tex->Mem); free(tex->Clut);
+    tex->Mem = NULL; tex->Clut = NULL;
+    fclose(file);
+    return -1;
 }
 
-int athena_load_bmp(GSSURFACE* tex, FILE* File, bool delayed)
+/* BI_RGB Windows BMPs: 4/8-bit indexed, 16-bit RGB555 and 24-bit BGR.
+ * Bound all header-derived sizes before allocating. Decode one padded file
+ * row at a time, including top-down images, into tightly packed GS pixels. */
+int athena_load_bmp(GSSURFACE *tex, FILE *file, bool delayed)
 {
-	GSBITMAP Bitmap;
-	int x, y;
-	int cy;
-	u32 FTexSize;
-	u8  *image;
-	u8  *p;
-
-	if (File == NULL)
-	{
-		dbgprintf("BMP: Failed to load bitmap\n");
-		return -1;
-	}
-	if (fread(&Bitmap.FileHeader, sizeof(Bitmap.FileHeader), 1, File) <= 0)
-	{
-		dbgprintf("BMP: Could not load bitmap\n");
-		fclose(File);
-		return -1;
-	}
-
-	if (fread(&Bitmap.InfoHeader, sizeof(Bitmap.InfoHeader), 1, File) <= 0)
-	{
-		dbgprintf("BMP: Could not load bitmap\n");
-		fclose(File);
-		return -1;
-	}
-
-	tex->Width = Bitmap.InfoHeader.Width;
-	tex->Height = Bitmap.InfoHeader.Height;
-	tex->Filter = GS_FILTER_NEAREST; 
-
+    (void)delayed;
+    if (!file) return -1;
+    if (!tex) { fclose(file); return -1; }
+    tex->Mem = NULL; tex->Clut = NULL;
+    GSBITMAP bmp = {0};
+    const char *stage = "header";
+    unsigned char *row = NULL;
+    if (fread(&bmp.FileHeader, sizeof(bmp.FileHeader), 1, file) != 1 ||
+        fread(&bmp.InfoHeader, sizeof(bmp.InfoHeader), 1, file) != 1) goto fail;
+    GSBMIHDR *h = &bmp.InfoHeader;
+    /* The DIB stores a signed 32-bit height. Normalize its two's-complement
+     * representation with unsigned arithmetic before checking magnitudes. */
+    uint32_t raw_height = h->Height;
+    bool top_down = (raw_height & 0x80000000u) != 0;
+    uint32_t height = top_down ? (uint32_t)(0u - raw_height) : raw_height;
+    if (bmp.FileHeader.Type != 0x4d42 || h->Size < 40 || h->Planes != 1 ||
+        h->Compression != 0 || !h->Width || h->Width > 1024 ||
+        !height || height > 1024) goto fail;
+    unsigned width = h->Width;
+    unsigned bits = h->BitCount;
+    if (bits != 4 && bits != 8 && bits != 16 && bits != 24) goto fail;
+    if (bits == 4 && (width & 1)) goto fail;
+    stage = "file bounds";
+    size_t stride = (((size_t)width * bits + 31) / 32) * 4;
+    if (fseek(file, 0, SEEK_END) != 0) goto fail;
+    long file_size = ftell(file);
+    if (file_size < 0) goto fail;
+    if ((size_t)file_size < sizeof(GSBMFHDR) ||
+        h->Size > (size_t)file_size - sizeof(GSBMFHDR)) goto fail;
+    size_t header_end = sizeof(GSBMFHDR) + (size_t)h->Size;
+    size_t offset = bmp.FileHeader.Offset;
+    if (header_end > (size_t)file_size || offset < header_end ||
+        offset > (size_t)file_size || stride * height > (size_t)file_size - offset) goto fail;
+    tex->Width = width; tex->Height = height;
+    tex->PSM = bits == 4 ? GS_PSM_T4 : bits == 8 ? GS_PSM_T8 :
+               bits == 16 ? GS_PSM_CT16 : GS_PSM_CT24;
+    tex->Filter = GS_FILTER_NEAREST;
     tex->VramClut = 0;
+    tex->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
+    if (bits <= 8) {
+        stage = "palette";
+        unsigned limit = 1u << bits;
+        unsigned colors = h->ColorUsed ? h->ColorUsed : limit;
+        if (colors > limit || colors * sizeof(GSBMCLUT) > offset - header_end) goto fail;
+        size_t clut_size = athena_surface_size(bits == 4 ? 8 : 16, bits == 4 ? 2 : 16, GS_PSM_CT32);
+        tex->Clut = memalign(128, clut_size);
+        if (!tex->Clut) goto fail;
+        memset(tex->Clut, 0, clut_size);
+        tex->ClutPSM = GS_PSM_CT32;
+        if (fseek(file, header_end, SEEK_SET) != 0) goto fail;
+        for (unsigned i = 0; i < colors; i++) {
+            GSBMCLUT color;
+            if (fread(&color, sizeof(color), 1, file) != 1) goto fail;
+            unsigned slot = i;
+            if (bits == 8) slot = (slot & ~0x18u) | ((slot & 8u) << 1) | ((slot & 16u) >> 1);
+            tex->Clut[slot] = color.Red | ((uint32_t)color.Green << 8) |
+                              ((uint32_t)color.Blue << 16) | 0x80000000u;
+        }
+    }
+    size_t size = (athena_surface_size(width, height, tex->PSM) + 15u) & ~(size_t)15u;
+    stage = "allocation";
+    tex->Mem = memalign(128, size);
+    row = malloc(stride);
+    if (!tex->Mem || !row) goto fail;
+    memset(tex->Mem, 0, size);
+    if (fseek(file, offset, SEEK_SET) != 0) goto fail;
+    stage = "pixel rows";
+    size_t packed = (size_t)width * bits / 8;
+    for (unsigned y = 0; y < height; y++) {
+        if (fread(row, 1, stride, file) != stride) goto fail;
+        unsigned target = top_down ? y : height - y - 1;
+        unsigned char *dst = (unsigned char *)tex->Mem + target * packed;
+        if (bits == 24) {
+            for (unsigned x = 0; x < width; x++) {
+                dst[x*3] = row[x*3+2]; dst[x*3+1] = row[x*3+1]; dst[x*3+2] = row[x*3];
+            }
+        } else if (bits == 16) {
+            for (unsigned x = 0; x < width; x++) {
+                uint16_t v = row[x*2] | ((uint16_t)row[x*2+1] << 8);
+                v = (v & 0x83e0u) | ((v & 0x1fu) << 10) | ((v & 0x7c00u) >> 10);
+                dst[x*2] = v; dst[x*2+1] = v >> 8;
+            }
+        } else if (bits == 4) {
+            for (size_t x = 0; x < packed; x++) dst[x] = (row[x] << 4) | (row[x] >> 4);
+        } else memcpy(dst, row, packed);
+    }
+    free(row);
+    fclose(file);
+    athena_calculate_tbw(tex);
+    return 0;
+fail:
+    dbgprintf("BMP: decode failed at %s (width=%lu height=%ld bits=%u)\n",
+              stage, (unsigned long)bmp.InfoHeader.Width,
+              (long)(int32_t)bmp.InfoHeader.Height, (unsigned)bmp.InfoHeader.BitCount);
+    (void)stage;
+    free(row); free(tex->Mem); free(tex->Clut);
+    tex->Mem = NULL; tex->Clut = NULL;
+    fclose(file);
+    return -1;
+}
+
+/* Keep all libjpeg state on the heap: fields changed after setjmp must
+ * remain defined when a decoder error jumps back into cleanup. */
+typedef struct {
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr error;
+    jmp_buf jump;
+} AthenaJpegDecode;
+
+static void athena_jpeg_error(j_common_ptr cinfo)
+{
+    AthenaJpegDecode *state = (AthenaJpegDecode *)cinfo;
+    (*cinfo->err->output_message)(cinfo);
+    longjmp(state->jump, 1);
+}
+
+/* libjpeg normally repairs truncated streams and returns partial pixels.
+ * Reject warnings as well so missing EOI/data never becomes a valid asset. */
+static void athena_jpeg_message(j_common_ptr cinfo, int level)
+{
+    if (level < 0) athena_jpeg_error(cinfo);
+}
+
+int athena_load_jpeg(GSSURFACE *tex, FILE *fp, bool scale_down, bool delayed)
+{
+    (void)delayed;
+    if (!fp) return -1;
+    if (!tex) { fclose(fp); return -1; }
+    tex->Mem = NULL;
     tex->Clut = NULL;
-	tex->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
-
-	if(Bitmap.InfoHeader.BitCount == 4)
-	{
-		tex->PSM = GS_PSM_T4;
-		tex->Clut = (uint32_t*)memalign(128, athena_surface_size(8, 2, GS_PSM_CT32));
-		tex->ClutPSM = GS_PSM_CT32;
-
-		memset(tex->Clut, 0, athena_surface_size(8, 2, GS_PSM_CT32));
-		fseek(File, 54, SEEK_SET);
-		if (fread(tex->Clut, Bitmap.InfoHeader.ColorUsed*sizeof(u32), 1, File) <= 0)
-		{
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			dbgprintf("BMP: Could not load bitmap\n");
-			fclose(File);
-			return -1;
-		}
-
-		GSBMCLUT *clut = (GSBMCLUT *)tex->Clut;
-		int i;
-		for (i = Bitmap.InfoHeader.ColorUsed; i < 16; i++)
-		{
-			memset(&clut[i], 0, sizeof(clut[i]));
-		}
-
-		for (i = 0; i < 16; i++)
-		{
-			u8 tmp = clut[i].Blue;
-			clut[i].Blue = clut[i].Red;
-			clut[i].Red = tmp;
-			clut[i].Alpha = 0x80;
-		}
-
-	}
-	else if(Bitmap.InfoHeader.BitCount == 8)
-	{
-		tex->PSM = GS_PSM_T8;
-		tex->Clut = (uint32_t*)memalign(128, athena_surface_size(16, 16, GS_PSM_CT32));
-		tex->ClutPSM = GS_PSM_CT32;
-
-		memset(tex->Clut, 0, athena_surface_size(16, 16, GS_PSM_CT32));
-		fseek(File, 54, SEEK_SET);
-		if (fread(tex->Clut, Bitmap.InfoHeader.ColorUsed*sizeof(u32), 1, File) <= 0)
-		{
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			dbgprintf("BMP: Could not load bitmap\n");
-			fclose(File);
-			return -1;
-		}
-
-		GSBMCLUT *clut = (GSBMCLUT *)tex->Clut;
-		int i;
-		for (i = Bitmap.InfoHeader.ColorUsed; i < 256; i++)
-		{
-			memset(&clut[i], 0, sizeof(clut[i]));
-		}
-
-		for (i = 0; i < 256; i++)
-		{
-			u8 tmp = clut[i].Blue;
-			clut[i].Blue = clut[i].Red;
-			clut[i].Red = tmp;
-			clut[i].Alpha = 0x80;
-		}
-
-		// rotate clut
-		for (i = 0; i < 256; i++)
-		{
-			if ((i&0x18) == 8)
-			{
-				GSBMCLUT tmp = clut[i];
-				clut[i] = clut[i+8];
-				clut[i+8] = tmp;
-			}
-		}
-	}
-	else if(Bitmap.InfoHeader.BitCount == 16)
-	{
-		tex->PSM = GS_PSM_CT16;
-		tex->VramClut = 0;
-		tex->Clut = NULL;
-	}
-	else if(Bitmap.InfoHeader.BitCount == 24)
-	{
-		tex->PSM = GS_PSM_CT24;
-		tex->VramClut = 0;
-		tex->Clut = NULL;
-	}
-
-	fseek(File, 0, SEEK_END);
-	FTexSize = ftell(File);
-	FTexSize -= Bitmap.FileHeader.Offset;
-
-	fseek(File, Bitmap.FileHeader.Offset, SEEK_SET);
-
-	u32 TextureSize = athena_surface_size(tex->Width, tex->Height, tex->PSM);
-
-	tex->Mem = (uint32_t*)memalign(128,TextureSize);
-
-	if(Bitmap.InfoHeader.BitCount == 24)
-	{
-		image = (u8*)memalign(128, FTexSize);
-		if (image == NULL) {
-			dbgprintf("BMP: Failed to allocate memory\n");
-			if (tex->Mem) {
-				free(tex->Mem);
-				tex->Mem = NULL;
-			}
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			fclose(File);
-			return -1;
-		}
-
-		fread(image, FTexSize, 1, File);
-		p = (u8*)((u32)tex->Mem);
-		for (y = tex->Height - 1, cy = 0; y >= 0; y--, cy++) {
-			for (x = 0; x < tex->Width; x++) {
-				p[(y * tex->Width + x) * 3 + 2] = image[(cy * tex->Width + x) * 3 + 0];
-				p[(y * tex->Width + x) * 3 + 1] = image[(cy * tex->Width + x) * 3 + 1];
-				p[(y * tex->Width + x) * 3 + 0] = image[(cy * tex->Width + x) * 3 + 2];
-			}
-		}
-		free(image);
-		image = NULL;
-	}
-	else if(Bitmap.InfoHeader.BitCount == 16)
-	{
-		image = (u8*)memalign(128, FTexSize);
-		if (image == NULL) {
-			dbgprintf("BMP: Failed to allocate memory\n");
-			if (tex->Mem) {
-				free(tex->Mem);
-				tex->Mem = NULL;
-			}
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			fclose(File);
-			return -1;
-		}
-
-		fread(image, FTexSize, 1, File);
-
-		p = (u8*)((uint32_t*)tex->Mem);
-		for (y = tex->Height - 1, cy = 0; y >= 0; y--, cy++) {
-			for (x = 0; x < tex->Width; x++) {
-				u16 value;
-				value = *(u16*)&image[(cy * tex->Width + x) * 2];
-				value = (value & 0x8000) | value << 10 | (value & 0x3E0) | (value & 0x7C00) >> 10;	//ARGB -> ABGR
-
-				*(u16*)&p[(y * tex->Width + x) * 2] = value;
-			}
-		}
-		free(image);
-		image = NULL;
-	}
-	else if(Bitmap.InfoHeader.BitCount == 8 || Bitmap.InfoHeader.BitCount == 4)
-	{
-		char *text = (char *)((u32)tex->Mem);
-		image = (u8*)memalign(128,FTexSize);
-		if (image == NULL) {
-			dbgprintf("BMP: Failed to allocate memory\n");
-			if (tex->Mem) {
-				free(tex->Mem);
-				tex->Mem = NULL;
-			}
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			fclose(File);
-			return -1;
-		}
-
-		if (fread(image, FTexSize, 1, File) != 1)
-		{
-			if (tex->Mem) {
-				free(tex->Mem);
-				tex->Mem = NULL;
-			}
-			if (tex->Clut) {
-				free(tex->Clut);
-				tex->Clut = NULL;
-			}
-			dbgprintf("BMP: Read failed!, Size %d\n", FTexSize);
-			free(image);
-			image = NULL;
-			fclose(File);
-			return -1;
-		}
-		for (y = tex->Height - 1; y >= 0; y--)
-		{
-			if(Bitmap.InfoHeader.BitCount == 8)
-				memcpy(&text[y * tex->Width], &image[(tex->Height - y - 1) * tex->Width], tex->Width);
-			else
-				memcpy(&text[y * (tex->Width / 2)], &image[(tex->Height - y - 1) * (tex->Width / 2)], tex->Width / 2);
-		}
-		free(image);
-		image = NULL;
-
-		if(Bitmap.InfoHeader.BitCount == 4)
-		{
-			int byte;
-			u8 *tmpdst = (u8 *)((u32)tex->Mem);
-			u8 *tmpsrc = (u8 *)text;
-
-			for(byte = 0; byte < FTexSize; byte++)
-			{
-				tmpdst[byte] = (tmpsrc[byte] << 4) | (tmpsrc[byte] >> 4);
-			}
-		}
-	}
-	else
-	{
-		dbgprintf("BMP: Unknown bit depth format %d\n", Bitmap.InfoHeader.BitCount);
-	}
-
-	fclose(File);
-
-	athena_calculate_tbw(tex);
-
-	return 0;
-
-}
-
-struct my_error_mgr {
-  struct jpeg_error_mgr pub;    /* "public" fields */
-
-  jmp_buf setjmp_buffer;        /* for return to caller */
-};
-
-typedef struct my_error_mgr *my_error_ptr;
-
-METHODDEF(void)
-my_error_exit(j_common_ptr cinfo)
-{
-  /* cinfo->err really points to a my_error_mgr struct, so coerce pointer */
-  my_error_ptr myerr = (my_error_ptr)cinfo->err;
-
-  /* Always display the message. */
-  /* We could postpone this until after returning, if we chose. */
-  (*cinfo->err->output_message) (cinfo);
-
-  /* Return control to the setjmp point */
-  longjmp(myerr->setjmp_buffer, 1);
-}
-
-// Following official documentation max width or height of the texture is 1024
-#define MAX_TEXTURE 1024
-static void  _ps2_load_JPEG_generic(GSSURFACE *Texture, struct jpeg_decompress_struct *cinfo, struct my_error_mgr *jerr, bool scale_down)
-{
-	int textureSize = 0;
-	if (scale_down) {
-		unsigned int longer = cinfo->image_width > cinfo->image_height ? cinfo->image_width : cinfo->image_height;
-		float downScale = (float)longer / (float)MAX_TEXTURE;
-		cinfo->scale_denom = ceil(downScale);
-	}
-
-	jpeg_start_decompress(cinfo);
-
-	int psm = cinfo->out_color_components == 3 ? GS_PSM_CT24 : GS_PSM_CT32;
-
-	Texture->Width =  cinfo->output_width;
-	Texture->Height = cinfo->output_height;
-	Texture->PSM = psm;
-	Texture->Filter = GS_FILTER_NEAREST;
-	Texture->VramClut = 0;
-	Texture->Clut = NULL;
-	Texture->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
-
-	textureSize = cinfo->output_width*cinfo->output_height*cinfo->out_color_components;
-	#ifdef DEBUG
-	dbgprintf("Texture Size = %i\n",textureSize);
-	#endif
-	Texture->Mem = (uint32_t*)memalign(128, textureSize);
-	if (!Texture->Mem)
-		(*cinfo->err->error_exit)((j_common_ptr)cinfo);
-
-	unsigned int row_stride = textureSize/Texture->Height;
-	unsigned char *row_pointer = (unsigned char *)Texture->Mem;
-	while (cinfo->output_scanline < cinfo->output_height) {
-		jpeg_read_scanlines(cinfo, (JSAMPARRAY)&row_pointer, 1);
-		row_pointer += row_stride;
-	}
-
-	jpeg_finish_decompress(cinfo);
-}
-
-int athena_load_jpeg(GSSURFACE* tex, FILE* fp, bool scale_down, bool delayed)
-{
-	struct jpeg_decompress_struct cinfo;
-	struct my_error_mgr jerr;
-
-	if (tex == NULL) {
-		dbgprintf("jpeg: error Texture is NULL\n");
-		return -1;
-	}
-
-	if (fp == NULL)
-	{
-		dbgprintf("jpeg: Failed to load file\n");
-		return -1;
-	}
-
-	/* We set up the normal JPEG error routines, then override error_exit. */
-	cinfo.err = jpeg_std_error(&jerr.pub);
-	jerr.pub.error_exit = my_error_exit;
-	/* Establish the setjmp return context for my_error_exit to use. */
-	if (setjmp(jerr.setjmp_buffer)) {
-		/* If we get here, the JPEG code has signaled an error.
-		* We need to clean up the JPEG object, close the input file, and return.
-		*/
-		jpeg_destroy_decompress(&cinfo);
-		fclose(fp);
-		free(tex->Mem);
-		tex->Mem = NULL;
-		dbgprintf("jpeg: error during processing file\n");
-		return -1;
-	}
-	jpeg_create_decompress(&cinfo);
-	jpeg_stdio_src(&cinfo, fp);
-	jpeg_read_header(&cinfo, TRUE);
-
-	_ps2_load_JPEG_generic(tex, &cinfo, &jerr, scale_down);
-	
-	jpeg_destroy_decompress(&cinfo);
-	fclose(fp);
-
-	athena_calculate_tbw(tex);
-
-	return 0;
-
+    AthenaJpegDecode *state = calloc(1, sizeof(*state));
+    if (!state) { fclose(fp); return -1; }
+    struct jpeg_decompress_struct *cinfo = &state->cinfo;
+    cinfo->err = jpeg_std_error(&state->error);
+    state->error.error_exit = athena_jpeg_error;
+    state->error.emit_message = athena_jpeg_message;
+    if (setjmp(state->jump)) goto fail;
+    jpeg_create_decompress(cinfo);
+    jpeg_stdio_src(cinfo, fp);
+    if (jpeg_read_header(cinfo, TRUE) != JPEG_HEADER_OK) goto fail;
+    if (!cinfo->image_width || !cinfo->image_height) goto fail;
+    /* CMYK/YCCK need an explicit conversion policy; never interpret their
+     * four color channels as RGBA. Grayscale is expanded by libjpeg. */
+    if (cinfo->jpeg_color_space != JCS_GRAYSCALE &&
+        cinfo->jpeg_color_space != JCS_RGB &&
+        cinfo->jpeg_color_space != JCS_YCbCr) goto fail;
+    cinfo->out_color_space = JCS_RGB;
+    if (scale_down) {
+        unsigned longest = cinfo->image_width > cinfo->image_height ?
+                           cinfo->image_width : cinfo->image_height;
+        /* Standard libjpeg supports 1/1, 1/2, 1/4 and 1/8 scaling. */
+        cinfo->scale_num = 1;
+        cinfo->scale_denom = 1;
+        while (cinfo->scale_denom < 8 &&
+               (longest + cinfo->scale_denom - 1) / cinfo->scale_denom > 1024)
+            cinfo->scale_denom *= 2;
+    }
+    jpeg_calc_output_dimensions(cinfo);
+    if (!cinfo->output_width || !cinfo->output_height ||
+        cinfo->output_width > 1024 || cinfo->output_height > 1024) goto fail;
+    if (!jpeg_start_decompress(cinfo) || cinfo->output_components != 3) goto fail;
+    size_t stride = (size_t)cinfo->output_width * 3;
+    size_t bytes = stride * cinfo->output_height;
+    size_t padded = (bytes + 15u) & ~(size_t)15u;
+    tex->Mem = memalign(128, padded);
+    if (!tex->Mem) goto fail;
+    memset(tex->Mem, 0, padded);
+    while (cinfo->output_scanline < cinfo->output_height) {
+        JSAMPROW row = (unsigned char *)tex->Mem + cinfo->output_scanline * stride;
+        if (jpeg_read_scanlines(cinfo, &row, 1) != 1) goto fail;
+    }
+    if (!jpeg_finish_decompress(cinfo)) goto fail;
+    tex->Width = cinfo->output_width;
+    tex->Height = cinfo->output_height;
+    tex->PSM = GS_PSM_CT24;
+    tex->Filter = GS_FILTER_NEAREST;
+    tex->VramClut = 0;
+    tex->ClutStorageMode = GS_CLUT_STORAGE_CSM1;
+    jpeg_destroy_decompress(cinfo);
+    free(state);
+    fclose(fp);
+    athena_calculate_tbw(tex);
+    return 0;
+fail:
+    /* Safe even if jpeg_create_decompress failed before creating its pool. */
+    jpeg_destroy_decompress(cinfo);
+    free(state);
+    free(tex->Mem);
+    tex->Mem = NULL;
+    tex->Clut = NULL;
+    fclose(fp);
+    return -1;
 }
 
 /* Decodes from an open stream by magic number; the decoder closes it. */

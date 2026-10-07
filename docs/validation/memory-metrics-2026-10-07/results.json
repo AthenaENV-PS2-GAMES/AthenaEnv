@@ -1,0 +1,17 @@
+{
+  "docker_build_exit_code": 0,
+  "host_sanitized_test_exit_code": 0,
+  "pcsx2_markers": [
+    "[    1.7622] MEMORY_STATS: PASS native peak=431316 allocation failures=0"
+  ],
+  "elfs": {
+    "athena_metrics.elf": {
+      "sha256": "2074a81e7926d6e341d8b80632276472ddaec4db58b19f90ef951776b62fb6b6",
+      "bytes": 19450500
+    },
+    "athena_metrics_release.elf": {
+      "sha256": "730a2198c0fbb1c781b55eef0562ea396453123c6b777cd2ffa39e446d562277",
+      "bytes": 3721504
+    }
+  }
+}

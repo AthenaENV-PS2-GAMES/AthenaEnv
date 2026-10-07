@@ -1,0 +1,60 @@
+b12f8af37bd42ec13b1bafb7ab6e7bdcfb4b683b
+00102808 <__malloc_lock>:
+  102808:	3c040013 	lui	a0,0x13
+  10280c:	080447ec 	j	111fb0 <__retarget_lock_acquire_recursive>
+  102810:	248464d8 	addiu	a0,a0,25816
+  102814:	00000000 	nop
+
+00102818 <__malloc_unlock>:
+  102818:	3c040013 	lui	a0,0x13
+  10281c:	0804480a 	j	112028 <__retarget_lock_release_recursive>
+  102820:	248464d8 	addiu	a0,a0,25816
+  102824:	00000000 	nop
+
+00102828 <_malloc_usable_size_r>:
+00111fb0 <__retarget_lock_acquire_recursive>:
+  111fb0:	27bdffe0 	addiu	sp,sp,-32
+  111fb4:	ffb00010 	sd	s0,16(sp)
+  111fb8:	ffbf0018 	sd	ra,24(sp)
+  111fbc:	0c043ba0 	jal	10ee80 <GetThreadId>
+  111fc0:	00808025 	move	s0,a0
+  111fc4:	8e030008 	lw	v1,8(s0)
+  111fc8:	00402825 	move	a1,v0
+  111fcc:	18600004 	blez	v1,111fe0 <__retarget_lock_acquire_recursive+0x30>
+  111fd0:	00000000 	nop
+  111fd4:	8e020004 	lw	v0,4(s0)
+  111fd8:	1045000d 	beq	v0,a1,112010 <__retarget_lock_acquire_recursive+0x60>
+  111fdc:	00000000 	nop
+  111fe0:	8e040000 	lw	a0,0(s0)
+  111fe4:	0c0439f8 	jal	10e7e0 <WaitSema>
+  111fe8:	afa50000 	sw	a1,0(sp)
+  111fec:	8fa50000 	lw	a1,0(sp)
+  111ff0:	24030001 	li	v1,1
+  111ff4:	dfbf0018 	ld	ra,24(sp)
+  111ff8:	ae050004 	sw	a1,4(s0)
+  111ffc:	ae030008 	sw	v1,8(s0)
+  112000:	dfb00010 	ld	s0,16(sp)
+  112004:	03e00008 	jr	ra
+  112008:	27bd0020 	addiu	sp,sp,32
+  11200c:	00000000 	nop
+  112010:	dfbf0018 	ld	ra,24(sp)
+  112014:	24630001 	addiu	v1,v1,1
+  112018:	ae030008 	sw	v1,8(s0)
+  11201c:	dfb00010 	ld	s0,16(sp)
+  112020:	03e00008 	jr	ra
+  112024:	27bd0020 	addiu	sp,sp,32
+
+00112028 <__retarget_lock_release_recursive>:
+  112028:	27bdfff0 	addiu	sp,sp,-16
+  11202c:	ffb00000 	sd	s0,0(sp)
+  112030:	ffbf0008 	sd	ra,8(sp)
+  112034:	0c043ba0 	jal	10ee80 <GetThreadId>
+  112038:	00808025 	move	s0,a0
+  11203c:	8e030004 	lw	v1,4(s0)
+  112040:	14620011 	bne	v1,v0,112088 <__retarget_lock_release_recursive+0x60>
+  112044:	00000000 	nop
+  112048:	8e020008 	lw	v0,8(s0)
+  11204c:	2442ffff 	addiu	v0,v0,-1
+  112050:	ae020008 	sw	v0,8(s0)
+  112054:	14400008 	bnez	v0,112078 <__retarget_lock_release_recursive+0x50>
+  112058:	00000000 	nop

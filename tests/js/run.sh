@@ -7,6 +7,8 @@
 # under ASan, as it has known benign UBSan reports.
 set -e
 cd "$(dirname "$0")/../.."
+ATHENA_SAFETY_SANITIZERS=address,undefined sh tests/host/run_safety.sh
+sh tests/host/run_images.sh
 ATHENA_3D_SANITIZERS=address,undefined sh tests/host/run_3d.sh
 
 CC=${CC:-gcc}

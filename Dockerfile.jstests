@@ -4,7 +4,7 @@
 FROM i386/debian:bookworm-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc libc6-dev \
+    && apt-get install -y --no-install-recommends gcc libc6-dev libpng-dev libjpeg-dev libfreetype6-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

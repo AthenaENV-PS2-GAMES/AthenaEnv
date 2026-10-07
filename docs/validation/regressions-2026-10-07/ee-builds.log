@@ -1,0 +1,1290 @@
+build_config: unchanged flags reuse objects; -O1 and restoration invalidate them
+CC - src/core/boot.c
+CC - src/core/memory.c
+CC - src/core/ee_tools.c
+CC - src/core/iop_manager.c
+CC - src/core/iop_registry.c
+CC - src/core/module_registry.c
+src/core/boot.c: In function 'athena_boot':
+src/core/boot.c:178:65: warning: 'snprintf' output may be truncated before the last format character [-Wformat-truncation=]
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                                                                 ^
+src/core/boot.c:178:17: note: 'snprintf' output between 7 and 256 bytes into a destination of size 255
+  178 |                 snprintf(temp_path, sizeof(temp_path), "mass0:%s", boot_path + 5);
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+CC - src/core/excepHandler.c
+src/core/excepHandler.c: In function 'pkoDebug':
+src/core/excepHandler.c:70:24: warning: comparison between pointer and integer
+   70 |         if (p->pointer <= regs[31].uint64[0] && p->pointer > cur_ra_function_addr) {
+      |                        ^~
+src/core/excepHandler.c:70:60: warning: comparison between pointer and integer
+   70 |         if (p->pointer <= regs[31].uint64[0] && p->pointer > cur_ra_function_addr) {
+      |                                                            ^
+src/core/excepHandler.c:71:34: warning: assignment to 'unsigned int' from 'void *' makes integer from pointer without a cast [-Wint-conversion]
+   71 |             cur_ra_function_addr = p->pointer;
+      |                                  ^
+src/core/excepHandler.c:75:24: warning: comparison between pointer and integer
+   75 |         if (p->pointer <= epc && p->pointer > cur_epc_function_addr) {
+      |                        ^~
+src/core/excepHandler.c:75:45: warning: comparison between pointer and integer
+   75 |         if (p->pointer <= epc && p->pointer > cur_epc_function_addr) {
+      |                                             ^
+src/core/excepHandler.c:76:35: warning: assignment to 'unsigned int' from 'void *' makes integer from pointer without a cast [-Wint-conversion]
+   76 |             cur_epc_function_addr = p->pointer;
+      |                                   ^
+AS - src/core/exceptions.S
+CC - src/core/sioprintf.c
+CC - src/core/athena_math.c
+CC - src/core/posix.c
+src/core/athena_math.c:10:32: warning: 'ATHENA_MATH_ATAN_TABLE' initialized and declared 'extern'
+   10 | extern volatile const uint32_t ATHENA_MATH_ATAN_TABLE[9] = {
+      |                                ^~~~~~~~~~~~~~~~~~~~~~
+src/core/athena_math.c:15:29: warning: 'ATHENA_MATH_ATAN_TABLE2' initialized and declared 'extern'
+   15 | extern volatile const float ATHENA_MATH_ATAN_TABLE2[8] = {
+      |                             ^~~~~~~~~~~~~~~~~~~~~~~
+CC - src/readini/src/readini.c
+CC - src/runtime/quickjs/main.c
+CC - src/runtime/quickjs/ath_env.c
+CC - src/runtime/quickjs/ath_gil.c
+CC - src/runtime/quickjs/ath_output.c
+CC - src/quickjs/cutils.c
+CC - src/quickjs/libbf.c
+CC - src/quickjs/libregexp.c
+src/quickjs/libbf.c: In function 'dump_limbs':
+src/quickjs/libbf.c:678:12: warning: format '%d' expects argument of type 'int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+  678 |     printf("%s: len=%" PRId_LIMB "\n", str, n);
+      |            ^~~~~~~~~~~                      ~
+      |                                             |
+      |                                             limb_t {aka long unsigned int}
+src/quickjs/libbf.c:67:20: note: format string is defined here
+   67 | #define PRId_LIMB "d"
+      |                    ^
+      |                    |
+      |                    int
+src/quickjs/libbf.c:680:16: warning: format '%d' expects argument of type 'int', but argument 2 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+  680 |         printf("%" PRId_LIMB ": " FMT_LIMB "\n",
+      |                ^~~
+  681 |                i, tab[i]);
+      |                ~
+      |                |
+      |                limb_t {aka long unsigned int}
+src/quickjs/libbf.c:67:20: note: format string is defined here
+   67 | #define PRId_LIMB "d"
+      |                    ^
+      |                    |
+      |                    int
+src/quickjs/libbf.c:680:16: warning: format '%x' expects argument of type 'unsigned int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+  680 |         printf("%" PRId_LIMB ": " FMT_LIMB "\n",
+      |                ^~~
+  681 |                i, tab[i]);
+      |                   ~~~~~~
+      |                      |
+      |                      limb_t {aka long unsigned int}
+src/quickjs/libbf.c:66:22: note: format string is defined here
+   66 | #define FMT_LIMB "%08x"
+      |                   ~~~^
+      |                      |
+      |                      unsigned int
+      |                   %08lx
+src/quickjs/libbf.c: In function 'mp_print_str':
+src/quickjs/libbf.c:66:18: warning: format '%x' expects argument of type 'unsigned int', but argument 2 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+   66 | #define FMT_LIMB "%08x"
+      |                  ^~~~~~
+src/quickjs/libbf.c:692:16: note: in expansion of macro 'FMT_LIMB'
+  692 |         printf(FMT_LIMB, tab[i]);
+      |                ^~~~~~~~
+src/quickjs/libbf.c:66:22: note: format string is defined here
+   66 | #define FMT_LIMB "%08x"
+      |                   ~~~^
+      |                      |
+      |                      unsigned int
+      |                   %08lx
+src/quickjs/libbf.c: In function 'mp_print_str_h':
+src/quickjs/libbf.c:66:18: warning: format '%x' expects argument of type 'unsigned int', but argument 2 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+   66 | #define FMT_LIMB "%08x"
+      |                  ^~~~~~
+src/quickjs/libbf.c:703:12: note: in expansion of macro 'FMT_LIMB'
+  703 |     printf(FMT_LIMB, high);
+      |            ^~~~~~~~
+src/quickjs/libbf.c:66:22: note: format string is defined here
+   66 | #define FMT_LIMB "%08x"
+      |                   ~~~^
+      |                      |
+      |                      unsigned int
+      |                   %08lx
+src/quickjs/libbf.c:66:18: warning: format '%x' expects argument of type 'unsigned int', but argument 2 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+   66 | #define FMT_LIMB "%08x"
+      |                  ^~~~~~
+src/quickjs/libbf.c:706:16: note: in expansion of macro 'FMT_LIMB'
+  706 |         printf(FMT_LIMB, tab[i]);
+      |                ^~~~~~~~
+src/quickjs/libbf.c:66:22: note: format string is defined here
+   66 | #define FMT_LIMB "%08x"
+      |                   ~~~^
+      |                      |
+      |                      unsigned int
+      |                   %08lx
+src/quickjs/libbf.c: In function 'bf_print_str':
+src/quickjs/libbf.c:66:18: warning: format '%x' expects argument of type 'unsigned int', but argument 2 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+   66 | #define FMT_LIMB "%08x"
+      |                  ^~~~~~
+src/quickjs/libbf.c:729:24: note: in expansion of macro 'FMT_LIMB'
+  729 |                 printf(FMT_LIMB, a->tab[i]);
+      |                        ^~~~~~~~
+src/quickjs/libbf.c:66:22: note: format string is defined here
+   66 | #define FMT_LIMB "%08x"
+      |                   ~~~^
+      |                      |
+      |                      unsigned int
+      |                   %08lx
+src/quickjs/libbf.c:730:20: warning: format '%d' expects argument of type 'int', but argument 2 has type 'slimb_t' {aka 'long int'} [-Wformat=]
+  730 |             printf("p%" PRId_LIMB, a->expn);
+      |                    ^~~~            ~~~~~~~
+      |                                     |
+      |                                     slimb_t {aka long int}
+src/quickjs/libbf.c:67:20: note: format string is defined here
+   67 | #define PRId_LIMB "d"
+      |                    ^
+      |                    |
+      |                    int
+src/quickjs/libbf.c: In function 'bf_get_limb':
+src/quickjs/libbf.c:1841:25: warning: passing argument 1 of 'bf_get_int32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1841 |     return bf_get_int32(pres, a, flags);
+      |                         ^~~~
+      |                         |
+      |                         slimb_t * {aka long int *}
+In file included from src/quickjs/libbf.c:36:
+src/quickjs/libbf.h:377:23: note: expected 'int *' but argument is of type 'slimb_t *' {aka 'long int *'}
+  377 | int bf_get_int32(int *pres, const bf_t *a, int flags);
+      |                  ~~~~~^~~~
+src/quickjs/libbf.c: In function 'mp_print_str_dec':
+src/quickjs/libbf.c:5795:16: warning: format '%u' expects argument of type 'unsigned int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+ 5795 |         printf("%0*" PRIu_LIMB, LIMB_DIGITS, tab[i]);
+      |                ^~~~~                         ~~~~~~
+      |                                                 |
+      |                                                 limb_t {aka long unsigned int}
+src/quickjs/libbf.c:68:20: note: format string is defined here
+   68 | #define PRIu_LIMB "u"
+      |                    ^
+      |                    |
+      |                    unsigned int
+src/quickjs/libbf.c: In function 'mp_print_str_h_dec':
+src/quickjs/libbf.c:5806:12: warning: format '%u' expects argument of type 'unsigned int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+ 5806 |     printf("%0*" PRIu_LIMB, LIMB_DIGITS, high);
+      |            ^~~~~                         ~~~~
+      |                                          |
+      |                                          limb_t {aka long unsigned int}
+src/quickjs/libbf.c:68:20: note: format string is defined here
+   68 | #define PRIu_LIMB "u"
+      |                    ^
+      |                    |
+      |                    unsigned int
+src/quickjs/libbf.c:5809:16: warning: format '%u' expects argument of type 'unsigned int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+ 5809 |         printf("%0*" PRIu_LIMB, LIMB_DIGITS, tab[i]);
+      |                ^~~~~                         ~~~~~~
+      |                                                 |
+      |                                                 limb_t {aka long unsigned int}
+src/quickjs/libbf.c:68:20: note: format string is defined here
+   68 | #define PRIu_LIMB "u"
+      |                    ^
+      |                    |
+      |                    unsigned int
+src/quickjs/libbf.c: In function 'bfdec_print_str':
+src/quickjs/libbf.c:6287:24: warning: format '%u' expects argument of type 'unsigned int', but argument 3 has type 'limb_t' {aka 'long unsigned int'} [-Wformat=]
+ 6287 |                 printf("%0*" PRIu_LIMB, LIMB_DIGITS, a->tab[i]);
+      |                        ^~~~~                         ~~~~~~~~~
+      |                                                            |
+      |                                                            limb_t {aka long unsigned int}
+src/quickjs/libbf.c:68:20: note: format string is defined here
+   68 | #define PRIu_LIMB "u"
+      |                    ^
+      |                    |
+      |                    unsigned int
+src/quickjs/libbf.c:6288:20: warning: format '%d' expects argument of type 'int', but argument 2 has type 'slimb_t' {aka 'long int'} [-Wformat=]
+ 6288 |             printf("e%" PRId_LIMB, a->expn);
+      |                    ^~~~            ~~~~~~~
+      |                                     |
+      |                                     slimb_t {aka long int}
+src/quickjs/libbf.c:67:20: note: format string is defined here
+   67 | #define PRId_LIMB "d"
+      |                    ^
+      |                    |
+      |                    int
+CC - src/quickjs/libunicode.c
+src/quickjs/libunicode.c: In function 'cr_dump':
+src/quickjs/libunicode.c:278:26: warning: format '%x' expects argument of type 'unsigned int', but argument 3 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  278 |         printf("%d: 0x%04x\n", i, cr->points[i]);
+      |                       ~~~^        ~~~~~~~~~~~~~
+      |                          |                  |
+      |                          unsigned int       uint32_t {aka long unsigned int}
+      |                       %04lx
+CC - src/quickjs/realpath.c
+CC - src/quickjs/quickjs.c
+In file included from src/quickjs/quickjs.c:50:
+src/quickjs/list.h:31:9: warning: 'PATH_MAX' redefined
+   31 | #define PATH_MAX        256
+      |         ^~~~~~~~
+In file included from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/limits.h:6,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/limits.h:210,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/syslimits.h:9,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/limits.h:34,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/bits/posix_opt.h:4,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/_pthreadtypes.h:21,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/types.h:221,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/time.h:45,
+                 from src/quickjs/quickjs.c:31:
+/usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/syslimits.h:48:9: note: this is the location of the previous definition
+   48 | #define PATH_MAX                 1024   /* max bytes in pathname */
+      |         ^~~~~~~~
+src/quickjs/list.h: In function 'list_splice':
+src/quickjs/list.h:91:21: warning: passing argument 1 of 'list_empty' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   91 |     if (!list_empty(list)) {
+      |                     ^~~~
+src/quickjs/list.h:83:48: note: expected 'struct list_head *' but argument is of type 'const struct list_head *'
+   83 | static inline int list_empty(struct list_head *el)
+      |                              ~~~~~~~~~~~~~~~~~~^~
+src/quickjs/quickjs.c: In function 'JS_DumpAtoms':
+src/quickjs/quickjs.c:2536:23: warning: format '%d' expects argument of type 'int', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 2536 |             printf(" %d }\n", p->hash_next);
+      |                      ~^       ~~~~~~~~~~~~
+      |                       |        |
+      |                       int      uint32_t {aka long unsigned int}
+      |                      %ld
+src/quickjs/quickjs.c: In function 'JS_NewAtomUInt32':
+src/quickjs/quickjs.c:2966:38: warning: format '%u' expects argument of type 'unsigned int', but argument 4 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 2966 |         snprintf(buf, sizeof(buf), "%u", n);
+      |                                     ~^   ~
+      |                                      |   |
+      |                                      |   uint32_t {aka long unsigned int}
+      |                                      unsigned int
+      |                                     %lu
+src/quickjs/quickjs.c: In function 'JS_AtomGetStrRT':
+src/quickjs/quickjs.c:3024:35: warning: format '%u' expects argument of type 'unsigned int', but argument 4 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 3024 |         snprintf(buf, buf_size, "%u", __JS_AtomToUInt32(atom));
+      |                                  ~^   ~~~~~~~~~~~~~~~~~~~~~~~
+      |                                   |   |
+      |                                   |   uint32_t {aka long unsigned int}
+      |                                   unsigned int
+      |                                  %lu
+src/quickjs/quickjs.c: In function '__JS_AtomToValue':
+src/quickjs/quickjs.c:3083:38: warning: format '%u' expects argument of type 'unsigned int', but argument 4 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 3083 |         snprintf(buf, sizeof(buf), "%u", __JS_AtomToUInt32(atom));
+      |                                     ~^   ~~~~~~~~~~~~~~~~~~~~~~~
+      |                                      |   |
+      |                                      |   uint32_t {aka long unsigned int}
+      |                                      unsigned int
+      |                                     %lu
+src/quickjs/quickjs.c: In function 'js_atom_concat_num':
+src/quickjs/quickjs.c:3361:34: warning: format '%u' expects argument of type 'unsigned int', but argument 4 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 3361 |     snprintf(buf, sizeof(buf), "%u", n);
+      |                                 ~^   ~
+      |                                  |   |
+      |                                  |   uint32_t {aka long unsigned int}
+      |                                  unsigned int
+      |                                 %lu
+src/quickjs/quickjs.c: In function '__JS_FreeValueRT':
+src/quickjs/quickjs.c:5544:46: warning: format '%d' expects argument of type 'int', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+ 5544 |         printf("__JS_FreeValue: unknown tag=%d\n", tag);
+      |                                             ~^     ~~~
+      |                                              |     |
+      |                                              int   uint32_t {aka long unsigned int}
+      |                                             %ld
+src/quickjs/quickjs.c: In function 'find_line_num':
+src/quickjs/quickjs.c:6424:31: warning: passing argument 1 of 'get_sleb128' from incompatible pointer type [-Wincompatible-pointer-types]
+ 6424 |             ret = get_sleb128(&v, p, p_end);
+      |                               ^~
+      |                               |
+      |                               int *
+src/quickjs/quickjs.c:6385:33: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+ 6385 | static int get_sleb128(int32_t *pval, const uint8_t *buf,
+      |                        ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'JS_ToInt32Free':
+src/quickjs/quickjs.c:11064:26: warning: passing argument 1 of 'bf_get_int32' from incompatible pointer type [-Wincompatible-pointer-types]
+11064 |             bf_get_int32(&ret, &p->num, BF_GET_INT_MOD);
+      |                          ^~~~
+      |                          |
+      |                          int32_t * {aka long int *}
+In file included from src/quickjs/quickjs.c:54:
+src/quickjs/libbf.h:377:23: note: expected 'int *' but argument is of type 'int32_t *' {aka 'long int *'}
+  377 | int bf_get_int32(int *pres, const bf_t *a, int flags);
+      |                  ~~~~~^~~~
+src/quickjs/quickjs.c: In function 'JS_ToArrayLengthFree':
+src/quickjs/quickjs.c:11190:26: warning: passing argument 1 of 'bf_get_int32' from incompatible pointer type [-Wincompatible-pointer-types]
+11190 |             bf_get_int32((int32_t *)&len, &p->num, BF_GET_INT_MOD);
+      |                          ^~~~~~~~~~~~~~~
+      |                          |
+      |                          int32_t * {aka long int *}
+src/quickjs/libbf.h:377:23: note: expected 'int *' but argument is of type 'int32_t *' {aka 'long int *'}
+  377 | int bf_get_int32(int *pres, const bf_t *a, int flags);
+      |                  ~~~~~^~~~
+src/quickjs/quickjs.c: In function 'JS_ToQuotedString':
+src/quickjs/quickjs.c:11865:51: warning: format '%x' expects argument of type 'unsigned int', but argument 4 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+11865 |                 snprintf(buf, sizeof(buf), "\\u%04x", c);
+      |                                                ~~~^   ~
+      |                                                   |   |
+      |                                                   |   uint32_t {aka long unsigned int}
+      |                                                   unsigned int
+      |                                                %04lx
+src/quickjs/quickjs.c: In function 'JS_DumpValueShort':
+src/quickjs/quickjs.c:12133:31: warning: format '%d' expects argument of type 'int', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+12133 |         printf("[unknown tag %d]", tag);
+      |                              ~^    ~~~
+      |                               |    |
+      |                               int  uint32_t {aka long unsigned int}
+      |                              %ld
+src/quickjs/quickjs.c: In function 'js_binary_arith_bigint':
+src/quickjs/quickjs.c:13382:26: warning: passing argument 1 of 'bf_get_int32' from incompatible pointer type [-Wincompatible-pointer-types]
+13382 |             bf_get_int32(&v2, b, 0);
+      |                          ^~~
+      |                          |
+      |                          slimb_t * {aka long int *}
+src/quickjs/libbf.h:377:23: note: expected 'int *' but argument is of type 'slimb_t *' {aka 'long int *'}
+  377 | int bf_get_int32(int *pres, const bf_t *a, int flags);
+      |                  ~~~~~^~~~
+src/quickjs/quickjs.c: In function 'js_bfdec_pow':
+src/quickjs/quickjs.c:13447:27: warning: passing argument 1 of 'bfdec_get_int32' from incompatible pointer type [-Wincompatible-pointer-types]
+13447 |     ret = bfdec_get_int32(&b2, &b1);
+      |                           ^~~
+      |                           |
+      |                           int32_t * {aka long int *}
+src/quickjs/libbf.h:519:26: note: expected 'int *' but argument is of type 'int32_t *' {aka 'long int *'}
+  519 | int bfdec_get_int32(int *pres, const bfdec_t *a);
+      |                     ~~~~~^~~~
+In file included from src/quickjs/quickjs.c:49:
+src/quickjs/quickjs.c: In function 'js_call_c_function':
+src/quickjs/quickjs.c:16590:42: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+16590 |             if (unlikely(JS_ToInt32(ctx, &i, arg_buf[0]))) {
+      |                                          ^~
+      |                                          |
+      |                                          int *
+src/quickjs/cutils.h:35:45: note: in definition of macro 'unlikely'
+   35 | #define unlikely(x)     __builtin_expect(!!(x), 0)
+      |                                             ^
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c:16601:42: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+16601 |             if (unlikely(JS_ToInt32(ctx, &i, arg_buf[0]))) {
+      |                                          ^~
+      |                                          |
+      |                                          int *
+src/quickjs/cutils.h:35:45: note: in definition of macro 'unlikely'
+   35 | #define unlikely(x)     __builtin_expect(!!(x), 0)
+      |                                             ^
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c:16605:42: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+16605 |             if (unlikely(JS_ToInt32(ctx, &j, arg_buf[1]))) {
+      |                                          ^~
+      |                                          |
+      |                                          int *
+src/quickjs/cutils.h:35:45: note: in definition of macro 'unlikely'
+   35 | #define unlikely(x)     __builtin_expect(!!(x), 0)
+      |                                             ^
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'JS_WriteObjectRec':
+src/quickjs/quickjs.c:35182:58: warning: format '%d' expects argument of type 'int', but argument 3 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+35182 |         JS_ThrowInternalError(s->ctx, "unsupported tag (%d)", tag);
+      |                                                         ~^    ~~~
+      |                                                          |    |
+      |                                                          int  uint32_t {aka long unsigned int}
+      |                                                         %ld
+src/quickjs/quickjs.c: In function 'JS_ReadObjectRec':
+src/quickjs/quickjs.c:36353:77: warning: format '%u' expects argument of type 'unsigned int', but argument 3 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+36353 |                 return JS_ThrowSyntaxError(ctx, "invalid object reference (%u >= %u)",
+      |                                                                            ~^
+      |                                                                             |
+      |                                                                             unsigned int
+      |                                                                            %lu
+36354 |                                            val, s->objects_count);
+      |                                            ~~~                               
+      |                                            |
+      |                                            uint32_t {aka long unsigned int}
+src/quickjs/quickjs.c: In function 'js_parseInt':
+src/quickjs/quickjs.c:40503:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+40503 |     if (JS_ToInt32(ctx, &radix, argv[1])) {
+      |                         ^~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'js_math_imul':
+src/quickjs/quickjs.c:42388:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+42388 |     if (JS_ToInt32(ctx, &a, argv[0]))
+      |                         ^~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c:42390:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+42390 |     if (JS_ToInt32(ctx, &b, argv[1]))
+      |                         ^~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'remainingElementsCount_add':
+src/quickjs/quickjs.c:47365:29: warning: passing argument 2 of 'JS_ToInt32Free' from incompatible pointer type [-Wincompatible-pointer-types]
+47365 |     if (JS_ToInt32Free(ctx, &remainingElementsCount, val))
+      |                             ^~~~~~~~~~~~~~~~~~~~~~~
+      |                             |
+      |                             int *
+src/quickjs/quickjs.c:11006:52: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11006 | static int JS_ToInt32Free(JSContext *ctx, int32_t *pres, JSValue val)
+      |                                           ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'js_promise_all_resolve_element':
+src/quickjs/quickjs.c:47393:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+47393 |     if (JS_ToInt32(ctx, &index, func_data[1]))
+      |                         ^~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs.c: In function 'js_bigfloat_parseFloat':
+src/quickjs/quickjs.c:50426:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+50426 |     if (JS_ToInt32(ctx, &radix, argv[1])) {
+      |                         ^~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.c:11081:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+11081 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val)
+      |                                ~~~~~~~~~^~~~
+CC - src/quickjs/quickjs-libc.c
+In file included from src/quickjs/quickjs-libc.c:55:
+src/quickjs/cutils.h:42:9: warning: 'stringify' redefined
+   42 | #define stringify(s)    tostring(s)
+      |         ^~~~~~~~~
+In file included from src/runtime/quickjs/include/ath_env.h:16,
+                 from src/quickjs/quickjs-libc.c:50:
+src/core/include/athena/macros.h:16:9: note: this is the location of the previous definition
+   16 | #define stringify(s) #s
+      |         ^~~~~~~~~
+In file included from src/quickjs/quickjs-libc.c:56:
+src/quickjs/list.h:31:9: warning: 'PATH_MAX' redefined
+   31 | #define PATH_MAX        256
+      |         ^~~~~~~~
+In file included from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/limits.h:6,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/limits.h:210,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/syslimits.h:9,
+                 from /usr/local/ps2dev/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include/limits.h:34,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/bits/posix_opt.h:4,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/_pthreadtypes.h:21,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/types.h:221,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/unistd.h:12,
+                 from /usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/unistd.h:4,
+                 from src/quickjs/quickjs-libc.c:31:
+/usr/local/ps2dev/ee/mips64r5900el-ps2-elf/include/sys/syslimits.h:48:9: note: this is the location of the previous definition
+   48 | #define PATH_MAX                 1024   /* max bytes in pathname */
+      |         ^~~~~~~~
+src/quickjs/list.h: In function 'list_splice':
+src/quickjs/list.h:91:21: warning: passing argument 1 of 'list_empty' discards 'const' qualifier from pointer target type [-Wdiscarded-qualifiers]
+   91 |     if (!list_empty(list)) {
+      |                     ^~~~
+src/quickjs/list.h:83:48: note: expected 'struct list_head *' but argument is of type 'const struct list_head *'
+   83 | static inline int list_empty(struct list_head *el)
+      |                              ~~~~~~~~~~~~~~~~~~^~
+src/quickjs/quickjs-libc.c: In function 'js_printf_internal':
+src/quickjs/quickjs-libc.c:196:65: warning: format '%d' expects argument of type 'int', but argument 4 has type 'int32_t' {aka 'long int'} [-Wformat=]
+  196 |                 q += snprintf(q, fmtbuf + sizeof(fmtbuf) - q, "%d", int32_arg);
+      |                                                                ~^   ~~~~~~~~~
+      |                                                                 |   |
+      |                                                                 int int32_t {aka long int}
+      |                                                                %ld
+src/quickjs/quickjs-libc.c:214:69: warning: format '%d' expects argument of type 'int', but argument 4 has type 'int32_t' {aka 'long int'} [-Wformat=]
+  214 |                     q += snprintf(q, fmtbuf + sizeof(fmtbuf) - q, "%d", int32_arg);
+      |                                                                    ~^   ~~~~~~~~~
+      |                                                                     |   |
+      |                                                                     int int32_t {aka long int}
+      |                                                                    %ld
+src/quickjs/quickjs-libc.c: In function 'js_std_exit':
+src/quickjs/quickjs-libc.c:653:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+  653 |     if (JS_ToInt32(ctx, &status, argv[0]))
+      |                         ^~~~~~~
+      |                         |
+      |                         int *
+In file included from src/quickjs/quickjs-libc.h:29,
+                 from src/runtime/quickjs/include/ath_env.h:12:
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_std_strerror':
+src/quickjs/quickjs-libc.c:875:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+  875 |     if (JS_ToInt32(ctx, &err, argv[0]))
+      |                         ^~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_std_exists':
+src/quickjs/quickjs-libc.c:928:9: warning: unused variable 'err' [-Wunused-variable]
+  928 |     int err;
+      |         ^~~
+src/quickjs/quickjs-libc.c: In function 'js_std_fdopen':
+src/quickjs/quickjs-libc.c:1032:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1032 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_std_file_seek':
+src/quickjs/quickjs-libc.c:1184:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1184 |     if (JS_ToInt32(ctx, &whence, argv[1]))
+      |                         ^~~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_std_file_putByte':
+src/quickjs/quickjs-libc.c:1354:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1354 |     if (JS_ToInt32(ctx, &c, argv[0]))
+      |                         ^~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_open':
+src/quickjs/quickjs-libc.c:1481:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1481 |     if (JS_ToInt32(ctx, &flags, argv[1]))
+      |                         ^~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c:1484:29: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1484 |         if (JS_ToInt32(ctx, &mode, argv[2])) {
+      |                             ^~~~~
+      |                             |
+      |                             int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_close':
+src/quickjs/quickjs-libc.c:1506:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1506 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_seek':
+src/quickjs/quickjs-libc.c:1519:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1519 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c:1524:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1524 |     if (JS_ToInt32(ctx, &whence, argv[2]))
+      |                         ^~~~~~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_read_write':
+src/quickjs/quickjs-libc.c:1544:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1544 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_isatty':
+src/quickjs/quickjs-libc.c:1566:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1566 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_setReadHandler':
+src/quickjs/quickjs-libc.c:1767:25: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 1767 |     if (JS_ToInt32(ctx, &fd, argv[0]))
+      |                         ^~~
+      |                         |
+      |                         int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: In function 'js_os_poll':
+src/quickjs/quickjs-libc.c:2362:5: warning: label 'done' defined but not used [-Wunused-label]
+ 2362 |     done:
+      |     ^~~~
+src/quickjs/quickjs-libc.c:2247:9: warning: unused variable 'ret' [-Wunused-variable]
+ 2247 |     int ret, fd_max, min_delay;
+      |         ^~~
+src/quickjs/quickjs-libc.c: In function 'js_os_mkdir':
+src/quickjs/quickjs-libc.c:2428:29: warning: passing argument 2 of 'JS_ToInt32' from incompatible pointer type [-Wincompatible-pointer-types]
+ 2428 |         if (JS_ToInt32(ctx, &mode, argv[1]))
+      |                             ^~~~~
+      |                             |
+      |                             int *
+src/quickjs/quickjs.h:773:41: note: expected 'int32_t *' {aka 'long int *'} but argument is of type 'int *'
+  773 | int JS_ToInt32(JSContext *ctx, int32_t *pres, JSValueConst val);
+      |                                ~~~~~~~~~^~~~
+src/quickjs/quickjs-libc.c: At top level:
+src/quickjs/quickjs-libc.c:2812:12: warning: 'my_execvpe' defined but not used [-Wunused-function]
+ 2812 | static int my_execvpe(const char *filename, char **argv, char **envp)
+      |            ^~~~~~~~~~
+src/quickjs/quickjs-libc.c:2752:15: warning: 'build_envp' defined but not used [-Wunused-function]
+ 2752 | static char **build_envp(JSContext *ctx, JSValueConst obj)
+      |               ^~~~~~~~~~
+src/quickjs/quickjs-libc.c:2594:13: warning: 'ms_to_timeval' defined but not used [-Wunused-function]
+ 2594 | static void ms_to_timeval(struct timeval *tv, uint64_t v)
+      |             ^~~~~~~~~~~~~
+src/quickjs/quickjs-libc.c:2491:16: warning: 'timespec_to_ms' defined but not used [-Wunused-function]
+ 2491 | static int64_t timespec_to_ms(const struct timespec *tv)
+      |                ^~~~~~~~~~~~~~
+src/quickjs/quickjs-libc.c:2181:12: warning: 'handle_posted_message' defined but not used [-Wunused-function]
+ 2181 | static int handle_posted_message(JSRuntime *rt, JSContext *ctx,
+      |            ^~~~~~~~~~~~~~~~~~~~~
+CC - src/generated/js_registry.c
+CC - src/modules/loop/quickjs/ath_loop.c
+CC - src/modules/camera2d/quickjs/ath_camera2d.c
+CC - src/modules/collision/quickjs/ath_collision.c
+src/quickjs/libbf.c: In function 'bf_pow_int':
+src/quickjs/libbf.c:4601:12: warning: 'y1' is used uninitialized [-Wuninitialized]
+ 4601 |     if (y1 < 0)
+      |         ~~~^~~
+src/quickjs/libbf.c:4598:13: note: 'y1' declared here
+ 4598 |     slimb_t y1;
+      |             ^~
+CC - src/modules/color/quickjs/ath_color.c
+src/quickjs/libbf.c: In function 'bf_pow':
+src/quickjs/libbf.c:4764:23: warning: 'e' may be used uninitialized [-Wmaybe-uninitialized]
+ 4764 |                 ret = bf_mul_2exp(r, e, prec, flags);
+      |                       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/quickjs/libbf.c:4756:29: note: 'e' declared here
+ 4756 |             slimb_t T_bits, e;
+      |                             ^
+src/quickjs/libbf.c:4771:24: warning: 'y1' may be used uninitialized [-Wmaybe-uninitialized]
+ 4771 |                 if (y1 >= ((slimb_t)1 << BF_EXP_BITS_MAX)) {
+      |                     ~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/quickjs/libbf.c:4766:25: note: 'y1' declared here
+ 4766 |                 slimb_t y1;
+      |                         ^~
+src/quickjs/libbf.c:4791:30: warning: 'e' may be used uninitialized [-Wmaybe-uninitialized]
+ 4791 |                     if (prec < e)
+      |                         ~~~~~^~~
+src/quickjs/libbf.c:4756:29: note: 'e' declared here
+ 4756 |             slimb_t T_bits, e;
+      |                             ^
+CC - src/modules/draw/quickjs/ath_draw.c
+CC - src/modules/thread/quickjs/ath_thread.c
+src/quickjs/libbf.c: In function 'bf_sincos.isra':
+src/quickjs/libbf.c:4875:16: warning: 'mod' may be used uninitialized [-Wmaybe-uninitialized]
+ 4875 |             if (mod == 0 || (T->expn != BF_EXP_ZERO &&
+      |                ^
+src/quickjs/libbf.c:4847:29: note: 'mod' was declared here
+ 4847 |     slimb_t K, prec1, i, l, mod, prec2;
+      |                             ^~~
+CC - src/modules/thread/quickjs/ath_job.c
+CC - src/modules/thread/quickjs/ath_file_job.c
+CC - src/modules/font/quickjs/ath_font.c
+CC - src/modules/gamepad/quickjs/ath_gamepad.c
+CC - src/modules/image/quickjs/ath_image.c
+CC - src/modules/mutex/quickjs/ath_mutex.c
+CC - src/modules/imagelist/quickjs/ath_imagelist.c
+CC - src/modules/memcard/quickjs/ath_memcard.c
+CC - src/modules/screen/quickjs/ath_screen.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/screen/quickjs/ath_screen.c:5:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/screen/quickjs/ath_screen.c:4:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+CC - src/modules/sound/quickjs/ath_sound.c
+CC - src/modules/random/quickjs/ath_random.c
+CC - src/modules/tilemap/quickjs/ath_tilemap.c
+CC - src/modules/sprite/quickjs/ath_sprite.c
+src/modules/sprite/quickjs/ath_sprite.c: In function 'sprite_draw_all':
+src/modules/sprite/quickjs/ath_sprite.c:3790:64: warning: format '%u' expects argument of type 'unsigned int', but argument 5 has type 'long unsigned int' [-Wformat=]
+ 3790 |         return JS_ThrowRangeError(ctx, "%s: %u instances need %u values, got %u", name,
+      |                                                               ~^
+      |                                                                |
+      |                                                                unsigned int
+      |                                                               %lu
+ 3791 |             (unsigned)count, (unsigned)count * stride, (unsigned)positions.length);
+      |                              ~~~~~~~~~~~~~~~~~~~~~~~~           
+      |                                              |
+      |                                              long unsigned int
+CC - src/modules/system/quickjs/ath_system.c
+CC - src/modules/timer/quickjs/ath_timer.c
+BIN2C - embed/athena_js_ease.c
+BIN2C - embed/athena_js_scene.c
+BIN2C - embed/athena_js_tween.c
+CC - src/generated/native_registry.c
+CC - src/modules/graphics/native/graphics.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/graphics/native/graphics.c:14:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/graphics/native/graphics.c:11:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+src/modules/graphics/native/graphics.c: In function 'set_finish':
+src/modules/graphics/include/athena/graphics/vif.h:117:150: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |                                                                                                                                                      ^
+src/modules/graphics/native/graphics.c:669:37: note: in expansion of macro 'VU_GS_GIFTAG'
+  669 |         owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(1, 1, NULL, 0, 0, 0, 1));
+      |                                     ^~~~~~~~~~~~
+src/modules/graphics/native/graphics.c: In function 'set_register_force':
+src/modules/graphics/include/athena/graphics/vif.h:117:150: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |                                                                                                                                                      ^
+src/modules/graphics/native/graphics.c:691:37: note: in expansion of macro 'VU_GS_GIFTAG'
+  691 |         owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(1, 1, NULL, 0, 0, 0, 1));
+      |                                     ^~~~~~~~~~~~
+src/modules/graphics/native/graphics.c: In function 'flush_gs_texcache':
+src/modules/graphics/include/athena/graphics/vif.h:117:150: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |                                                                                                                                                      ^
+src/modules/graphics/native/graphics.c:708:37: note: in expansion of macro 'VU_GS_GIFTAG'
+  708 |         owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(1, 1, NULL, 0, 0, 0, 1));
+      |                                     ^~~~~~~~~~~~
+src/modules/graphics/native/graphics.c: In function 'setactive':
+src/modules/graphics/include/athena/graphics/vif.h:117:150: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |                                                                                                                                                      ^
+src/modules/graphics/native/graphics.c:808:37: note: in expansion of macro 'VU_GS_GIFTAG'
+  808 |         owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(2, 1, NULL, 0, 0, 0, 1));
+      |                                     ^~~~~~~~~~~~
+CC - src/modules/graphics/native/graphics_sync.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/graphics/native/graphics_sync.c:3:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/graphics/native/graphics_sync.c:2:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+src/modules/graphics/native/graphics_sync.c: In function 'graphics_wait_idle':
+src/modules/graphics/native/graphics_sync.c:26:5: warning: implicit declaration of function 'set_finish'; did you mean 'gsKit_finish'? [-Wimplicit-function-declaration]
+   26 |     set_finish(); graphics_finish_wait();
+      |     ^~~~~~~~~~
+      |     gsKit_finish
+CC - src/modules/graphics/native/owl_draw.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/graphics/native/owl_draw.c:14:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/graphics/native/owl_draw.c:10:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+CC - src/modules/graphics/native/view.c
+CC - src/modules/graphics/native/view_gs.c
+CC - src/modules/graphics/native/owl_packet.c
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics/owl_packet.h:4,
+                 from src/modules/graphics/native/owl_packet.c:1:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+CC - src/modules/graphics/native/texture_manager.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/graphics/native/texture_manager.c:20:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/graphics/native/texture_manager.c:19:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+CC - src/modules/graphics/native/vif.c
+CC - src/modules/graphics/native/mpg_manager.c
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics/owl_packet.h:4,
+                 from src/modules/graphics/native/mpg_manager.c:6:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/native/mpg_manager.c: In function 'vu_mpg_upload':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/native/mpg_manager.c:41:13: note: in expansion of macro 'DMA_TAG'
+   41 |             DMA_TAG(n / 2, 0, DMA_REF, 0, src, 0));
+      |             ^~~~~~~
+CC - src/modules/graphics/native/image_loaders.c
+CC - src/modules/loop/native/loop.c
+CC - src/modules/loop/native/loop_systems.c
+CC - src/modules/camera2d/native/camera2d.c
+CC - src/modules/camera2d/native/camera2d_gs.c
+CC - src/modules/collision/native/collision.c
+CC - src/modules/collision/native/collision_gs.c
+CC - src/modules/thread/native/thread.c
+CC - src/modules/thread/native/job.c
+CC - src/modules/thread/native/file_job.c
+CC - src/modules/font/native/atlas.c
+CC - src/modules/font/native/fntsys.c
+src/modules/font/native/atlas.c: In function 'atlasNew':
+src/modules/font/native/atlas.c:100:24: warning: assignment to 'uint32_t *' {aka 'long unsigned int *'} from incompatible pointer type 'u32 *' {aka 'unsigned int *'} [-Wincompatible-pointer-types]
+  100 |     atlas->surface.Mem = (u32 *)memalign(128, txtsize);
+      |                        ^
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/font/native/fntsys.c:18:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/font/include/athena/font.h:7,
+                 from src/modules/font/native/fntsys.h:7,
+                 from src/modules/font/native/fntsys.c:14:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/font/native/fntsys.h:5:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+CC - src/modules/font/native/font.c
+CC - src/modules/font/native/image_font.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/font/native/image_font.c:18:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/font/native/image_font.c:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+CC - src/modules/gamepad/native/gamepad.c
+CC - src/modules/gamepad/native/gamepad_iop.c
+CC - src/modules/image/native/image.c
+CC - src/modules/mutex/native/mutex.c
+CC - src/modules/imagelist/native/decoder.c
+CC - src/modules/imagelist/native/path.c
+CC - src/modules/memcard/native/memcard.c
+CC - src/modules/memcard/native/memcard_iop.c
+CC - src/modules/memcard/native/memcard_job.c
+CC - src/modules/poweroff/native/poweroff.c
+CC - src/modules/screen/native/screen.c
+CC - src/modules/sound/native/sound_iop.c
+CC - src/modules/sound/native/sound_path.c
+CC - src/modules/sound/native/sound_sfx.c
+CC - src/modules/sound/native/sound_stream.c
+In file included from src/modules/sound/native/sound_stream.c:10:
+/usr/local/ps2dev/ps2sdk/ports/include/vorbis/vorbisfile.h:95:21: warning: 'OV_CALLBACKS_STREAMONLY_NOCLOSE' defined but not used [-Wunused-variable]
+   95 | static ov_callbacks OV_CALLBACKS_STREAMONLY_NOCLOSE = {
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ports/include/vorbis/vorbisfile.h:88:21: warning: 'OV_CALLBACKS_STREAMONLY' defined but not used [-Wunused-variable]
+   88 | static ov_callbacks OV_CALLBACKS_STREAMONLY = {
+      |                     ^~~~~~~~~~~~~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ports/include/vorbis/vorbisfile.h:81:21: warning: 'OV_CALLBACKS_NOCLOSE' defined but not used [-Wunused-variable]
+   81 | static ov_callbacks OV_CALLBACKS_NOCLOSE = {
+      |                     ^~~~~~~~~~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ports/include/vorbis/vorbisfile.h:74:21: warning: 'OV_CALLBACKS_DEFAULT' defined but not used [-Wunused-variable]
+   74 | static ov_callbacks OV_CALLBACKS_DEFAULT = {
+      |                     ^~~~~~~~~~~~~~~~~~~~
+CC - src/modules/random/native/random.c
+CC - src/modules/tilemap/native/tilemap.c
+In file included from src/modules/graphics/include/athena/graphics/owl_packet.h:11,
+                 from src/modules/tilemap/native/tilemap.c:9:
+src/modules/graphics/include/athena/graphics/vif.h:101:9: warning: 'DRAW_STQ2_REGLIST' redefined
+  101 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:27,
+                 from src/modules/graphics/include/athena/graphics.h:15,
+                 from src/modules/tilemap/native/tilemap.c:8:
+/usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:55:9: note: this is the location of the previous definition
+   55 | #define DRAW_STQ2_REGLIST \
+      |         ^~~~~~~~~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:115:9: warning: 'VU_GS_PRIM' redefined
+  115 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:32:9: note: this is the location of the previous definition
+   32 | #define VU_GS_PRIM(PRIM, IIP, TME, FGE, ABE, AA1, FST, CTXT, FIX) (u128)(((FIX << 10) | (CTXT << 9) | (FST << 8) | (AA1 << 7) | (ABE << 6) | (FGE << 5) | (TME << 4) | (IIP << 3) | (PRIM)))
+      |         ^~~~~~~~~~
+src/modules/graphics/include/athena/graphics/vif.h:117:9: warning: 'VU_GS_GIFTAG' redefined
+  117 | #define VU_GS_GIFTAG(NLOOP, EOP, DATA, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | ((u64)(DATA) << 16) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+/usr/local/ps2dev/ps2sdk/ee/include/packet2_utils.h:33:9: note: this is the location of the previous definition
+   33 | #define VU_GS_GIFTAG(NLOOP, EOP, PRE, PRIM, FLG, NREG) (((u64)(NREG) << 60) | ((u64)(FLG) << 58) | ((u64)(PRIM) << 47) | ((u64)(PRE) << 46) | (EOP << 15) | (NLOOP << 0))
+      |         ^~~~~~~~~~~~
+In file included from /usr/local/ps2dev/gsKit/include/dmaKit.h:20,
+                 from /usr/local/ps2dev/gsKit/include/gsKit.h:20,
+                 from src/modules/graphics/include/athena/graphics.h:9:
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'owl_add_unpack_data_ref':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:157:27: note: in expansion of macro 'DMA_TAG'
+  157 |     owl_add_ulong(packet, DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0));
+      |                           ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: In function 'unpack_list_append':
+/usr/local/ps2dev/gsKit/include/dmaCore.h:59:10: warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+   59 |         ((u64)(ADDR) << 32) | ((u64)(SPR) << 63))
+      |          ^
+src/modules/graphics/include/athena/graphics/owl_packet.h:209:25: note: in expansion of macro 'DMA_TAG'
+  209 |                         DMA_TAG(t_size, 0, DMA_REF, 0, t_data, 0)
+      |                         ^~~~~~~
+src/modules/graphics/include/athena/graphics/owl_packet.h: At top level:
+src/modules/graphics/include/athena/graphics/owl_packet.h:276:9: warning: 'ftoi4' redefined
+  276 | #define ftoi4(type, val) type ## _to_12_4_fixed(val)
+      |         ^~~~~
+In file included from /usr/local/ps2dev/ps2sdk/ee/include/draw3d.h:12:
+/usr/local/ps2dev/ps2sdk/ee/include/draw_types.h:15:10: note: this is the location of the previous definition
+   15 |  #define ftoi4(F) ((int)(((float)F)*16.0f))
+      |          ^~~~~
+DVP - src/modules/tilemap/vu1/draw_2D_tile_list.vsm
+DVP - src/modules/tilemap/vu1/draw_2D_tile_list_rotated.vsm
+CC - src/modules/sprite/native/sprite.c
+CC - src/modules/sprite/native/sprite_gs.c
+CC - src/modules/sprite/native/sprite_job.c
+CC - src/modules/system/native/system.c
+CC - src/modules/system/native/elf_loader.c
+src/modules/system/native/elf_loader.c: In function 'LoadELFFromFileNoReset':
+src/modules/system/native/elf_loader.c:67:35: warning: comparison between pointer and integer
+   67 |                 if (MountPoint[0] != NULL) {
+      |                                   ^~
+CC - src/modules/timer/native/timer.c
+CC - src/modules/usbmass/native/usbmass.c
+BIN2C - embed/iomanx.c
+BIN2C - embed/filexio.c
+BIN2C - embed/quicksand_regular.c
+BIN2C - embed/sio2man_irx.c
+BIN2C - embed/usbd_irx.c
+BIN2C - embed/padman_irx.c
+BIN2C - embed/mtapman_irx.c
+BIN2C - embed/ds34usb_irx.c
+BIN2C - embed/ds34bt_irx.c
+BIN2C - embed/mcman_irx.c
+BIN2C - embed/mcserv_irx.c
+BIN2C - embed/poweroff_irx.c
+BIN2C - embed/libsd_irx.c
+BIN2C - embed/audsrv_irx.c
+BIN2C - embed/loader_elf.c
+BIN2C - embed/bdm_irx.c
+BIN2C - embed/bdmfs_fatfs_irx.c
+BIN2C - embed/usbmass_bd_irx.c
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_regression.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_regression_release.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]

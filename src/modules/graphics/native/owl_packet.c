@@ -1,6 +1,7 @@
 #include <athena/graphics/owl_packet.h>
 #include <debug.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 owl_controller controller = { 0 };
@@ -129,6 +130,15 @@ void owl_wait_generation(uint64_t generation) {
 
 owl_packet *owl_query_packet(owl_channel channel, size_t size) {
     OWL_COUNT(queries);
+    /* Writers assume a valid packet and do not handle NULL. Fail before any
+     * write on an invalid reservation rather than corrupting the DMA ring.
+     * Compare by subtraction so SIZE_MAX cannot wrap the capacity check. */
+    if (!controller.base || controller.size < 2 ||
+        (unsigned)channel >= CHANNEL_SIZE || size > controller.size - 1) {
+        fprintf(stderr, "[OWL] Invalid DMA reservation: channel=%u qwords=%lu capacity=%lu\n",
+                (unsigned)channel, (unsigned long)size, (unsigned long)controller.size);
+        abort();
+    }
     if (channel != controller.channel) {
         if (controller.channel != CHANNEL_SIZE) {
             if(controller.alloc) OWL_COUNT(channel_flushes);
@@ -137,7 +147,8 @@ owl_packet *owl_query_packet(owl_channel channel, size_t size) {
         }
 
         controller.channel = channel;
-    } else if ((controller.alloc + size) + 1 >= controller.size) { // + 1 for end tag
+    }
+    if (controller.alloc > controller.size - 1 - size) {
         if(controller.alloc) OWL_COUNT(capacity_flushes);
         owl_flush_packet();
     }

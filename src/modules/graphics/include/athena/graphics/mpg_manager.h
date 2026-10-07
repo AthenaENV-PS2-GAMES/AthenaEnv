@@ -33,15 +33,18 @@ typedef enum {
 typedef struct {
     void *code;
 
-    uint32_t qwc;
-    uint32_t size;
+    uint32_t qwc; /* 64-bit instruction count (legacy field name). */
+    uint64_t dma_generation;
+    uint32_t size; /* uint32_t words, not bytes. */
     bool free;
 
     int dst;
 } vu_mpg;
 
-#define vu_mpg_count_instr(size) (((size) / 2) + (((size) / 2) & 1))
+#define vu_mpg_count_instr(size) ((size) / 2)
 
+/* Buffer must be 16-byte aligned; size is a nonzero multiple of four words.
+ * It remains owned by the caller unless autofree is true. Unload waits for DMA. */
 vu_mpg *vu_mpg_load_buffer(void *ptr, uint32_t size, int dst, bool autofree);
 vu_mpg *vu_mpg_load_file(const char *path, int dst);
 

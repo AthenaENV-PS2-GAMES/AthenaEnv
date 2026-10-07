@@ -1,0 +1,98 @@
+[OWL] Invalid DMA reservation: channel=1 qwords=32 capacity=32
+[OWL] Invalid DMA reservation: channel=2 qwords=18446744073709551615 capacity=32
+[OWL] Invalid DMA reservation: channel=10 qwords=1 capacity=32
+[OWL] Invalid DMA reservation: channel=4294967295 qwords=1 capacity=32
+owl_bounds: exact capacity, channel switches, overflow and invalid channels passed
+bitmap_font: long text, glyph order/newlines, transfer markers, culling and rotation passed
+page_clear: ring boundaries, page order, register restore and canaries passed
+mpg_manager: units, MPG boundaries, full VU memory, cache holes and DMA lifetime passed
+loop: 0 failures
+loop_systems_test: all checks passed
+output_test: all checks passed
+job: 30 checks, 0 failures
+memcard: 215 checks, 0 failures (1212 driver commands)
+readini: 0 failures
+load and validation
+SPU2 memory mirror (random loads and frees)
+channels, loops, stop, master volume
+reload after an IOP reset, from another directory
+loading on a worker thread
+sound_sfx: 47 checks, 0 failures
+[Sound] cannot reopen /tmp/square_c.wav after an IOP reset
+open / format selection
+converter
+gain
+position through segments
+playback: direct 22050 Hz mono
+playback: loop, and loop = false despite the read-ahead
+playback: converted 16 kHz, gapless seek
+playback: no gap on seek, same-format switch, or a 300 ms read stall
+playback: fades (constant amplitude 10000)
+playback: play() cancels a fade-out; stop({fade})
+playback: pause right after play(), before audsrv was reconfigured
+playback: IOP reset while playing: the file is reopened
+playback: format switch, destroy while playing
+sound_stream: 99 checks, 0 failures
+video: sequence 1280x360 (coded 1280x368), chroma 1, 60.00 fps: refused
+video: sequence 640x1030 (coded 640x1040), chroma 1, 60.00 fps: refused
+video: sequence 1024x1024 (coded 1024x1024), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 2, 60.00 fps: refused
+video: sequence 640x360 (coded 640x368), chroma 1, 0.00 fps: refused
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: IPU stopped reading data, ending playback
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 1024x1024 (coded 1024x1024), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+video: sequence 640x360 (coded 640x368), chroma 1, 60.00 fps
+errors
+open, draw, destroy
+timing
+end, loop, stop
+IPU stall
+decoder worker
+sync to an external clock
+draw options
+events and loop count
+probe
+video: 2880 checks, 0 failures
+random_noise_test: all checks passed
+debug_overlay_test: all checks passed
+camera2d_test: ok
+sprite: all tests passed
+collision_test: ok
+box2d: 668 checks, 0 failures
+QuickJS PS2 unaligned operand tests passed
+3D native tests passed
+3D homogeneous clipping tests passed
+3D materials, lights, inverse-transpose and lit clipping tests passed
+3D packets and cross-channel DMA lifetime tests passed (DMA_REF=0)
+3D packets and cross-channel DMA lifetime tests passed (DMA_REF=1)
+3D texture ownership, UV import and homogeneous interpolation tests passed
+3D GS texture upload, FINISH ordering, reset and release tests passed
+Scene3D host tests passed
+Animation3D host tests passed
+glTF3D host tests passed
+CameraRig3D host tests passed
+Tween3D host tests passed
+Collision3D host tests passed
+Physics3D host tests passed
+Particles2D host tests passed
+Particles3D host tests passed
+vcl: openvcl or masp not found, .vsm check skipped
+vsm loops: 13 files clean
+  (adpenc not found: comparison with the PS2SDK skipped)
+wav2adp: 12 checks, 0 failures

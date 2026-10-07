@@ -3,6 +3,9 @@
  * scene.update() (or attachLoop()) before draw and world queries, which throw
  * while the scene is stale instead of returning outdated data. */
 declare namespace Scene3D {
+    /** Releases reusable CPU skinning/morph buffers after draw returns, for
+     * a level transition or memory pressure. They grow again when needed. */
+    function trimScratch(): void;
     /** Levels from the root, root included. Deeper hierarchies are rejected. */
     const MAX_DEPTH: number;
     /** Bulk setters, one call per frame instead of one per node: values holds

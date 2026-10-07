@@ -1,0 +1,12 @@
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_scratch.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]
+
+==================================================
+           AthenaEnv (quickjs runtime)
+==================================================
+
+Built bin/athena_scratch_release.elf [modules: graphics loop camera2d collision color draw ease thread font gamepad image mutex imagelist memcard poweroff screen scene sound random tilemap sprite system timer tween usbmass]

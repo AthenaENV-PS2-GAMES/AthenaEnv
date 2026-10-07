@@ -1,0 +1,120 @@
+{
+  "date": "2026-10-07",
+  "draw_list_cases": 1458,
+  "atlas_font_cases": 810,
+  "runs": {
+    "safety_x86_64": {
+      "exit_code": 0,
+      "log": "safety.log"
+    },
+    "host": {
+      "exit_code": 0,
+      "log": "host.log"
+    },
+    "javascript_i386": {
+      "exit_code": 0,
+      "log": "javascript.log"
+    },
+    "docker_i386_image": {
+      "exit_code": 0,
+      "log": "js-image-build.log"
+    },
+    "ee_build_config_debug_release": {
+      "exit_code": 0,
+      "log": "ee-builds.log"
+    }
+  },
+  "javascript": {
+    "summaries": [
+      {
+        "passed": 147,
+        "failed": 0,
+        "summary": "Result: 147 passed, 0 failed"
+      },
+      {
+        "passed": 255,
+        "failed": 0,
+        "summary": "Result: 255 passed, 0 failed"
+      },
+      {
+        "passed": 100,
+        "failed": 0,
+        "summary": "Result: 100 passed, 0 failed"
+      },
+      {
+        "passed": 48,
+        "failed": 0,
+        "summary": "Result: 48 passed, 0 failed (host-only checks skipped)"
+      },
+      {
+        "passed": 193,
+        "failed": 0,
+        "summary": "Result: 193 passed, 0 failed"
+      },
+      {
+        "passed": 133,
+        "failed": 0,
+        "summary": "Result: 133 passed, 0 failed"
+      },
+      {
+        "passed": 199,
+        "failed": 0,
+        "summary": "Result: 199 passed, 0 failed"
+      },
+      {
+        "passed": 144,
+        "failed": 0,
+        "summary": "Result: 144 passed, 0 failed"
+      },
+      {
+        "passed": 139,
+        "failed": 0,
+        "summary": "Result: 139 passed, 0 failed"
+      },
+      {
+        "passed": 66,
+        "failed": 0,
+        "summary": "Result: 66 passed, 0 failed, 5 skipped"
+      }
+    ],
+    "passed": 1424,
+    "failed": 0,
+    "explicit_skips": [
+      "[SKIP] System.getMCInfo: System is not in this runtime",
+      "[SKIP] files written by MemoryCard are read through std.open: std.open is not in this runtime",
+      "[SKIP] files written through std.open are read by MemoryCard: std.open is not in this runtime",
+      "[SKIP] std.open and MemoryCard share the driver's three handles: std.open is not in this runtime",
+      "[SKIP] frames keep coming while a job writes: Loop is not in this runtime"
+    ]
+  },
+  "elfs": {
+    "debug": {
+      "path": "bin/athena_regression.elf",
+      "sha256": "b7eeb4fdb4146df7ed0d3bb04be9990058a2463821725c6f8d1b9400ece36a22",
+      "bytes": 19443456
+    },
+    "release": {
+      "path": "bin/athena_regression_release.elf",
+      "sha256": "92aef7bd34c90d1a33ca7f4d84e34fe5ffa69877aa2f2d27661678266d89d3cd",
+      "bytes": 3720096
+    }
+  },
+  "pcsx2": {
+    "debug": {
+      "pass_markers": [
+        "[    6.0898] DRAW_LISTS_REGRESSION_VISUAL: PASS after 120 frames; 1920 sprites; 1344 glyphs; rotated outline"
+      ],
+      "capture": "pcsx2-debug.png",
+      "visually_inspected": true,
+      "stopped_after_validation": true
+    },
+    "release": {
+      "pass_markers": [
+        "[    6.0353] DRAW_LISTS_REGRESSION_VISUAL: PASS after 120 frames; 1920 sprites; 1344 glyphs; rotated outline"
+      ],
+      "capture": "pcsx2-release.png",
+      "visually_inspected": true,
+      "stopped_after_validation": true
+    }
+  }
+}

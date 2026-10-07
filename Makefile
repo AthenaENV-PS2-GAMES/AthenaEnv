@@ -349,3 +349,26 @@ $(EE_OBJ_DIR)app/%.o: %.c
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
 
 -include $(EE_OBJS:.o=.d)
+
+# Compiler options and the selected module set are not represented by source
+# timestamps. Persist their effective values and rebuild objects only when
+# they change; this also rejects stale objects from an older configuration.
+BUILD_CONFIG_STAMP = $(EE_OBJ_DIR).build-config
+config_quote = '$(subst ','"'"',$(1))'
+.PHONY: FORCE_BUILD_CONFIG
+FORCE_BUILD_CONFIG:
+
+$(BUILD_CONFIG_STAMP): FORCE_BUILD_CONFIG
+	@mkdir -p $(@D)
+	@{ printf '%s\n' \
+		$(call config_quote,CC=$(EE_CC)) \
+		$(call config_quote,CFLAGS=$(EE_CFLAGS)) \
+		$(call config_quote,INCS=$(EE_INCS)) \
+		$(call config_quote,AS=$(EE_AS) $(EE_ASFLAGS)) \
+		$(call config_quote,DVP=$(EE_DVP)) \
+		$(call config_quote,MODULES=$(MODULE_IDS)); \
+		$(EE_CC) -dumpmachine; $(EE_CC) -dumpfullversion; \
+	} > $@.tmp
+	@if ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm -f $@.tmp; fi
+
+$(EE_OBJS): $(BUILD_CONFIG_STAMP)
