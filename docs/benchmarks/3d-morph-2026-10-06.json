@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "bin/morph_profile.js (--cfg=morph_profile.ini)",
+  "asset": "bin/models/morph_hi.glb (node tools/make_3d_morph_asset.js --grid=8 --out=morph_hi.glb): 2304 vértices, 2 targets (um esparso), sem normais (DIFFUSE gera normais por face)",
+  "change": "Morph targets: Model3D guarda deltas de posição/normal por target (até 8); Scene3D guarda pesos por nó, cresce os bounds pelos deltas ponderados e mistura no EE no draw (normais por face regeneradas); Animation3D ganha trilhas 'weights'; GLTF3D importa targets (inclusive esparsos), pesos padrão e canais weights.",
+  "findings": [
+    "Caixa parada (pesos 0, caminho de malha normal): 392.5 us de draw.",
+    "Animando: 1873.8 us na primeira versão; 1400.1 us usando a caixa conservadora dos targets em vez de min/max por vértice e recíproco na normalização (~0.44 us por vértice com 2 targets e normais por face).",
+    "Quatro caixas animando: 7219.6 -> 5889.1 us. O update (Animation3D + Scene3D) fica em 55-82 us.",
+    "Imagem conferida: caixas esticando e afinando, faces iluminadas por face após a mistura.",
+    "Um programa VU1 de morph (como o de skinning) é o próximo passo possível; as normais por face exigiriam processar por triângulo no VU1."
+  ],
+  "stages": [
+    {"stage": "static-1x2304", "samples": 120, "updateTicksMean": 55.4, "drawTicksMean": 392.5, "triangles": 768},
+    {"stage": "morph-1x2304", "samples": 120, "updateTicksMean": 61.9, "drawTicksMean": 1400.1, "triangles": 768},
+    {"stage": "morph-4x2304", "samples": 120, "updateTicksMean": 81.7, "drawTicksMean": 5889.1, "triangles": 3072}
+  ]
+}

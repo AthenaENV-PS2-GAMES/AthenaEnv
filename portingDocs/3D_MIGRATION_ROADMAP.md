@@ -289,6 +289,7 @@ continuam pendentes; esses logs são diagnósticos, sem medição de tempo.
 | Aritmética `double` domina o custo de CPU do 3D no EE. | [Perfil](../docs/benchmarks/3d-profile-2026-10-05.json) com conteúdo idêntico no PCSX2: ~1,4 µs por operação `double` contra 0,35 µs por Matrix4 multiply VU0; box_relation ~44 µs; set_euler ~250 µs; difuso +52 µs e Scene3D +52 µs por passe. | Caminhos por objeto/frame em `float` com escalonamento pelo maior componente e margem relativa 1e-5 mantida; `double` só onde ocorre uma vez por mudança (câmera) ou ainda não medido (recorte, iluminação C). Contrato: código quente de 3D evita `double`. |
 | A submissão individual JS tem custo adicional alto nesse cenário. | Baseline de 64 instâncias: Batch JS ~3,567 ms versus individual ~16,949 ms contidas; ~18,789 versus ~32,131 ms recortadas. Mesmos triângulos, payload e 64 passes/chunks. | Priorizar Batch para coleções JS. A janela inclui binding e objetos/agregação de estatísticas; não isola cada custo, não mede ganho sobre o legado e requer repetições para generalização. |
 | Lifetime JS, leitura DMA e rasterização GS são eventos diferentes. | Testes do renderer/transporte verificam troca de canais, reutilização do ring e dados válidos após liberar a malha. | Retenção nativa explícita e geometria copiada. Tickets cobrem leitura DMA; não representam conclusão do GS. DMA_REF/chains cacheadas permanecem adiados até haver lifetime e medição adequados. |
+| A conversão de argumentos JS também passava por `double`. | `athena_js_float()` fazia `JS_ToFloat64` e duas comparações `double` com `FLT_MAX` por argumento; o QuickJS do projeto tem, além de INT e FLOAT64, a tag `JS_CUSTOM_TAG_FLOAT32`. | Leitura direta por tag: INT e FLOAT32 sem `double`, FLOAT64 estreitado e validado pelos bits do `float` (fora da faixa vira Inf e é rejeitado). Testes JS cobrem os três tipos; ganho a medir com `3D_PROFILE_JS_MICRO`. |
 | As dependências e ferramentas efetivas podem ser conferidas dentro da imagem de build. | Builds pelo Docker no WSL com PS2SDK/OpenVCL; testes host de 32 bits em imagem própria. | Usar o shell da imagem para consultar headers/fontes de ps2dev, ps2sdk, OpenVCL e demais dependências; comandos e caminhos em [BUILDING_ATHENA.md](../docs/BUILDING_ATHENA.md#wsl-com-docker-e-inspecao-do-toolchain). Docker/WSL é o caminho disponível quando Podman não sustenta o build. |
 
 ### 7.3. Próximos passos, na ordem de execução
@@ -329,27 +330,60 @@ continuam pendentes; esses logs são diagnósticos, sem medição de tempo.
    53,6→15,1 µs, difuso 105,5→22,0 µs, Scene3D 157,3→17,6 µs (abaixo do
    Batch, 22,0 µs); `many-nodes` 20,5→1,7 ms de draw e 4,65→0,30 ms de
    update; `subtree-cull` 1,04→0,10 ms.
-5. **Retomada — próximos passos, nesta ordem:**
-   1. **Versionar o trabalho.** As entregas de 3D desde `144fe78` (lighting,
-      texturas, Scene3D, perfil e `float`) estão fora de commits na branch
-      `modular-3D`; revisar o diff e dividir em commits por módulo.
-   2. **Atualizar baselines.** Repetir `athena_3d_regression_native.elf` e
-      `3d_regression.js`: [3D_REGRESSION.md](../docs/3D_REGRESSION.md) e os
-      JSON de 04/10 são anteriores ao `float` e não representam mais o custo
-      atual. Registrar o baseline QuickJS de Scene3D/Batch com o mesmo grid
-      (perfil JS equivalente a `3d_profile`), para medir o custo do binding.
-   3. **Auditar `double` restante em caminhos por frame.** `view_matrix` e
-      `set_projection` da câmera (uma vez por mudança), slerp, loaders e
-      bindings JS (`JS_ToFloat64` é inevitável na fronteira, mas conversões
-      intermediárias não). Medir antes de converter; manter o contrato de
-      código quente sem `double`.
-   4. **Custos fixos por passe** (~15 µs unlit, ~22 µs difuso): duas barreiras
-      FLUSHA, upload de constantes/matrizes e salvar/restaurar registradores GS
-      a cada malha. Avaliar agrupar malhas do mesmo pipeline/material em um
-      passe, com medição antes/depois no `3d_profile`.
-   5. **Update animado:** `set_euler` ainda custa ~9 µs (três `sinf`/`cosf`
-      e normalizações); avaliar composição direta de Euler em quaternion e
-      setters em lote para Scene3D/Instance.
+5. **Retomada — próximos passos, nesta ordem** (estado em 06/10/2026):
+   1. **Versionar o trabalho — feito.** As entregas desde `144fe78` estão no
+      commit `7621811` (um commit único, não dividido por módulo).
+   2. **Atualizar baselines — feito em 06/10/2026 no PCSX2.**
+      [bin/3d_profile.js](../bin/3d_profile.js) (`--cfg=3d_profile.ini`) é o
+      perfil QuickJS equivalente a `3d_profile` (linhas `3D_PROFILE_JS` e
+      `3D_PROFILE_JS_MICRO`); o C ganhou `quaternionEulerUs`,
+      `quaternionSlerpUs` e `cameraMoveUs` em `3D_PROFILE_MICRO`. Registros:
+      [perfil](../docs/benchmarks/3d-profile-2026-10-06.json),
+      [regressão C](../docs/benchmarks/3d-native-2026-10-06.json) e
+      [QuickJS](../docs/benchmarks/3d-quickjs-2026-10-06.json). Contadores de
+      geometria idênticos aos anteriores; scene, clipping e lighting conferidos
+      por captura em C/JS.
+   3. **Auditar `double` restante — feito e medido.** Convertidos para
+      `float`: look-at e projeção da câmera (os setters calculavam a view em
+      `double` e `update()` a recalculava; agora a view validada é guardada e
+      `update()` só multiplica), slerp e `athena_js_float()`, usado por todo
+      setter 3D (inteiros e valores FLOAT32 do QuickJS não passam por
+      `double`; FLOAT64 só é estreitado, sem as duas comparações `double`).
+      Restam, fora de caminhos por frame: normais geradas no carregamento e
+      normalização da direção em `Lights` (uma vez por setter). Testes host
+      comparam Euler, slerp e look-at com referências `double`. Update de
+      `scene-lit-rows` 362,7→319,2 µs e `scene-many-nodes` 374,9→326,4 µs.
+   4. **Agrupar passes — feito (Render3D 1.6, Scene3D 1.1).** `Batch.draw()` e
+      `Scene3D.draw()` compartilham um passe GS/VU1 entre objetos consecutivos
+      com mesma câmera, contexto GS, programa VU1 e textura
+      (`athena_render3d_group_begin()`/`group_end()`); entre objetos ficam uma
+      VIF FLUSHE e o upload da matriz de modelo. Novo contador
+      `pipelinePasses`; `drawPasses` continua contando objetos desenhados.
+      Grid de 64 objetos: 64→1 passe; draw nativo −15% unlit, −10% difuso
+      Batch, −13% Scene3D; QuickJS −8 a −12%; `inside-batch` −17% (C).
+      Draw individual mantém um passe por chamada (+1–2% em C). Em QuickJS o
+      draw individual ficou +8–9%: o objeto de estatísticas criado a cada
+      `Render3D.draw()` custa ~13 µs por propriedade e domina os ~200 µs da
+      chamada. [Medição](../docs/benchmarks/3d-pass-grouping-2026-10-06.json);
+      imagens de scene, lighting, textures, regression e clip conferidas em
+      C/JS. Estatísticas JS resolvidas no passo seguinte: atoms em cache e
+      argumento `stats` reutilizável (draw de objeto cortado 134,5→19,8 µs);
+      [medição](../docs/benchmarks/3d-js-overhead-2026-10-06.json).
+   5. **Update animado — parcial.** `setRotationEuler` (Instance e Node) e o
+      novo `Quaternion.setEuler` usam a forma fechada de `Rz·Ry·Rx`
+      (`athena_quaternion_euler()`): seis `sinf`/`cosf` e uma normalização,
+      em vez de três axis-angle, duas multiplicações e seis normalizações.
+      Medido: `quaternionEulerUs` 2,72 µs; `batch-lit-animated` 583,7→238,0 µs
+      e `scene-lit-animated` 1022,9→677,4 µs de update. Em QuickJS,
+      `setEuler` custa ~12,2 µs por chamada contra 2,72 µs nativos, e a
+      travessia JS→C é ~65% do update de `batch-lit-animated` (677,6 µs).
+      **Setters em lote — feitos (Model3D 1.3, Scene3D 1.1):**
+      `setPositions`/`setRotationsEuler(handles, Float32Array)`. Com os dados
+      já em `Float32Array` custam 2,78 µs por nó contra 12,18 µs do setter
+      individual; preencher o array em JS custa 7,35 µs por nó, e o update
+      animado com valores calculados no script não melhora (678,5→718,2 µs).
+      O limite restante do update em JS é o interpretador; ganhos maiores
+      exigem mover a animação para C (Animation3D, controllers).
    6. **Scene3D, funcionalidades pendentes:** transparência ordenada,
       identidade real de materiais (agrupamento por textura/material na fila),
       edição/commit, clones e caches; só então chains DMA_REF.
@@ -364,14 +398,242 @@ confirmação do usuário.
 PS2 real, parsing completo e mais assets/loaders continuam pendentes;
 as medições do PCSX2 não estabelecem o desempenho no hardware real.
 
+### 7.4. Divisão JS × nativo e uso de VU0/VU1
+
+Medições no PCSX2 em 06/10/2026 (1 tick = 1 µs; ver
+[3d-js-overhead](../docs/benchmarks/3d-js-overhead-2026-10-06.json) e
+[3d-profile](../docs/benchmarks/3d-profile-2026-10-06.json)):
+
+| Operação | Custo |
+|---|---|
+| `Matrix4` multiply em C (VU0 macro) | 0,35 µs |
+| Euler → quaternion em C | 2,7 µs |
+| Escrita em `Float32Array` no JS | ~2,4 µs |
+| Travessia JS→C de um setter | ~7–9 µs |
+| `node.setRotationEuler()` a partir do JS | 12,2 µs |
+| Draw de um objeto 3D em C (grid agrupado) | ~13–15 µs |
+| `Math.sin()` no JS | 23,5 µs |
+| Objeto JS com 10 propriedades | ~112 µs |
+
+**Regra:** o JS descreve (cria, configura, reage a eventos, orquestra cenas e
+menus); o C executa tudo que se repete por objeto e por quadro, em sistemas
+nativos do Loop como `Scene3D.attachLoop()`. Setters em lote só ajudam quando
+os dados já estão em `Float32Array`; valores calculados no script a cada
+quadro custam o mesmo que a chamada economizada.
+
+**Já nativo e assim permanece:** física (Box2D, Collision), Camera2D com
+follow, avanço de clipes de Sprite, Noise/Random, Matrix4/Vector/Quaternion,
+pipeline 3D, assets, áudio e vídeo. Ficam em JS: `scene` (ciclo de vida),
+lógica de jogo e eventos, menus e Debug.
+
+**Responsabilidades a mover para C, nesta ordem:**
+
+1. **Movimento nativo no Scene3D** — velocidade linear e giro por nó
+   integrados em `advance(dt)` pelo sistema do Loop; o JS configura uma vez.
+2. **Animation3D** — clipes de keyframes TRS amostrados em C; `play()/stop()`
+   no JS. Base do skinning.
+3. **Controllers de Camera3D** — follow, órbita, suavização.
+4. **Tween nativo para alvos nativos** (Node, Instance, Sprite, Camera; cor) e
+   curvas de `ease` em C; o Tween JS segue para objetos JS.
+5. **Particles2D/3D** nascendo nativas.
+6. **Vínculo física → Node/Sprite** sem laço JS sobre `readTransforms()`.
+
+**VU1 (OpenVCL), por valor:**
+
+1. **Sprites rotacionados e partículas em lote** — o EE envia centro,
+   meia extensão rotacionada e cor; o VU1 gera o quad. Feito para partículas
+   (`draw_2D_particles.vcl`); sprites sem rotação não ganham (ver Estado).
+2. **Skinning** de Animation3D — palette de ossos na memória do VU1.
+3. **Partículas/billboards** — uma posição/tamanho/cor por partícula.
+4. **Recorte no VU1** — guard band do GS e recorte só no near plane; hoje o
+   recorte em C domina `clip-batch` (2,3 ms contra 0,68 ms contido). Protótipo
+   medido antes de substituir o C.
+5. **Iluminação estendida** — pontuais, especular, fog e luz por vértice em
+   objetos recortados.
+6. **Terrain3D** — grade de alturas expandida no VU1.
+7. **Texto e Debug3D em lote** — mesmo esquema dos sprites.
+
+**VU0 (macro):** teste AABB × frustum (5,9 µs por objeto/nó), `shade_prepare`
+e composição TRS/quaternion — ganhos pequenos por chamada, presentes em todo
+objeto de todo quadro.
+
+**Estado:**
+
+- **Item 1 — feito (Scene3D 1.1).** `Node.setVelocity()`/`setSpin()` e
+  `Scene.advance(dt)`; o sistema do Loop chama `advance(dt)` antes de
+  `update()`. Grid de 64 cubos girando: update JS 1151→622 µs (−46%, 9% acima
+  do C); em C 677→573 µs. O restante é `Scene3D.update()` (~500 µs para 64
+  nós: TRS, matriz mundial e bounds), próximo alvo de otimização/VU0.
+  [Medição](../docs/benchmarks/3d-native-motion-2026-10-06.json).
+- **Item 2 — feito (Animation3D 1.0).** Clipes de keyframes position/rotation/
+  scale (linear ou step) amostrados em C, players com play/pause/stop, time,
+  speed e loop, e um sistema de Loop do módulo antes do Scene3D. Rotação com
+  arco pré-calculado por segmento (slerp genérico: 6 µs por player; agora
+  1,7 µs). 64 cubos animados por clipe: update JS 1148→660 µs; C 610 µs, abaixo
+  do `set_euler` por cubo (678 µs). [Documentação](../docs/3D_ANIMATION.md),
+  [medição](../docs/benchmarks/3d-animation-2026-10-06.json). Pendentes no
+  módulo: import glTF, eventos, blending e skinning.
+- **Scene3D.update() otimizado.** TRS com a rotação unitária guardada (sem
+  normalizar com 9 divisões por nó) e AABB da malha guardada no nó: update
+  −26% a −32% em C e −15% a −29% em JS em todas as etapas Scene3D
+  (`scene-lit-clip` C 610→428 µs). [Medição](../docs/benchmarks/3d-scene-update-2026-10-06.json).
+- **Item 3 — feito (CameraRig3D 1.0).** `Follow` (offset local ou de mundo,
+  mira com offset) e `Orbit` (yaw/pitch/distância com limites, `rotate`,
+  `zoom`, auto-rotação), suavização exponencial e um sistema de Loop após o
+  Scene3D. Camera3D ganha `athena_camera3d_set_view()` e handles JS com
+  contagem de referência (o rig mantém a câmera viva). Follow em JS 43 µs →
+  `rig.update()` 12,3 µs; com `attachLoop()`, zero chamadas JS.
+  [Documentação](../docs/3D_CAMERA_RIG.md),
+  [medição](../docs/benchmarks/3d-camera-rig-2026-10-06.json).
+- **Item 4 — feito (Tween3D 1.0).** Tweens de Node, Instance e Camera em C
+  (posição, escala, rotação por slerp, olho/mira), curvas do Ease em C
+  (`ease_curves.c`, reutilizáveis), delay, repeat, yoyo, overwrite e handles
+  aguardáveis. 64 cubos em yoyo: Tween JS + `setPosition` 8,0 ms por quadro →
+  Tween3D 0,11 ms (73×). [Documentação](../docs/3D_TWEEN.md),
+  [medição](../docs/benchmarks/3d-tween3d-2026-10-06.json).
+- **Item 5 (2D) e primeiro programa VU1 novo — feitos (Particles2D 1.0).**
+  Emissores nativos (pool, rate/burst, gravidade, arrasto, tamanho/cor ao longo
+  da vida, rotação/giro) desenhados por `vu1/draw_2D_particles.vcl`: 2 qwords
+  por partícula e o VU1 monta o quad rotacionado pela view 2D. Desenho por
+  partícula: 0,99→0,69 µs sem rotação e 3,50→1,07 µs com rotação; simulação
+  0,27 µs. JS puro: 300 partículas = 21 ms/quadro.
+  [Documentação](../docs/PARTICLES2D.md),
+  [medição](../docs/benchmarks/particles2d-2026-10-06.json).
+- **Correção da lista VU1:** sprites sem rotação pelo VU1 não reduzem o
+  trabalho do EE (o caminho atual já envia 3 qwords por sprite; o programa do
+  TileMap recebe 4). O VU1 compensa onde o EE calcula por sprite: rotação,
+  escala e cor ao longo da vida — o caso das partículas, e de sprites
+  rotacionados em lote, que podem reutilizar o mesmo programa.
+- **Particles3D 1.0 — feito.** Billboards no VU1 (`vu1/draw_3D_billboards.vcl`),
+  near/far no EE, depth test sem escrita. Update 0,29 µs e draw 0,79 µs por
+  partícula. [Medição](../docs/benchmarks/particles3d-2026-10-06.json).
+  [Documentação](../docs/PARTICLES3D.md). A divisão diagonal das faces vista
+  no perfil era o bug de culling corrigido abaixo.
+- **Bug de culling corrigido (Render3D VU1).** A divisão diagonal das faces
+  vista no perfil de partículas era backface culling quebrado em malhas com
+  mais de um triângulo: o OpenVCL reaproveitava o registrador do vértice
+  anterior (estado entre voltas do laço). Estado movido para a memória do VU e
+  kick só no terceiro vértice de cada triângulo. `CULL_BACK` agora iguala
+  `CULL_NONE` em cubos fechados; scene, lighting, textures, regression e clip
+  reconferidos em C/JS. Ver [3D.md](../docs/3D.md#backface-culling-em-malhas-corrigido-em-06102026).
+  Regressão ganhou a etapa 9 `closed-cull` (cubo fechado com `CULL_BACK`),
+  conferida em C/JS.
+- **Item 6 — resolvido sem módulo novo.** O caminho sem laço JS já existia
+  (`world.readTransforms()` + `Sprite.drawAll()`), só os formatos não
+  batiam (3 floats por corpo contra 2). `Sprite.drawAll(..., { stride: 3 })`
+  usa x, y e rotação, e `Scene3D.setTransforms2D()` aplica x, y e ângulo em Z
+  a nós 3D (mantendo z): física 2D chega ao desenho em duas chamadas nativas.
+  Física 3D continua dependendo do ODE desacoplado (trilha posterior).
+- **Import de cenas glTF — feito (GLTF3D 1.0).** Hierarquia de nós como
+  Scene3D (TRS ou matriz decomposta), cada primitiva como malha do Model3D
+  (conversão compartilhada com `Model3D.load()`), animações como clipes do
+  Animation3D (linear/step; cubic spline com os valores das keys).
+  `GLTF3D.load(path, material?)`. Conferido no PS2 com `bin/gltf3d_example.js`.
+  [Documentação](../docs/GLTF3D.md).
+- **Tempo de vida:** players do Animation3D e rigs do CameraRig3D ficam
+  ativos até `dispose()` mesmo sem variável que os segure (antes, um handle não
+  guardado era coletado e a câmera/animação parava em silêncio).
+- **Skinning em C — feito (B1).** Model3D 1.4 guarda juntas/pesos por vértice;
+  Render3D 1.7 ganha `athena_render3d_draw_view()` (streams do chamador);
+  Scene3D ganha `AthenaSkin3D` (juntas + binds inversos) e deforma posição e
+  normal na CPU a cada `draw()`, com a AABB deformada no teste de frustum;
+  GLTF3D importa skins. Teste host confere os 54 vértices da coluna de
+  `bend.glb` contra a fórmula nas poses de bind e dobrada; conferido no PS2.
+- **Skinning no VU1 — feito (B2).** `vu1/draw_3D_skinned.vcl` recebe a paleta
+  (até 24 juntas, 4 qwords cada) e lotes de 30 vértices com juntas/pesos V4_8;
+  o Scene3D usa uma AABB conservadora para mandar malhas contidas ao VU1 e
+  deixa as que cruzam o frustum na deformação em C com recorte. PCSX2: 5063 →
+  585 µs por coluna de 2334 vértices, 20,2 → 2,3 ms com quatro
+  (`docs/benchmarks/3d-skinning-2026-10-06.json`); imagens conferidas.
+  Lição: lotes precisam conter triângulos inteiros, porque o ciclo de kick
+  reinicia a cada chamada do programa.
+- **AABB × frustum no VU0 — feito.** `athena_camera3d_box_relation()` monta
+  os 8 cantos com um canto transformado mais colunas escaladas numa sequência
+  VU0 e não revalida a view_projection: 5,9 → 4,77 µs por chamada (−19%).
+  Testes de plano sem desvios (bits de sinal) não mudaram nada (4,74 µs) e
+  foram descartados (`docs/benchmarks/3d-box-relation-2026-10-06.json`).
+- **Morph targets — feito.** Model3D 1.4 guarda até 8 targets (deltas de
+  posição/normal); Scene3D guarda pesos por nó (`setWeights`), cresce os bounds
+  e mistura no EE no draw (normais por face refeitas); Animation3D aceita
+  trilhas `"weights"`; GLTF3D importa targets (inclusive esparsos), pesos e
+  canais. PCSX2: ~0,44 µs por vértice com 2 targets
+  (`docs/benchmarks/3d-morph-2026-10-06.json`); imagens conferidas.
+- **Collision3D 1.0 (Collision3D + Character3D da seção 8) — feito.** Antes
+  do ODE: o legado é C++ com OPCODE, o build de módulos só compila C, e jogos
+  de PS2 precisam sobretudo de colisão de fase e personagem. Triângulos
+  estáticos (`addNode` de cenas glTF, malhas, caixas) numa BVH SAH; raycast,
+  `raycastMany`, sphere cast e overlap com layers; personagens elipsoides com
+  collide-and-slide (Fauerby), gravidade, rampas até `maxSlope`, degraus por
+  arestas até `stepHeight`, snap ao descer, sem túnel, ligados a nós e
+  passados por um sistema do Loop. PCSX2, nível de 122 triângulos: 39 µs por
+  personagem (136 µs na primeira versão), raio 17 µs em C
+  (`docs/benchmarks/collision3d-2026-10-06.json`); imagens conferidas.
+  [Documentação](../docs/COLLISION3D.md).
+- **Physics3D 1.0 — feito (solver próprio sobre a BVH do Collision3D).**
+  Esferas e caixas dinâmicas/cinemáticas/estáticas; contatos com a fase
+  (triângulos do Collision3D) e entre corpos (SAT de 15 eixos nas caixas,
+  sort-and-sweep); impulsos sequenciais com atrito, restituição, resistência ao
+  rolamento, warm starting, contatos especulativos e sono por ilhas; corpos
+  ligados a nós e um sistema do Loop por mundo. PCSX2: 32 corpos 1,1 ms, 128
+  corpos 10,2 ms com a pilha ativa (`docs/benchmarks/physics3d-2026-10-06.json`);
+  imagens conferidas. [Documentação](../docs/PHYSICS3D.md).
+- **Guard band do GS — feito (primeira etapa do recorte no VU1).** Objetos
+  que cruzam só as bordas da tela vão ao VU1 (descarte de triângulos contra o
+  frustum alargado) e o scissor apara; o recorte em C fica para near/far e
+  para o que sai do guard band. `scene-many-nodes` 1573 → 1165 µs; etapa de
+  regressão 10 `edge-batch` sem recorte em C; ~0,6 µs a mais por objeto
+  contido (`docs/benchmarks/3d-guard-band-2026-10-06.json`). Bug do OpenVCL
+  (dois slots escrevendo o mesmo registrador) achado e coberto por
+  `tools/check_vsm_loops.py`.
+- **Recorte do near no VU1 — feito.** `vu1/draw_3D_near.vcl` recorta por
+  triângulo contra o near (polígono de 0/3/4 vértices, atributos em clip
+  space, culling, NLOOP emitido) para objetos cuja parte à frente cabe no
+  guard band e antes do far (teste exato no EE). `clip-batch` 2278 → 1087 µs,
+  `clip-individual` 2457 → 1274 µs, imagens iguais ao recorte em C
+  (`docs/benchmarks/3d-near-clip-2026-10-06.json`). O recorte em C fica só
+  para objetos que saem do guard band ou cruzam o far.
+- **Iluminação estendida — feito (luzes pontuais e neblina).** Quatro luzes
+  pontuais por vértice com atenuação (VU1 e C) e neblina por distância do GS
+  (`XYZF2`/`FOGCOL`) em todos os programas Render3D, via `Lights`. ~0,6 µs por
+  objeto com três luzes; imagens conferidas
+  (`docs/benchmarks/3d-point-lights-fog-2026-10-06.json`). Especular continua
+  fora: somado à cor por vértice serviria só sem textura (o MODULATE do GS
+  multiplica); com textura pediria um segundo passe aditivo.
+- **Juntas no Physics3D — feito.** Ball, hinge (limites, motor), distance/
+  corda e weld no mesmo solver, com ilhas e sem colisão entre corpos ligados.
+  Cena de 15 corpos e 14 juntas: ~0,6 ms por passo
+  (`docs/benchmarks/physics3d-joints-2026-10-06.json`). O weld media a
+  rotação relativa no mundo; agora no corpo b, com teste que a distingue.
+- **Cápsulas no Physics3D — feito.** Contatos pelos pontos mais próximos do
+  segmento contra esfera, cápsula, caixa e triângulos da fase; inércia exata;
+  rolamento. 32 corpos mistos em 1,3 ms por passo
+  (`docs/benchmarks/physics3d-capsules-2026-10-06.json`).
+- **Solver do Physics3D no VU0 — feito.** Um bloco VU0 por contato (três
+  linhas em registradores), após medir por fase (`world.profile`), alinhar as
+  linhas inline e tirar a resistência ao rolamento das iterações. Solver
+  3,6× mais rápido; 128 corpos 10,2 → 6,0 ms por passo; checagens no PS2 7/7
+  (`docs/benchmarks/physics3d-vu0-2026-10-06.json`). Colisão e preparação são
+  agora o maior custo.
+- **Morph targets no VU1 — feito.** `vu1/draw_3D_morph.vcl` mistura até 4
+  targets por triângulo (normais de face refeitas), com volta ao EE nos casos
+  que não cobre. Uma malha de 2304 vértices: custo do morph 1004 → 296 µs;
+  imagens iguais à mistura em C
+  (`docs/benchmarks/3d-morph-vu1-2026-10-06.json`).
+- **Roadmap da seção 7.4 concluído.** Ficam como melhorias futuras, guiadas
+  por perfil de jogos reais: colisão e preparação do Physics3D (as maiores
+  fases agora); o ODE desacoplado só se jogos precisarem de formas complexas
+  (cilindros, malhas dinâmicas); da lista VU1, Terrain3D e Debug3D em lote,
+  quando houver jogos que os peçam; especular (pede um segundo passe com
+  textura); e a validação em PS2 real, ainda só feita no PCSX2.
+
 ## 8. Novos módulos e extensões úteis
 
 | Proposta | Finalidade / JS eliminado | Prioridade e dependências |
 |---|---|---|
 | `Quaternion` | Normalização, composição, slerp e conversão TRS em C, sem expressar rotações de ossos em loops JS. | P0; base implementada no primeiro incremento. Integração com ossos depende de Animation3D. |
 | Extensão de `Matrix4` / `Vector` | TRS quaternion/Euler, lookAt, projection e transforms em lote com buffers; APIs de saída reutilizável. | P0; evita duplicar uma segunda biblioteca matemática. |
-| `Collision3D` | Consultas leves de AABB/esfera/cápsula, raycasts e índice espacial de meshes estáticas; alternativa selecionável para jogos que não precisam de rigid-body solver. | P1 após MVP. Estimar custo de manter backend próprio; não duplicar ODE sem ganho comprovado. |
-| `Character3D` | Cápsula cinemática, sweep-and-slide, chão, degrau, inclinação e salto. Evita integrar gravidade e resolver paredes em JS. | P1, depende de um contrato de consultas/sweeps implementado por Collision3D ou backend físico. Não assumir sweeps contínuos já disponíveis no ODE legado. |
+| `Collision3D` | Consultas leves de AABB/esfera/cápsula, raycasts e índice espacial de meshes estáticas; alternativa selecionável para jogos que não precisam de rigid-body solver. | **Feito** (módulo `collision3d`, BVH SAH, raycast/sphere cast/overlap). |
+| `Character3D` | Cápsula cinemática, sweep-and-slide, chão, degrau, inclinação e salto. Evita integrar gravidade e resolver paredes em JS. | **Feito** como `Collision3D.Character` (elipsoide, collide-and-slide próprio, sem ODE). |
 | Controllers de `Camera3D` | Follow, órbita, suavização, tremor e obstrução. Substitui cálculos por frame em JS. | P1; follow/orbit sem física, obstrução por adaptador de consultas. |
 | `Geometry3D` | Primitivas e preparação de normals, tangents, bounds e collision meshes em C. | P1, `model3d`; processamento offline preferível para assets fixos. |
 | `Particles3D` | Emissão, pools, integração, billboards e desenho em lotes; reutiliza math/random e transporte gráfico. | P2; medir ordenação de transparência e fill-rate, além do custo EE. |

@@ -22,13 +22,19 @@ INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/includ
     -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include \
     -Isrc/modules/collision/include -Isrc/runtime/quickjs/include \
     -Isrc/modules/vector/include -Isrc/modules/matrix4/include -Isrc/modules/quaternion/include \
-    -Isrc/modules/camera3d/include -Isrc/modules/model3d/include -Isrc/modules/lights/include -Isrc/modules/render3d/include -Isrc/modules/render3d/native -Isrc/modules/scene3d/include"
+    -Isrc/modules/camera3d/include -Isrc/modules/model3d/include -Isrc/modules/lights/include -Isrc/modules/render3d/include -Isrc/modules/render3d/native -Isrc/modules/scene3d/include -Isrc/modules/animation3d/include -Isrc/modules/camerarig3d/include -Isrc/modules/tween3d/include -Isrc/modules/particles2d/include -Isrc/modules/particles3d/include -Isrc/modules/gltf3d/include -Isrc/modules/collision3d/include -Isrc/modules/physics3d/include"
 THREE_D="src/modules/matrix4/native/matrix4.c src/modules/matrix4/quickjs/ath_matrix4.c \
     src/modules/quaternion/native/quaternion.c src/modules/quaternion/quickjs/ath_quaternion.c \
     src/modules/camera3d/native/camera3d.c src/modules/camera3d/quickjs/ath_camera3d.c \
     src/modules/lights/native/lights.c src/modules/lights/quickjs/ath_lights.c src/modules/render3d/native/render3d_shade.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c src/modules/model3d/quickjs/ath_model3d.c \
     src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c src/modules/render3d/quickjs/ath_render3d.c \
     src/modules/scene3d/native/scene3d.c src/modules/scene3d/quickjs/ath_scene3d.c \
+    src/modules/animation3d/native/animation3d.c src/modules/animation3d/quickjs/ath_animation3d.c \
+    src/modules/gltf3d/native/gltf3d.c src/modules/gltf3d/quickjs/ath_gltf3d.c \
+    src/modules/camerarig3d/native/camerarig3d.c src/modules/camerarig3d/quickjs/ath_camerarig3d.c \
+    src/modules/tween3d/native/tween3d.c src/modules/tween3d/native/ease_curves.c src/modules/tween3d/quickjs/ath_tween3d.c \
+    src/modules/collision3d/native/collision3d.c src/modules/collision3d/native/character3d.c src/modules/collision3d/quickjs/ath_collision3d.c \
+    src/modules/physics3d/native/physics3d.c src/modules/physics3d/native/joint3d.c src/modules/physics3d/quickjs/ath_physics3d.c \
     tests/host/render3d_host.c"
 # Camera2D and the math of the 2D view, with the C side of Loop systems; the
 # GS side of the view (clip rectangle) is stubbed in runner.c.
@@ -38,7 +44,9 @@ CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camer
 # Sprite, over the Image and TileMap stand-ins of tests/js/sprite_host.c.
 SPRITE="src/modules/sprite/native/sprite.c src/modules/sprite/native/sprite_gs.c \
     src/modules/sprite/native/sprite_job.c \
-    src/modules/sprite/quickjs/ath_sprite.c tests/js/sprite_host.c"
+    src/modules/sprite/quickjs/ath_sprite.c tests/js/sprite_host.c \
+    src/modules/particles2d/native/particles2d.c src/modules/particles2d/quickjs/ath_particles2d.c \
+    src/modules/particles3d/native/particles3d.c src/modules/particles3d/quickjs/ath_particles3d.c"
 # Collision; its debug drawing goes to the Draw stubs of runner.c.
 COLLISION="src/modules/collision/native/collision.c src/modules/collision/native/collision_gs.c \
     src/modules/collision/quickjs/ath_collision.c"
@@ -134,6 +142,22 @@ echo "== tests/textures3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/textures3d_test.js "3D texture tests passed"
 echo "== tests/scene3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/scene3d_test.js "Scene3D tests passed"
+echo "== tests/animation3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/animation3d_test.js "Animation3D tests passed"
+echo "== tests/gltf3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/gltf3d_test.js "glTF3D tests passed"
+echo "== tests/camerarig3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/camerarig3d_test.js "CameraRig3D tests passed"
+echo "== tests/tween3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/tween3d_test.js "Tween3D tests passed"
+echo "== tests/collision3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/collision3d_test.js "Collision3D tests passed"
+echo "== tests/physics3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/physics3d_test.js "Physics3D tests passed"
+echo "== tests/particles2d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/particles2d_test.js "Particles2D tests passed"
+echo "== tests/particles3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/particles3d_test.js "Particles3D tests passed"
 # The summaries come from promise callbacks: check the printed result too.
 # Ease and Tween are JavaScript modules, loaded from their sources.
 echo "== tests/tween_test.js"

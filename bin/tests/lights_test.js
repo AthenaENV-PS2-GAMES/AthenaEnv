@@ -62,5 +62,19 @@ const clipMesh = Model3D.Mesh.fromGeometry({positions:new Float32Array([-.1,-.1,
 const clip = clipMesh.createInstance(); clipMesh.dispose();
 const clipped = Render3D.draw(clip,clipCamera,0,lights);
 assert(clipped.clippedTriangles === 1 && clipped.triangles === 2 && clipped.geometryBytes === 160, "clipped diffuse uses pre-lit color payload");
+// Point lights and fog: validated, tracked by the revision, drawn with.
+const before = lights.revision;
+assert(lights.setPoint(0, 1, 2, 3, 1, .5, 0, 4) === lights && lights.revision > before, "setPoint");
+const same = lights.revision; lights.setPoint(0, 1, 2, 3, 1, .5, 0, 4);
+assert(lights.revision === same, "unchanged point light keeps the revision");
+for (const bad of [[4,0,0,0,1,1,1,1], [0,0,0,0,1,1,1,0], [0,0,0,0,2,1,1,1], [0,NaN,0,0,1,1,1,1]])
+    throws(() => lights.setPoint(...bad), "invalid point light");
+assert(Lights.MAX_POINT === 4, "MAX_POINT");
+lights.disablePoint(0); throws(() => lights.disablePoint(4), "invalid point slot");
+assert(lights.setFog(5, 30, .1, .2, .3) === lights, "setFog");
+for (const bad of [[10, 5, 0, 0, 0], [-1, 5, 0, 0, 0], [0, 5, 2, 0, 0]]) throws(() => lights.setFog(...bad), "invalid fog");
+lights.setPoint(1, 0, 0, -1, 1, 1, 1, 10);
+assert(Render3D.draw(clip, clipCamera, 0, lights).triangles >= 1, "draw with point lights and fog");
+lights.disableFog().disablePoint(1);
 clip.dispose(); clipCamera.dispose(); batch.dispose(); camera.dispose(); lights.dispose(); std.gc();
 console.log("3D lighting tests passed (" + checks + " checks)");

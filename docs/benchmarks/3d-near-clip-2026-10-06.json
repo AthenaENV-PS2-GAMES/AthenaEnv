@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "scripts": ["samples/native/3d_regression (athena_3d_regression_native.elf)", "samples/native/3d_lighting", "samples/native/3d_textures"],
+  "change": "Recorte do plano near no VU1 (vu1/draw_3D_near.vcl): objetos cuja parte à frente da câmera fica dentro do guard band e antes do far (teste exato no EE com os cantos e as arestas que cruzam o near) vão ao VU1, que transforma, ilumina e recorta cada triângulo contra z <= w (0, 1 ou 2 triângulos, atributos interpolados em clip space), com culling de face e NLOOP igual aos vértices emitidos. Lotes de até 24 vértices. Um programa para cor, difuso e textura (CLIPFAN.x = escala de cor).",
+  "findings": [
+    "clip-batch (64 triângulos cruzando o near): 2278.2 us no recorte em C -> 1087.2 us (-52%); clip-individual 2457.0 -> 1274.3 us (-48%); 0 triângulos recortados em C.",
+    "Imagens iguais às do recorte em C: regressão (etapas 6 e 8), lighting clip-sweep (cubos difusos e triângulo de cores) e textures clip-sweep (texturas com perspectiva).",
+    "Etapas contidas inalteradas em relação ao guard band (inside-batch 661.2 -> 663.3 us).",
+    "As estatísticas contam os triângulos de entrada desses objetos (a saída do VU1 não volta ao EE); nearClipObjects conta os objetos."
+  ],
+  "regression_native_drawTicksMean": {
+    "clip-batch": {"c_clipper": 2278.167, "guard_band_build": 2342.425, "vu1_near": 1087.15},
+    "clip-individual": {"c_clipper": 2457.0, "guard_band_build": 2529.925, "vu1_near": 1274.292},
+    "inside-batch": {"c_clipper": 641.942, "guard_band_build": 661.167, "vu1_near": 663.317},
+    "edge-batch": {"guard_band_build": 727.7, "vu1_near": 730.975}
+  }
+}

@@ -29,8 +29,9 @@
 
 AthenaEnv runs modern JavaScript on the PlayStation 2. Scripts are executed by
 a PS2-tuned build of [QuickJS](https://bellard.org/quickjs/) and reach the
-hardware through native modules: GS rendering, VU1-accelerated tilemaps, IPU
-video decoding, SPU2 audio, controllers, storage, threads and physics.
+hardware through native modules: GS rendering, VU1-accelerated tilemaps, 3D
+and particles, IPU video decoding, SPU2 audio, controllers, storage, threads
+and physics.
 
 Every feature is a **module** that can be left out of the build. A game ships
 only what it uses, so the binary and its RAM footprint stay small. The same
@@ -46,6 +47,13 @@ Highlights:
   threads without stalling the frame.
 - **Memory card saves**: JSON saves that survive a pulled card, awaitable
   without dropping frames, and `icon.sys` generation for the PS2 browser.
+- **3D**: VU1 transform and diffuse lighting, native clipping, glTF/OBJ
+  models with textures, a scene graph with hierarchical culling, keyframe
+  animation, skinned meshes deformed on VU1, morph targets, level collision,
+  walking characters and rigid bodies, camera controllers and tweens
+  advanced in C, and billboard particles built on VU1.
+- **Particles**: 2D and 3D emitters simulated in C and expanded into quads by
+  VU1 programs; thousands per frame.
 - **Box2D 3.2 physics** with a debug renderer.
 - **MPEG-1/2 video** decoded by the IPU and usable as a texture.
 - **Up to eight players**: PS2 pads, multitaps, DualShock 3/4 over USB and
@@ -286,6 +294,7 @@ tables below.
 | [`camera2d`](src/modules/camera2d/camera2d.d.ts) | `Camera2D` | 2D cameras applied in C to `Draw`, `Image`, `Font` and `TileMap`: position, zoom, rotation and viewport (split screen); follow with smoothing, dead zone, lookahead and auto zoom; bounds, rooms, shake, parallax, culling, timed zoom and pan, fades, flashes, letterbox and transitions between cameras. |
 | [`sprite`](src/modules/sprite/sprite.d.ts) | `Sprite` | Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed frames and tags) and animation clips (fps or per-frame durations, loop, once and pingpong, frame events), animated sprites with origin, scale, rotation and flip, and batch animation of `TileMap` sprites, all advanced in C by the `Loop`. |
 | [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. See [docs/VIDEO.md](docs/VIDEO.md). |
+| [`particles2d`](src/modules/particles2d/particles2d.d.ts) | `Particles2D` | Particle emitters simulated in C (pool, rate and bursts, gravity, drag, size and color over life, rotation and spin) and drawn by a VU1 program that builds each rotated quad through the 2D camera. Not in the default build; see [docs/PARTICLES2D.md](docs/PARTICLES2D.md). |
 | `graphics` | — | GS initialization and the rendering core shared by the modules above. |
 
 ```js
@@ -375,12 +384,108 @@ are drawn turned back; clips can take a grid row (`{ row: 2, fps: 8 }`);
 `inset: 0.5` on a sheet stops filtering from showing neighbor frames. `bin/tests/sprite_example.js` shows the API;
 `bin/tests/sprite_bench.js` compares it with animation written in JavaScript.
 
+Particle effects need no per-particle JavaScript: an emitter is configured
+once, moved, and drawn with one call. 2000 particles cost about 1.7 ms per
+frame on the PS2; the same effect written in JavaScript costs 21 ms for 300.
+
+```js
+const sparks = new Particles2D.Emitter(new Image("spark.png"), {
+    capacity: 800, rate: 400, life: [.6, 1.2], speed: [80, 160],
+    angle: -Math.PI / 2, spread: 1, gravity: [0, 200], size: [10, 2],
+    color: [Color.new(255, 220, 120, 128), Color.new(255, 40, 0, 0)], spin: [-4, 4],
+});
+Particles2D.attachLoop();
+Loop.run({
+    update() { sparks.setPosition(player.x, player.y); },
+    draw() { sparks.draw(); },
+});
+```
+
 `image.drawList()` takes the sprite records of `TileMap.SpriteBuffer` (x, y,
 w, h, u1, v1, u2, v2, r, g, b, a): the texture state goes out once per 128
 sprites instead of once per `draw()`, for particles, bullets and tiles that
 change every frame. Fonts share glyph caches between equal loads (same file
 and size); at most 16 different ones are loaded at a time, so `free()` the
 ones no longer used.
+
+### 3D
+
+Not in the default build: `node tools/modules.js configure --modules=scene3d,...`
+(dependencies such as `render3d`, `model3d` and `camera3d` come with it). The
+screen needs a depth buffer: `mode.zbuffering = true` before `Screen.setMode()`.
+
+| Module | Global | Description |
+|---|---|---|
+| [`quaternion`](src/modules/quaternion/quaternion.d.ts) | `Quaternion` | Rotations: axis-angle, Euler (`Rz·Ry·Rx`), multiply, slerp and TRS matrices. |
+| [`camera3d`](src/modules/camera3d/camera3d.d.ts) | `Camera3D` | Perspective cameras with reversed depth, look-at and frustum tests. |
+| [`model3d`](src/modules/model3d/model3d.d.ts) | `Model3D` | One mesh from glTF/GLB or OBJ, or geometry from typed arrays; materials (unlit, diffuse) and textures; instances with their own transform; bulk position/rotation setters. Whole scenes with animations: `GLTF3D`. |
+| [`lights`](src/modules/lights/lights.d.ts) | `Lights` | Ambient, up to four directional and four point lights (lit per vertex on VU1, with distance falloff), and distance fog applied by the GS. |
+| [`render3d`](src/modules/render3d/render3d.d.ts) | `Render3D` | Opaque rendering on VU1: color, Gouraud diffuse and perspective-correct textures, culling, objects crossing the screen edges drawn on VU1 inside the GS guard band, near-plane clipping on VU1 for objects crossing the camera, clipping in C for the rest, and batches that share one GS/VU1 pass per pipeline. See [docs/3D.md](docs/3D.md). |
+| [`gltf3d`](src/modules/gltf3d/gltf3d.d.ts) | `GLTF3D` | glTF/GLB scenes: node hierarchy as Scene3D nodes, every primitive as a mesh, animations as Animation3D clips, skinned meshes deformed by their joints (on VU1 with a bone palette of up to 24 joints when the mesh is fully on screen, in C with clipping otherwise), and morph targets blended by animated or scripted weights (on VU1 for up to four active targets). See [docs/GLTF3D.md](docs/GLTF3D.md). |
+| [`scene3d`](src/modules/scene3d/scene3d.d.ts) | `Scene3D` | Scene graph: hierarchy with dirty propagation, subtree bounds culling, a render queue sorted by pipeline, native motion (velocity and spin), skins and morph weights, and an update system on the Loop. See [docs/3D_SCENE.md](docs/3D_SCENE.md). |
+| [`particles3d`](src/modules/particles3d/particles3d.d.ts) | `Particles3D` | Billboard particles: emitters in C, quads built and projected by VU1, depth tested against the scene without writing depth. See [docs/PARTICLES3D.md](docs/PARTICLES3D.md). |
+
+Animation and cameras for 3D objects are listed under [Animation](#animation):
+`Animation3D`, `CameraRig3D` and `Tween3D`.
+
+```js
+const mode = Screen.getMode();
+mode.zbuffering = true; mode.psmz = Screen.Z16S; Screen.setMode(mode);
+const camera = new Camera3D.Camera({ aspect: mode.width / mode.height, near: 1, far: 100 });
+const lights = new Lights.Set().setAmbient(.3, .3, .3).setDirectional(0, .4, .6, 1, .8, .8, .8);
+const crate = Model3D.load("models/crate.glb", { shading: Model3D.DIFFUSE });
+
+const scene = new Scene3D.Scene(), root = scene.root;
+const box = new Scene3D.Node(crate).setPosition(0, 0, -5).setSpin(0, 1.5, 0); // turns in C
+root.add(box); root.dispose();
+
+scene.attachLoop();                                   // advance + update every frame
+CameraRig3D.attachLoop();
+new CameraRig3D.Orbit(camera, box).setAngles(0, .3).setSharpness(6, 6);
+Tween3D.attachLoop();
+Tween3D.to(box, { scale: [1.5, 1.5, 1.5] }, .8, { ease: "outBack", yoyo: true, repeat: Infinity });
+
+const stats = {};                                     // reused: no object per frame
+Loop.run({ draw() { scene.draw(camera, Render3D.CULL_BACK, lights, stats); } });
+```
+
+Players, camera rigs and tweens act by themselves in native systems, so they
+stay active until `dispose()` (or, for tweens, until they end), even when no
+variable holds them; a script that ends releases what it created.
+
+Systems run in this order within a frame: `Tween3D` (pre-update), then
+`Animation3D`, `Scene3D` (advance and update) and `CameraRig3D` (post-update),
+so cameras read world transforms of the same frame. `Render3D.Batch` draws
+`Model3D.Instance` lists without a scene graph. Performance notes and
+measurements on PCSX2 are in [docs/3D.md](docs/3D.md) and
+`docs/benchmarks/`; `bin/3d_profile.js` and `bin/3d_regression.js` (and their
+native counterparts in `samples/native/`) reproduce them.
+
+### JavaScript or native?
+
+QuickJS on the EE is an interpreter: a call from JavaScript into C costs
+about 7–9 µs, `Math.sin()` about 23 µs, and creating an object with ten
+properties about 110 µs, while the C side transforms a vertex batch or a
+quaternion in a few microseconds. Measured on PCSX2:
+
+| Work per frame | In JavaScript | In C |
+|---|---|---|
+| 64 bobbing cubes with tweens | 8.0 ms (`Tween` + one setter each) | 0.11 ms (`Tween3D`) |
+| 64 spinning nodes | 0.97 ms (`setRotationEuler` each) | 0.44 ms (`setSpin` once) |
+| Follow camera | 43 µs | 12 µs (`rig.update()`), 0 with `attachLoop()` |
+| 300 particles | 21 ms | 0.3 ms (`Particles2D`) |
+
+So: describe in JavaScript (create, configure, react to events, run menus and
+scenes) and let C do what repeats for every object every frame. Prefer native
+systems (`attachLoop()`), batches (`Render3D.Batch`, `Scene3D`) and reusable
+result objects (`draw(..., stats)`, `update(stats)`). Bulk setters
+(`Scene3D.setPositions()`) help when the values are already in a
+`Float32Array` (physics output, precomputed animation); filling one per frame
+in JavaScript costs as much as the calls it saves.
+
+Inside C, VU1 is the next step: a skinned mesh of 2334 vertices costs 5.1 ms
+per frame deformed on the EE and 0.59 ms with its bone palette on VU1
+([measurement](docs/benchmarks/3d-skinning-2026-10-06.json)).
 
 ### Input
 
@@ -451,6 +556,15 @@ Loop.run(dt => {                                      // tweens advance by thems
 and `realTime: true` keeps menu animations running while
 `Loop.setTimeScale(0)` pauses the game.
 
+For 3D objects, the native modules below animate in C with no JavaScript per
+frame (see [3D](#3d)):
+
+| Module | Global | Description |
+|---|---|---|
+| [`tween3d`](src/modules/tween3d/tween3d.d.ts) | `Tween3D` | `Tween` for `Scene3D.Node`, `Model3D.Instance` and `Camera3D.Camera`: position, scale, rotation (slerp) and camera target, with the `Ease` curves in C, delay, repeat, yoyo, overwrite and awaitable handles. See [docs/3D_TWEEN.md](docs/3D_TWEEN.md). |
+| [`animation3d`](src/modules/animation3d/animation3d.d.ts) | `Animation3D` | Keyframe clips (position, rotation, scale, morph weights; linear or step) sampled in C and played on Scene3D nodes. See [docs/3D_ANIMATION.md](docs/3D_ANIMATION.md). |
+| [`camerarig3d`](src/modules/camerarig3d/camerarig3d.d.ts) | `CameraRig3D` | Follow and orbit controllers for `Camera3D` with limits, input deltas, auto-rotation and frame-rate independent smoothing. See [docs/3D_CAMERA_RIG.md](docs/3D_CAMERA_RIG.md). |
+
 ### Game structure
 
 Not in the default build: `node tools/modules.js configure --modules=scene,...`
@@ -498,12 +612,30 @@ VRAM leaks), and `Scene.Assets.define()` adds asset kinds.
 | Module | Global | Description |
 |---|---|---|
 | [`collision`](src/modules/collision/collision.d.ts) | `Collision` | Light collision and simple physics in C: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce, moving platforms that carry riders, layers and masks, queries, pairs and raycasts. |
+| [`collision3d`](src/modules/collision3d/collision3d.d.ts) | `Collision3D` | Light 3D collision in C: static triangles of level meshes, glTF scenes and boxes in a BVH; raycasts (also many per call), sphere casts and overlaps with layers; kinematic characters that walk with collide-and-slide (gravity, walkable slopes, steps, ground snapping, no tunneling) and drive a Scene3D node from one Loop system. Not in the default build; see [docs/COLLISION3D.md](docs/COLLISION3D.md). |
+| [`physics3d`](src/modules/physics3d/physics3d.d.ts) | `Physics3D` | 3D rigid bodies in C: dynamic, kinematic and static spheres, boxes and capsules with friction, restitution, rolling resistance, warm starting and island sleeping, against each other and the static level of a `Collision3D` world; ball, hinge (limits, motor), distance/rope and weld joints; bodies drive Scene3D nodes, each world steps in the Loop. Not in the default build; see [docs/PHYSICS3D.md](docs/PHYSICS3D.md). |
 | [`box2d`](src/modules/box2d/box2d.d.ts) | `Box2D` | Box2D 3.2: worlds, bodies, five shape types, chains, seven joint types, ray and shape casts, overlap queries, character movers, events and snapshots. Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md). |
 | [`box2ddraw`](src/modules/box2ddraw/box2ddraw.d.ts) | `Box2DDraw` | Debug drawing of a Box2D world. Not in the default build. |
 
 `Collision` is for platformers, top-down games and shooters that want
 predictable, tile-friendly movement; Box2D is for rigid bodies, joints and
 polygons. Worlds step themselves with the Loop, before the game's `update`.
+
+Physics objects reach the screen without a loop over bodies in JavaScript:
+`world.readTransforms()` writes x, y and angle per body into a
+`Float32Array`, which `Sprite.drawAll()` (with `{ stride: 3 }`) and
+`Scene3D.setTransforms2D()` take as it is:
+
+```js
+const transforms = new Float32Array(bodies.length * 3);
+Loop.run({
+    draw() {
+        world.readTransforms(bodies, transforms);                 // x, y, angle
+        Sprite.drawAll(crates, transforms, { stride: 3 });        // 2D sprites, rotated
+        // or, for a 2.5D game: Scene3D.setTransforms2D(nodes, transforms);
+    },
+});
+```
 
 ```js
 const SOLID = 1, PLAYER = 2, COIN = 4;
@@ -813,7 +945,8 @@ removal, so it is off by default.
 | Command | What it runs |
 |---|---|
 | `docker compose run --rm host-tests` | C tests of the runtime and modules on the build machine (`tests/host/`). |
-| `docker compose run --rm js-tests` | Module test scripts under AddressSanitizer (`tests/js/`). |
+| `docker compose run --rm js-tests` | Module test scripts under AddressSanitizer (`tests/js/`), plus the 3D and particle C tests (`tests/host/run_3d.sh`). |
+| `sh tools/build_3d.sh` (in the build image) | 3D sample ELFs and profiles; then the host tests. |
 
 JavaScript modules (`src/modules/<name>/js/`) are loaded directly from their
 source by the test runner (`tests/js/runner.c`), using a JavaScript stub for

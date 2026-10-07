@@ -26,14 +26,27 @@ typedef struct {
     const float *normals; uint32_t normal_count;
     const AthenaMaterial3D *material;
     const float *texcoords; uint32_t texcoord_count;
+    /* Optional skin: four joint indices (< ATHENA_MODEL3D_MAX_JOINTS) and four
+     * weights per vertex; weights are finite, >= 0, with a positive sum, and
+     * are normalized to sum 1. skin_count is vertex_count when present. */
+    const uint16_t *joints; const float *weights; uint32_t skin_count;
+    /* Optional morph targets: target_count blocks of vertex_count xyz
+     * position deltas (target t at t*vertex_count*3), and optionally normal
+     * deltas in the same layout (only with normals). A drawn vertex is
+     * base + sum(weight[t] * delta[t]); normals are renormalized. */
+    const float *target_positions,*target_normals; uint32_t target_count;
 } AthenaGeometry3D;
+#define ATHENA_MODEL3D_MAX_JOINTS 256u
+#define ATHENA_MODEL3D_MAX_TARGETS 8u
 typedef enum {
     ATHENA_GEOMETRY3D_VALID=0, ATHENA_GEOMETRY3D_VERTEX_COUNT,
     ATHENA_GEOMETRY3D_COLOR_COUNT, ATHENA_GEOMETRY3D_INDEX_COUNT,
     ATHENA_GEOMETRY3D_TRIANGLE_COUNT, ATHENA_GEOMETRY3D_POSITION,
     ATHENA_GEOMETRY3D_COLOR, ATHENA_GEOMETRY3D_INDEX,
     ATHENA_GEOMETRY3D_NORMAL_COUNT, ATHENA_GEOMETRY3D_NORMAL, ATHENA_GEOMETRY3D_MATERIAL,
-    ATHENA_GEOMETRY3D_TEXCOORD_COUNT, ATHENA_GEOMETRY3D_TEXCOORD
+    ATHENA_GEOMETRY3D_TEXCOORD_COUNT, ATHENA_GEOMETRY3D_TEXCOORD,
+    ATHENA_GEOMETRY3D_SKIN_COUNT, ATHENA_GEOMETRY3D_SKIN,
+    ATHENA_GEOMETRY3D_TARGET_COUNT, ATHENA_GEOMETRY3D_TARGET
 } AthenaGeometry3DIssue;
 /* Optional diagnostic: component offset for positions/colors/normals, index offset for
  * indices. Validation performs no allocations and leaves inputs unchanged. */
@@ -51,6 +64,20 @@ typedef struct {
     const AthenaPosition3D *normals;
     AthenaMaterial3D material;
     const AthenaTexcoord3D *texcoords;
+    /* Skinned meshes: four joint indices and four weights (sum 1) per vertex;
+     * NULL otherwise. joint_count is the highest joint index + 1. */
+    const uint8_t *joints; const float *weights; uint32_t joint_count;
+    /* The weights quantized to 0..255 with an exact sum of 255, for VU1. */
+    const uint8_t *weights8;
+    /* Morph targets, expanded like the positions (target t at
+     * t*vertex_count); target_normals is NULL when the file had none.
+     * target_minimum/maximum bound each target's position deltas. When
+     * flat_normals is set the normals were generated per face and a morphed
+     * draw generates them again from the morphed triangles. */
+    uint32_t target_count;
+    const AthenaPosition3D *target_positions,*target_normals;
+    const float (*target_minimum)[3],(*target_maximum)[3];
+    int flat_normals;
 } AthenaMesh3DView;
 int athena_mesh3d_create(const AthenaGeometry3D *geometry,AthenaMesh3D **out);
 int athena_mesh3d_load(const char *path,AthenaMesh3D **out);
@@ -63,6 +90,8 @@ const char *athena_model3d_error(int result);
 void athena_mesh3d_retain(AthenaMesh3D *mesh);
 void athena_mesh3d_release(AthenaMesh3D *mesh);
 void athena_mesh3d_view(const AthenaMesh3D *mesh,AthenaMesh3DView *out);
+/* Morph targets of the mesh (0 without), without copying a view. */
+uint32_t athena_mesh3d_target_count(const AthenaMesh3D *mesh);
 AthenaInstance3D *athena_instance3d_create(AthenaMesh3D *mesh);
 void athena_instance3d_retain(AthenaInstance3D *instance);
 void athena_instance3d_release(AthenaInstance3D *instance);
@@ -72,6 +101,8 @@ int athena_instance3d_set_rotation(AthenaInstance3D *instance,float x,float y,fl
 /* Radians, local XYZ rotations, composed Rz * Ry * Rx. */
 int athena_instance3d_set_euler(AthenaInstance3D *instance,float x,float y,float z);
 void athena_instance3d_get_position(const AthenaInstance3D *instance,AthenaVector4 *out);
+/* Local TRS as set (rotation normalized). */
+void athena_instance3d_get_trs(const AthenaInstance3D *instance,float position[3],AthenaQuaternion *rotation,float scale[3]);
 const AthenaMatrix4 *athena_instance3d_transform(AthenaInstance3D *instance);
 const AthenaMesh3D *athena_instance3d_mesh(const AthenaInstance3D *instance);
 #endif

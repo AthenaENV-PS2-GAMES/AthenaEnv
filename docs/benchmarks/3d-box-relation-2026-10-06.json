@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "samples/native/3d_profile (athena_3d_profile_native.elf), 3D_PROFILE_MICRO, 2000 chamadas",
+  "change": "athena_camera3d_box_relation(): os 8 cantos saem de um canto transformado mais as colunas da matriz escaladas pelo tamanho da caixa, numa única sequência VU0 (macro mode), em vez de 8 chamadas ath_matrix4_apply; a view_projection, já validada por athena_camera3d_update(), não é mais testada a cada chamada.",
+  "findings": [
+    "boxRelationInsideUs 5.899 -> 4.769 e boxRelationIntersectUs 5.897 -> 4.770 (-19%).",
+    "Estágios batch (64 instâncias, uma relação por instância): draw 824.5 -> 775.5 us (unlit) e 1263.4 -> 1214.7 us (lit).",
+    "Variante rejeitada: distâncias aos planos também no VU0 e testes por bits de sinal sem desvios no FPU: 4.738 us, ganho desprezível para o código extra; os testes de comparação nunca foram o custo.",
+    "Teste host: 20000 caixas e modelos aleatórios conferem com a referência de 8 transformações completas (no máximo 2 divergências por arredondamento junto a um plano)."
+  ],
+  "micro": {
+    "before": {"boxRelationInsideUs": 5.899, "boxRelationIntersectUs": 5.897},
+    "after": {"boxRelationInsideUs": 4.769, "boxRelationIntersectUs": 4.770},
+    "branchlessRejected": {"boxRelationInsideUs": 4.738, "boxRelationIntersectUs": 4.739}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "particles2d", "name": "Particles2D", "description": "Native 2D particle emitters: pooled emission (rate and bursts), gravity, drag, size/colour over life, rotation and spin, integrated in C and drawn by a VU1 program that builds each rotated quad through the 2D view; one Loop system for every emitter.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/particles2d.c", "native/particles2d_gs.c", "vu1/draw_2D_particles.vsm"],
+  "dependencies": {"modules": ["image", "graphics", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_particles2d.c"], "module_name": "Particles2D", "global_alias": "Particles2D", "init_func": "athena_particles2d_js_init", "cleanup_func": "athena_particles2d_js_cleanup"},
+  "types": "particles2d.d.ts"
+}

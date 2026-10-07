@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "scripts": ["samples/native/3d_regression (athena_3d_regression_native.elf)", "samples/native/3d_profile (athena_3d_profile_native.elf)", "bin/3d_regression.js"],
+  "change": "Guard band do GS: objetos que cruzam só as bordas da tela (AABB dentro do frustum alargado em x/y por guard = 0,9 x 2048 / meia tela, sem cruzar near/far) vão ao VU1 em vez do recorte em C; o scissor do GS apara. Os programas VU1 descartam triângulos contra o frustum alargado (1/guard em SCREEN_SCALE.w). Malhas skinned contidas no guard band também vão ao VU1. Nova etapa de regressão 10 edge-batch e estatística guardBandObjects.",
+  "findings": [
+    "edge-batch (64 triângulos cruzando as bordas esquerda/direita): 727.7 us, 64 objetos pelo guard band, 0 triângulos recortados em C; imagem com corte reto nas bordas (C e JS).",
+    "scene-many-nodes (perfil nativo, cena com objetos cruzando a tela): 1572.6 -> 1164.6 us de draw (-26%).",
+    "Custo para objetos inteiramente dentro: ~0,6 us por objeto (inside-batch 641.9 -> 661.2 us, cenas estáticas de 64 objetos +38 us), do trabalho extra por vértice no VU1 (mul antes do clipw e sua latência).",
+    "clip-batch/clip-individual atravessam o plano near: continuam no recorte em C, como esperado (+64/+73 us do teste extra).",
+    "Bug encontrado: o OpenVCL agendou mulw.xy e move.zw no mesmo ciclo escrevendo o mesmo registrador; o VU1 mantém só o resultado do slot superior, então z/w vinham da cor anterior e triângulos com azul = 1 sumiam. Corrigido com um mul de largura total e (1/guard, 1/guard, 1, 1) montado antes do laço. tools/check_vsm_loops.py agora acusa esse padrão e registradores perdidos na volta do laço; roda em tests/host/run.sh."
+  ],
+  "regression_native_drawTicksMean": {
+    "inside-batch": [641.942, 661.167], "clip-batch": [2278.167, 2342.425],
+    "inside-individual": [819.675, 848.625], "clip-individual": [2457.0, 2529.925], "edge-batch": [null, 727.7]
+  },
+  "profile_native_drawUsMean": {
+    "batch-unlit-static": [773.5, 811.1], "scene-lit-static": [1022.0, 1059.9], "scene-many-nodes": [1572.6, 1164.6]
+  }
+}

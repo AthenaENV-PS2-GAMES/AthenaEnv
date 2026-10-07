@@ -5,7 +5,7 @@
 rejeitados, dirty flags, bounds por subárvore, culling hierárquico, fila de
 desenho ordenada por pipeline e sistema opcional do `Loop`. É um módulo
 opcional; `render3d` não depende dele. **Testes host C e QuickJS passam; as sete
-etapas C foram aceitas pelo usuário no PCSX2 em 05/10/2026 ([registro](validation/3d-scene-2026-10-05.json)); a execução QuickJS está pendente.**
+etapas foram aceitas pelo usuário em C e QuickJS no PCSX2 em 05/10/2026, com contadores iguais nos dois runtimes ([registro](validation/3d-scene-2026-10-05.json)).**
 
 ## Executar as cenas
 
@@ -53,6 +53,27 @@ Loop.run({
     draw() { scene.draw(camera, Render3D.CULL_BACK, lights); },
 });
 ```
+
+Skins (`athena_skin3d_create()` + `athena_node3d_set_skin()` em C; vindos de
+arquivos pelo `GLTF3D.load()`) deformam a malha do nó a cada `draw()` pelos
+nós-junta, no VU1 quando a malha está inteira no frustum e em C quando cruza
+um plano. Malhas com morph targets são misturadas pelos pesos do nó
+(`node.setWeights()`, ou trilhas `"weights"` do Animation3D) antes disso: veja
+[GLTF3D.md](GLTF3D.md).
+
+Movimento contínuo não precisa de JS por quadro: `node.setVelocity(x, y, z)`
+(unidades/s no espaço do pai) e `node.setSpin(x, y, z)` (rad/s nos eixos
+locais; direção é o eixo, comprimento a velocidade) são integrados em C por
+`scene.advance(dt)`, que `attachLoop()` chama com o dt do Loop antes de
+`update()`. Só os ramos com nós em movimento são visitados. Um grid de 64 cubos
+girando cai de ~1150 µs de update em JS (setter por cubo) para ~620 µs
+([medição](benchmarks/3d-native-motion-2026-10-06.json)).
+
+Para vários nós por quadro com dados já em `Float32Array`,
+`Scene3D.setPositions(nodes, values)` e `Scene3D.setRotationsEuler(nodes, values)`
+substituem um setter por nó; `scene.update(stats)` e `scene.draw(camera, cull,
+lights, stats)` reaproveitam o objeto de estatísticas. Custos em
+[3D.md](3D.md#custo-das-chamadas-js).
 
 C usa as mesmas operações: `athena_node3d_*`, `athena_scene3d_update()`,
 `athena_scene3d_draw()` e `athena_scene3d_attach_loop()`. Um jogo C com loop
@@ -110,7 +131,11 @@ próprio chama `athena_loop_systems_run()` ou `athena_scene3d_update()`.
 
 Scene3D × Batch com o mesmo grid: `samples/native/3d_profile` e o
 [primeiro perfil](benchmarks/3d-profile-2026-10-05.json), anterior à conversão
-para `float`.
+para `float`. O equivalente QuickJS é [bin/3d_profile.js](../bin/3d_profile.js)
+(`athena_3d_js.elf --cfg=3d_profile.ini`, com `models/lit_cube.glb`): mesmas
+sete etapas e grid, linhas `3D_PROFILE_JS` em unidades do `Timer` e
+micro-medições por chamada dos setters (`3D_PROFILE_JS_MICRO`). A diferença
+para as linhas `3D_PROFILE` do C é o custo do binding e do script.
 
 Após a conversão para `float`, Scene3D desenha 64 cubos difusos em ~1,13 ms
 contra ~1,41 ms do Batch, com imagem e contadores iguais; cenas C/JS aceitas

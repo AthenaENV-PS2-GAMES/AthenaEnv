@@ -56,6 +56,8 @@ progresso. A cena termina sozinha e imprime `3D regression complete`.
 | 6 | `clip-batch` | Coleção de 64 instâncias com um vértice por triângulo cruzando o plano próximo; parte visível preservada. |
 | 7 | `inside-individual` | Imagem e contadores de geometria iguais à etapa 5, desenhados individualmente. |
 | 8 | `clip-individual` | Imagem e contadores de geometria iguais à etapa 6, desenhados individualmente. |
+| 9 | `closed-cull` | Cubo fechado girando com `CULL_BACK`, uma cor por face: cada face visível aparece inteira e de uma cor. Acrescentada em 06/10/2026 depois da correção do culling nos programas VU1 ([3D.md](3D.md#backface-culling-em-malhas-corrigido-em-06102026)); as baselines das etapas 0–8 continuam comparáveis. |
+| 10 | `edge-batch` | 64 triângulos laranja metade dentro, metade fora das bordas esquerda e direita: cortados retos na borda da tela, sem recorte em C (`guardBandObjectsPerFrame` 64, `clippedTrianglesPerFrame` 0). Acrescentada em 06/10/2026 com o guard band ([3D.md](3D.md#guard-band-06102026)). |
 
 Quadrados e barra 2D permanecem visíveis em todas as etapas, verificando
 restauração do teste de profundidade. Face culling ocorre no VU1: contadores

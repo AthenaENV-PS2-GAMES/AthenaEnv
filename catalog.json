@@ -2,8 +2,31 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-06T01:20:04.841Z",
+  "generatedAt": "2026-10-07T02:09:26.401Z",
   "modules": [
+    {
+      "id": "animation3d",
+      "name": "Animation3D",
+      "description": "Keyframe clips (position, rotation slerp, scale; linear or step) sampled in native code and applied to Scene3D nodes by players advanced in one Loop system.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d",
+          "quaternion",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Animation3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
     {
       "id": "archive",
       "name": "Archive",
@@ -98,7 +121,7 @@
       "name": "Camera3D",
       "description": "Independent 3D cameras, validated right-handed projection, reusable matrix outputs and native frustum tests.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -109,6 +132,29 @@
         "ee_libs": []
       },
       "global_alias": "Camera3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "camerarig3d",
+      "name": "CameraRig3D",
+      "description": "Native Camera3D controllers: follow a Scene3D node with local or world offsets, orbit with limits, zoom and auto-rotation, frame-rate independent smoothing; advanced in one Loop system after the scene update.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "camera3d",
+          "scene3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "CameraRig3D",
       "api": {
         "native": true,
         "quickjs": true
@@ -152,6 +198,28 @@
         "ee_libs": []
       },
       "global_alias": "Collision",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "collision3d",
+      "name": "Collision3D",
+      "description": "Light 3D collision in C: static triangles of level meshes, glTF scenes and boxes in a bounding volume hierarchy, raycasts, sphere casts and overlaps with layers, and kinematic characters (an upright ellipsoid) that walk with collide-and-slide: gravity, walkable slopes, steps, ground snapping, no tunneling, driving a Scene3D node from one Loop system.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Collision3D",
       "api": {
         "native": true,
         "quickjs": true
@@ -322,6 +390,29 @@
       }
     },
     {
+      "id": "gltf3d",
+      "name": "GLTF3D",
+      "description": "glTF 2.0 / GLB scenes: node hierarchy as Scene3D nodes (TRS or decomposed matrices), every triangle primitive as a Model3D mesh, and animations as Animation3D clips that play on the loaded nodes.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "model3d",
+          "scene3d",
+          "animation3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "GLTF3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "graphics",
       "name": "Graphics",
       "description": "PS2 GS initialization, frame control, colors, and 2D primitives.",
@@ -398,7 +489,7 @@
       "name": "Image",
       "description": "Image loading, texture ownership, and textured drawing.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": true,
       "dependencies": {
@@ -552,7 +643,7 @@
       "name": "Model3D",
       "description": "Immutable meshes, copied materials, normals, UVs and retained opaque textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
       "category": "Graphics",
-      "version": "1.2.0",
+      "version": "1.4.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -635,6 +726,76 @@
       }
     },
     {
+      "id": "particles2d",
+      "name": "Particles2D",
+      "description": "Native 2D particle emitters: pooled emission (rate and bursts), gravity, drag, size/colour over life, rotation and spin, integrated in C and drawn by a VU1 program that builds each rotated quad through the 2D view; one Loop system for every emitter.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "image",
+          "graphics",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Particles2D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "particles3d",
+      "name": "Particles3D",
+      "description": "Native 3D particle emitters (cone emission, gravity, drag, size/colour over life) integrated in C and drawn as camera-facing billboards by a VU1 program, depth tested against the 3D scene without writing depth.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "image",
+          "graphics",
+          "camera3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Particles3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "physics3d",
+      "name": "Physics3D",
+      "description": "Rigid bodies in C: dynamic, kinematic and static spheres, boxes and capsules with sequential impulses, friction, restitution, warm starting and island sleeping, ball/hinge/distance/weld joints, colliding with each other and with the static triangles of a Collision3D world; bodies drive Scene3D nodes and each world steps in its own Loop system with fixed 1/60 s substeps.",
+      "category": "Physics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "collision3d",
+          "scene3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Physics3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "poweroff",
       "name": "Power Off",
       "description": "IOP poweroff driver, started from athena.ini or IOP.loadModule().",
@@ -660,7 +821,7 @@
       "name": "Quaternion",
       "description": "Owned xyzw quaternions, shortest-path slerp and right-handed TRS in native code.",
       "category": "Math",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -700,7 +861,7 @@
       "name": "Render3D",
       "description": "Opaque color and perspective-correct textured rendering, Gouraud diffuse lighting, precise native clipping, retained batches, explicit-matrix mesh draws and inline DMA geometry.",
       "category": "Graphics",
-      "version": "1.5.0",
+      "version": "1.7.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -748,7 +909,7 @@
       "name": "Scene3D",
       "description": "Native 3D transform hierarchy with rejected cycles, dirty propagation, subtree bounds culling, pipeline-sorted render queue and optional Loop update system.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -824,7 +985,7 @@
       "name": "Sprite",
       "description": "Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed and rotated frames, tags and slices, loadable in the background) and animation clips (fps or per-frame durations, loop, once and pingpong, chained clips, frame events, promises), animated sprites with origin, scale, rotation and flip, batched drawing, and batch animation of TileMap sprites, all advanced in C by the Loop.",
       "category": "Graphics",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "required": false,
       "default": true,
       "dependencies": {
@@ -943,6 +1104,30 @@
       "global_alias": "Tween",
       "api": {
         "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "tween3d",
+      "name": "Tween3D",
+      "description": "Tweens of native 3D targets (Scene3D nodes, Model3D instances, Camera3D cameras) advanced in C: the Ease curves in native code, delay, repeat, yoyo, overwrite and awaitable handles, without a JavaScript call per frame.",
+      "category": "Animation",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d",
+          "model3d",
+          "camera3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Tween3D",
+      "api": {
+        "native": true,
         "quickjs": true
       }
     },

@@ -36,6 +36,20 @@ throws(() => q.slerp(new Quaternion(), 2), "slerp bounds");
 throws(() => new Quaternion(0, 0, 0, 0), "zero quaternion rejection");
 const negative = new Quaternion(0, 0, 0, -1);
 assert(close(new Quaternion().slerp(negative, 0.5).toArray()[3], 1), "antipodal shortest path");
+// Closed-form Euler matches qz * qy * qx; the shared float conversion keeps
+// ints, float32 and float64 inputs and rejects values beyond the float range.
+const qx = new Quaternion().setAxisAngle(1, 0, 0, .3), qy = new Quaternion().setAxisAngle(0, 1, 0, -1.2);
+const qz = new Quaternion().setAxisAngle(0, 0, 1, 2.5);
+const composed = qz.multiply(qy.multiply(qx)).toArray(), closedForm = new Quaternion().setEuler(.3, -1.2, 2.5).toArray();
+const sign = composed.reduce((sum, value, i) => sum + value * closedForm[i], 0) < 0 ? -1 : 1;
+assert(composed.every((value, i) => close(value, closedForm[i] * sign)), "Euler closed form");
+assert(close(new Quaternion().setEuler(0, 0, 3).toArray()[2], Math.sin(1.5)), "integer Euler argument");
+assert(close(new Quaternion().setEuler(0, 0, new Float32Array([3])[0]).toArray()[2], Math.sin(1.5)), "float32 Euler argument");
+throws(() => new Quaternion().setEuler(1e39, 0, 0), "float range rejection");
+throws(() => new Quaternion().setEuler(-Infinity, 0, 0), "infinite rejection");
+let typed = false;
+try { new Quaternion().setEuler("1", 0, 0); } catch (e) { typed = e instanceof TypeError; }
+assert(typed, "non-number TypeError");
 const backing = new Float32Array([99,99,99, -1,-1,0, 1,-1,0, 0,1,0, 99]);
 const colors = new Float32Array([9,9,9,9, 1,0,0,1, 0,1,0,1, 0,0,1,1]);
 const indices = new Uint32Array([99, 2,0,1, 99]);
@@ -80,6 +94,14 @@ assert(stats.submittedObjects === 2 && stats.culledObjects === 1 && stats.triang
 assert(stats.sourceTriangles === 1 && stats.clippedTriangles === 0 && stats.rejectedTriangles === 0,
     "contained objects keep the interior path");
 assert(stats.geometryBytes === 64, "contained DMA payload includes padding and excludes culled objects");
+assert(stats.drawPasses === 1 && stats.pipelinePasses === 1, "culled objects open no pass");
+const reused = {extra: 7};
+assert(batch.draw(camera, Render3D.CULL_NONE, undefined, reused) === reused && reused.extra === 7 &&
+    reused.submittedObjects === 2 && reused.triangles === 1 && reused.geometryBytes === 64, "batch stats reuse an object");
+reused.triangles = -1;
+assert(batch.draw(camera, Render3D.CULL_NONE, undefined, reused).triangles === 1, "reused stats are overwritten");
+throws(() => batch.draw(camera, Render3D.CULL_NONE, undefined, 3), "stats must be an object");
+assert(batch.draw(camera, Render3D.CULL_NONE, undefined, undefined).submittedObjects === 2, "undefined stats allocate");
 const clipCamera = new Camera({near: 1, far: 10, aspect: 1});
 clipCamera.lookAt(0, 0, -1).setPosition(0, 0, 0);
 const clipMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([-.1,-.1,.5, .3,-.1,-2, -.1,.3,-2])});
@@ -105,6 +127,32 @@ for (const [obj, method] of [[q,"dispose"], [camera,"dispose"], [batch,"dispose"
     throws(() => Object.getPrototypeOf(obj)[method].call(foreign), "foreign dispose receiver");
     assert(foreign.sentinel === "intact", "foreign object remains intact");
 }
+// Bulk setters match the per-instance setters and validate before writing.
+const bulkMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([0,0,0, 1,0,0, 0,1,0])});
+const bulk = [bulkMesh.createInstance(), bulkMesh.createInstance()];
+const single = [bulkMesh.createInstance(), bulkMesh.createInstance()];
+const xyz = new Float32Array([1, 2, 3, -4, .5, 6, 99]);
+const euler = new Float32Array([.1, .2, .3, -.4, .5, -.6]);
+assert(Model3D.setPositions(bulk, xyz) === 2 && Model3D.setRotationsEuler(bulk, euler) === 2, "bulk setters return the count");
+for (let i = 0; i < 2; i++) {
+    single[i].setPosition(xyz[i*3], xyz[i*3+1], xyz[i*3+2]).setRotationEuler(euler[i*3], euler[i*3+1], euler[i*3+2]);
+    const a = bulk[i].getTransform(), b = single[i].getTransform();
+    let same = true; for (let k = 0; k < 16; k++) same = same && a.get(k) === b.get(k);
+    assert(same, "bulk transform " + i + " equals per-instance setters");
+}
+const before = bulk[0].getTransform().get(12);
+throws(() => Model3D.setPositions(bulk, new Float32Array([7, 7, 7, 7, NaN, 7])), "non-finite bulk value");
+throws(() => Model3D.setPositions(bulk, new Float32Array(5)), "short bulk values");
+throws(() => Model3D.setPositions(bulk, [0, 0, 0, 0, 0, 0]), "bulk values must be a Float32Array");
+throws(() => Model3D.setPositions(bulk[0], xyz), "bulk instances must be an array");
+throws(() => Model3D.setPositions([bulk[0], {}], xyz), "bulk instances must be instances");
+assert(bulk[0].getTransform().get(12) === before, "failed bulk calls change nothing");
+// An element getter that disposes an earlier handle cannot free it mid-call.
+const tricky = [single[0]];
+Object.defineProperty(tricky, 1, {get() { single[0].dispose(); std.gc(); return single[1]; }});
+assert(Model3D.setPositions(tricky, xyz) === 2, "handles are retained while the call runs");
+assert(Model3D.setPositions([], new Float32Array(0)) === 0, "empty bulk call");
+bulk.forEach(i => i.dispose()); single[1].dispose(); bulkMesh.dispose();
 const risky = new Camera();
 throws(() => risky.setProjection({get aspect() { risky.dispose(); return 1; }}), "reentrant camera disposal");
 const sentinel = {};

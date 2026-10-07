@@ -105,7 +105,7 @@ int athena_render3d_clip_mesh_textured(const AthenaMesh3DView *mesh,const Athena
                 triangle[i].texcoord[0]=mesh->texcoords[first+i].u;
                 triangle[i].texcoord[1]=mesh->texcoords[first+i].v;
             }
-            if(shade&&shade->enabled) athena_render3d_shade_color(shade,&mesh->normals[first+i],&color,triangle[i].color);
+            if(shade&&shade->enabled) athena_render3d_shade_color_at(shade,&mesh->positions[first+i],&mesh->normals[first+i],&color,triangle[i].color);
         }
         int clipped=0,count=athena_render3d_clip_triangle(triangle,polygon,&clipped);
         if(count<0) return -1;

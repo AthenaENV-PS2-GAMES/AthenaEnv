@@ -1,0 +1,17 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "scripts": ["bin/physics3d_example.js (--cfg=physics3d_example.ini)", "bin/physics3d_check.js (--cfg=physics3d_check.ini)"],
+  "change": "Solver de contatos do Physics3D no VU0 (macro mode): cada contato é um bloco asm que carrega as quatro velocidades uma vez, resolve as duas linhas de atrito e a normal (com os clamps) em registradores VU e grava uma vez; dados empacotados por substep em SolverContact alinhado; velocidades dos corpos em quadwords alinhados. Antes: perfil por fase (world.profile), linhas do solver inline e resistência ao rolamento fora das iterações.",
+  "findings": [
+    "Fase solve (128 corpos, ~245 contatos, 8 iterações): 5513.4 us -> 5125.4 (inline) -> 4314.6 (rolamento uma vez por substep) -> 1514.9 us (VU0), 3,6x no total; ~0,77 us por contato e iteração.",
+    "Passo completo: 32 corpos 1295 -> 758 us; 128 corpos 10160 -> 6047 us; 256 corpos 29528 -> 17877 us.",
+    "Agora a colisão (2,4 ms em 128 corpos) e a preparação (1,5 ms) pesam mais que o solver.",
+    "bin/physics3d_check.js no PS2: 7/7 (esfera e cápsula em repouso, pilha de 3 caixas em pé e dormindo, atrito, restituição, pêndulo); o C equivalente roda nos testes host."
+  ],
+  "stages": [
+    {"stage": "bodies-32", "stepTicksMean": 757.8, "collide": 275.9, "prepare": 180.8, "solve": 187.6, "integrate": 66.8},
+    {"stage": "bodies-128", "stepTicksMean": 6046.8, "collide": 2416.0, "prepare": 1495.8, "solve": 1514.9, "integrate": 471.0},
+    {"stage": "bodies-256", "stepTicksMean": 17877, "collide": 7532.7, "prepare": 4462.6, "solve": 4336.4, "integrate": 1258.2}
+  ]
+}

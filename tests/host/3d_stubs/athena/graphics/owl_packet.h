@@ -23,6 +23,7 @@ typedef struct { owl_qword *base; owl_channel channel; size_t size; owl_qword *p
 #define VIF_BASE 3
 #define VIF_OFFSET 2
 #define VIF_ITOP 4
+#define VIF_FLUSHE 16
 #define VIF_FLUSH 17
 #define VIF_FLUSHA 19
 #define VIF_MSCALF 21

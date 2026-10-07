@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "environment": "PCSX2 v2.8.2 (Flatpak), Vulkan, 640x448 NTSC, velocidade 100%.",
+  "change": "Roadmap 7.4 item 5 + VU1: módulo Particles2D 1.0 (emissores nativos com pool, rate/burst, gravidade, arrasto, tamanho/cor ao longo da vida, rotação/giro) desenhado por um microprograma VU1 novo (vu1/draw_2D_particles.vcl): 2 qwords por partícula (centro, meia extensão rotacionada, cor) e o VU1 gera os 4 cantos pela view 2D e a triangle strip. Seno/cosseno rápidos no EE (erro < 0.002) em vez de sinf/cosf.",
+  "codeRevision": "7621811 com alterações locais não commitadas.",
+  "ticksPerSecond": 1000000,
+  "repetitions": 1,
+  "script": "bin/particles_profile.js (--cfg=particles_profile.ini), 4 etapas de 180 quadros (60 de aquecimento).",
+  "findings": [
+    "Simulação nativa: ~0.27 us por partícula por quadro.",
+    "Draw sem rotação: caminho EE (lista SPRITE) 0.99 us -> VU1 0.69 us por partícula (-30%).",
+    "Draw com rotação: caminho EE (sinf/cosf + 2 triângulos Gouraud por partícula) 3.50 us -> VU1 1.07 us (-70%).",
+    "2000 partículas: update 0.46 ms + draw 1.19 ms por quadro.",
+    "Referência em JS puro: 300 partículas custam 21.7 us de update e 49.3 us de draw cada (21 ms por quadro, acima do orçamento de 16.6 ms).",
+    "Sprites sem rotação pelo VU1 não reduzem o trabalho do EE: o caminho atual já envia 3 qwords por sprite contra 4 do programa do TileMap; o VU1 compensa onde o EE calcula por sprite (rotação, escala, cor ao longo da vida).",
+    "Imagem conferida: quadrados alinhados sem rotação, girados com rotação, com fade de tamanho e alfa."
+  ],
+  "eePath": {
+    "native-1000-sprites": {
+      "stage": "native-1000-sprites",
+      "samples": 120,
+      "updateTicksMean": 232.3,
+      "drawTicksMean": 850.3,
+      "particlesMean": 860.3
+    },
+    "native-1000-rotated": {
+      "stage": "native-1000-rotated",
+      "samples": 120,
+      "updateTicksMean": 236.4,
+      "drawTicksMean": 3040.7,
+      "particlesMean": 868.3
+    },
+    "native-2000-sprites": {
+      "stage": "native-2000-sprites",
+      "samples": 120,
+      "updateTicksMean": 455.3,
+      "drawTicksMean": 1704.5,
+      "particlesMean": 1725.9
+    },
+    "js-300-draw": {
+      "stage": "js-300-draw",
+      "samples": 120,
+      "updateTicksMean": 6521.6,
+      "drawTicksMean": 14791.1,
+      "particlesMean": 300
+    }
+  },
+  "vu1Path": {
+    "native-1000-sprites": {
+      "stage": "native-1000-sprites",
+      "samples": 120,
+      "updateTicksMean": 232.3,
+      "drawTicksMean": 597.9,
+      "particlesMean": 860.3
+    },
+    "native-1000-rotated": {
+      "stage": "native-1000-rotated",
+      "samples": 120,
+      "updateTicksMean": 236.3,
+      "drawTicksMean": 927.4,
+      "particlesMean": 868.3
+    },
+    "native-2000-sprites": {
+      "stage": "native-2000-sprites",
+      "samples": 120,
+      "updateTicksMean": 455.2,
+      "drawTicksMean": 1194.9,
+      "particlesMean": 1725.9
+    },
+    "js-300-draw": {
+      "stage": "js-300-draw",
+      "samples": 120,
+      "updateTicksMean": 6510.3,
+      "drawTicksMean": 14810.5,
+      "particlesMean": 300
+    }
+  }
+}

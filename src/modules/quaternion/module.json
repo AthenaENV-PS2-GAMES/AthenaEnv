@@ -1,6 +1,6 @@
 {
   "id": "quaternion", "name": "Quaternion", "description": "Owned xyzw quaternions, shortest-path slerp and right-handed TRS in native code.",
-  "category": "Math", "version": "1.0.0", "default": false,
+  "category": "Math", "version": "1.1.0", "default": false,
   "sources": ["native/quaternion.c"],
   "dependencies": {"modules": ["matrix4"], "iop": [], "ee_libs": []},
   "quickjs": {"sources": ["quickjs/ath_quaternion.c"], "module_name": "Quaternion", "global_alias": "Quaternion", "init_func": "athena_quaternion_js_init"},

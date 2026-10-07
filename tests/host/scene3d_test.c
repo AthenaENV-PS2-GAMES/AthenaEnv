@@ -89,6 +89,8 @@ int main(void) {
     host_contained_draws=0;
     assert(athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&render)==0 && render==0);
     assert(ds.queued_objects==2 && ds.render.submitted_objects==2 && ds.render.culled_objects==0);
+    /* Both meshes share the unlit pipeline, so the draw emits one pass. */
+    assert(ds.render.draw_passes==2 && ds.render.pipeline_passes==1);
     /* The root bounds are INSIDE: no mesh repeats the frustum test. */
     assert(host_contained_draws==2);
     assert(athena_node3d_set_visible(parent,0)==0);
@@ -144,6 +146,51 @@ int main(void) {
     athena_loop_systems_clear();   /* last scene reference: frees the graph */
     assert(athena_node3d_parent(child)==NULL);
     athena_node3d_release(child);
+    /* Native motion: velocity and local-axis spin integrated by advance(). */
+    {
+        AthenaScene3D *ms=athena_scene3d_create(); AthenaNode3D *mr=athena_scene3d_root(ms);
+        AthenaNode3D *group=athena_node3d_create(),*mover=athena_node3d_create(),*still=athena_node3d_create();
+        assert(!athena_node3d_add_child(mr,group) && !athena_node3d_add_child(group,mover) && !athena_node3d_add_child(group,still));
+        assert(athena_scene3d_update(ms,NULL)==0);
+        assert(athena_scene3d_advance(ms,1)==0 && !athena_scene3d_stale(ms)); /* nothing moves */
+        assert(!athena_node3d_set_position(mover,1,2,3) && !athena_node3d_set_velocity(mover,2,0,-1));
+        assert(!athena_node3d_set_euler(mover,(float)M_PI/2,0,0));
+        assert(!athena_node3d_set_spin(mover,0,(float)M_PI,0)); /* half a turn per second about local y */
+        assert(athena_scene3d_update(ms,NULL)==0);
+        assert(athena_scene3d_advance(ms,.5f)==1 && athena_scene3d_stale(ms));
+        assert(athena_scene3d_update(ms,NULL)==0);
+        AthenaNode3D *expected=athena_node3d_create();
+        assert(!athena_node3d_set_position(expected,2,2,2.5f));
+        /* Local spin composes on the right: Rx(pi/2) then Ry(pi/2) about local y. */
+        AthenaQuaternion a,b,q; assert(athena_quaternion_euler(&a,(float)M_PI/2,0,0));
+        assert(athena_quaternion_axis_angle(&b,0,1,0,(float)M_PI/2) && athena_quaternion_multiply(&q,&a,&b));
+        assert(!athena_node3d_set_rotation(expected,q.x,q.y,q.z,q.w));
+        AthenaMatrix4 got,want; assert(!athena_node3d_local(mover,&got) && !athena_node3d_local(expected,&want));
+        for(int i=0;i<16;i++) closef(got.value[i],want.value[i]);
+        athena_node3d_release(expected);
+        /* Detached branches stop counting; reattached ones move again. */
+        athena_node3d_retain(mover); athena_node3d_detach(mover);
+        assert(athena_scene3d_advance(ms,1)==0);
+        assert(!athena_node3d_add_child(still,mover)); athena_node3d_release(mover);
+        assert(athena_scene3d_advance(ms,1)==1);
+        /* Zero motion stops; a second mover adds up; bad dt and overflow fail. */
+        assert(!athena_node3d_set_velocity(still,0,1,0) && athena_scene3d_advance(ms,0)==0);
+        assert(athena_scene3d_advance(ms,1)==2);
+        assert(!athena_node3d_set_velocity(mover,0,0,0) && !athena_node3d_set_spin(mover,0,0,0));
+        assert(athena_scene3d_advance(ms,1)==1);
+        assert(athena_scene3d_advance(ms,-1)==ATHENA_SCENE3D_EINVAL && athena_scene3d_advance(ms,NAN)==ATHENA_SCENE3D_EINVAL);
+        assert(athena_node3d_set_spin(still,INFINITY,0,0)==ATHENA_SCENE3D_EINVAL);
+        assert(!athena_node3d_set_velocity(still,3e38f,0,0) && !athena_node3d_set_position(still,3e38f,0,0));
+        assert(athena_scene3d_advance(ms,1)==ATHENA_SCENE3D_EINVAL);
+        assert(!athena_node3d_set_velocity(still,0,0,0) && !athena_node3d_set_position(still,0,0,0));
+        /* The Loop system advances with its dt before updating. */
+        assert(!athena_node3d_set_velocity(group,1,0,0));
+        int sys=athena_scene3d_attach_loop(ms,0,NULL); assert(sys>0);
+        assert(athena_loop_systems_run(ATHENA_LOOP_POST_UPDATE,.25f,.25f,NULL)==0 && !athena_scene3d_stale(ms));
+        assert(!athena_node3d_local(group,&got)); closef(got.value[12],.25f);
+        athena_node3d_release(group); athena_node3d_release(mover); athena_node3d_release(still);
+        athena_scene3d_release(ms); athena_loop_systems_clear();
+    }
     puts("Scene3D host tests passed");
     return 0;
 }

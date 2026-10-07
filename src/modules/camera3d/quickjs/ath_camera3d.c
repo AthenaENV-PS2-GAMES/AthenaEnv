@@ -4,12 +4,18 @@
 #include <athena/js/matrix4.h>
 #include "ath_camera3d.h"
 static JSClassID camera_id;
+/* Handles are reference counted so native controllers (CameraRig3D) can keep
+ * a camera after its JS handle is disposed. The camera comes first, so the
+ * opaque pointer is the AthenaCamera3D pointer. */
+typedef struct { AthenaCamera3D camera; uint32_t refs; } CameraHandle;
+void athena_camera3d_js_retain(AthenaCamera3D *c) { if(c) ((CameraHandle *)c)->refs++; }
+void athena_camera3d_js_release(AthenaCamera3D *c) { if(c&&!--((CameraHandle *)c)->refs) free(c); }
 AthenaCamera3D *athena_camera3d_from_value(JSContext *ctx,JSValueConst value) {
     AthenaCamera3D *c=JS_GetOpaque2(ctx,value,camera_id);
     if(!c) JS_ThrowTypeError(ctx,"Expected a live Camera3D.Camera");
     return c;
 }
-static void finalizer(JSRuntime *rt,JSValue value) { (void)rt; free(JS_GetOpaque(value,camera_id)); }
+static void finalizer(JSRuntime *rt,JSValue value) { (void)rt; athena_camera3d_js_release(JS_GetOpaque(value,camera_id)); }
 static int projection(JSContext *ctx,AthenaCamera3D *c,JSValueConst options) {
     if(!JS_IsObject(options)||JS_IsNull(options)) { JS_ThrowTypeError(ctx,"Projection options must be an object"); return 0; }
     float f=c->fov_y_degrees,a=c->aspect,n=c->near_clip,r=c->far_clip;
@@ -24,9 +30,10 @@ static JSValue ctor(JSContext *ctx,JSValueConst target,int argc,JSValueConst *ar
     if(!athena_js_argc(ctx,argc,0,1,"Camera3D.Camera")) return JS_EXCEPTION;
     AthenaCamera3D next; athena_camera3d_init(&next);
     if(argc&&!projection(ctx,&next,argv[0])) return JS_EXCEPTION;
-    AthenaCamera3D *c=memalign(16,sizeof(*c));
-    if(!c) return JS_ThrowOutOfMemory(ctx);
-    *c=next;
+    CameraHandle *h=memalign(16,sizeof(*h));
+    if(!h) return JS_ThrowOutOfMemory(ctx);
+    h->camera=next; h->refs=1;
+    AthenaCamera3D *c=&h->camera;
     JSValue proto=JS_GetPropertyStr(ctx,target,"prototype");
     if(JS_IsException(proto)) { free(c); return proto; }
     JSValue obj=JS_NewObjectProtoClass(ctx,proto,camera_id); JS_FreeValue(ctx,proto);
@@ -36,7 +43,7 @@ static JSValue ctor(JSContext *ctx,JSValueConst target,int argc,JSValueConst *ar
 static JSValue dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argv;
     if(!athena_js_argc(ctx,argc,0,0,"Camera3D.dispose")||!athena_js_class(ctx,self,camera_id)) return JS_EXCEPTION;
-    AthenaCamera3D *c=JS_GetOpaque(self,camera_id); JS_SetOpaque(self,NULL); free(c); return JS_UNDEFINED;
+    AthenaCamera3D *c=JS_GetOpaque(self,camera_id); JS_SetOpaque(self,NULL); athena_camera3d_js_release(c); return JS_UNDEFINED;
 }
 static JSValue set_projection(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Camera3D.setProjection")) return JS_EXCEPTION;

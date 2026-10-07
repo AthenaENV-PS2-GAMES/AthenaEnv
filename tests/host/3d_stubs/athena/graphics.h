@@ -9,6 +9,12 @@ typedef struct { int ZBuffering,Height,Width,Interlace,Field,PSMZ,PrimContext; }
 #define GS_ZBUF_16 2
 #define GS_ZBUF_16S 10
 #define GS_ZBUF_24 1
+#define GS_ZBUF_32 0
+#define GS_ST 0x02
+#define GS_RGBAQ 0x01
+#define VIF_DIRECT 80
+#define GIF_AD 0x0e
+#define VU_GS_GIFTAG(NLOOP,EOP,DATA,PRE,PRIM,FLG,NREG) (((uint64_t)(NREG)<<60)|((uint64_t)(FLG)<<58)|((uint64_t)(PRIM)<<47)|((uint64_t)(PRE)<<46)|((uint64_t)(EOP)<<15)|((uint64_t)(NLOOP)))
 #define GS_PRIM_PRIM_TRIANGLE 3
 typedef union { struct { uint64_t PRIM:3,IIP:1,TME:1,FGE:1,ABE:1,AA1:1,FST:1,CTXT:1,FIX:1; }; uint64_t data; } prim_reg_t;
 typedef union { struct { uint64_t NLOOP:15,EOP:1,pad:30,PRE:1,PRIM:11,FLG:2,NREG:4; }; uint64_t data; } giftag_t;

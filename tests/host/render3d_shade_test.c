@@ -73,6 +73,26 @@ int main(void) {
     AthenaColor3D gray_color={64,64,64,255};
     athena_render3d_shade_color(&shade,&model.normals[0],&gray_color,result);
     assert(result[0]>127&&result[0]<129); /* accumulation before color clamp */
+    /* Point lights: (1 - d^2/range^2)^2 * max(n.l, 0), at the world position
+     * of the vertex; nothing beyond the range, nothing for shade_color(). */
+    athena_lights_clear(lights);
+    assert(athena_lights_set_point(lights,2,-.1f+2,-.1f,-.5f+2,1,.5f,0,4)); /* d = sqrt(8) */
+    assert(!athena_lights_set_point(lights,4,0,0,0,1,1,1,1)&&!athena_lights_set_point(lights,0,0,0,0,1,1,1,0));
+    assert(athena_render3d_shade_prepare(&shade,&model,&matrix,lights));
+    assert(shade.lights.point_count==1);
+    athena_render3d_shade_color_at(&shade,&model.positions[0],&model.normals[0],&white,result);
+    {   /* n = (1,0,1)/sqrt2, l = (1,0,1)/sqrt2: n.l = 1; fade = (1 - 8/16)^2 = .25 */
+        float expected=255*.25f;
+        assert(fabsf(result[0]-expected)<.01f&&fabsf(result[1]-expected*.5f)<.01f&&result[2]==0);
+    }
+    athena_render3d_shade_color(&shade,&model.normals[0],&white,result);
+    assert(result[0]==0); /* ambient and directional only */
+    assert(athena_lights_set_point(lights,2,-.1f+2,-.1f,-.5f+2,1,.5f,0,2)); /* d > range */
+    assert(athena_render3d_shade_prepare(&shade,&model,&matrix,lights));
+    athena_render3d_shade_color_at(&shade,&model.positions[0],&model.normals[0],&white,result);
+    assert(result[0]==0);
+    assert(athena_lights_disable_point(lights,2)); athena_lights_view(lights,&shade.lights);
+    assert(shade.lights.point_count==0);
     assert(athena_lights_disable(lights,0)); athena_lights_clear(lights);
     assert(athena_lights_set_ambient(lights,.5f,.5f,.5f));
     assert(athena_render3d_shade_prepare(&shade,&model,&matrix,lights));

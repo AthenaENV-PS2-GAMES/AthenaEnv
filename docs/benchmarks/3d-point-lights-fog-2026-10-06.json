@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "scripts": ["bin/point_lights.js (--cfg=point_lights.ini)", "samples/native/3d_regression (athena_3d_regression_native.elf)"],
+  "change": "Luzes pontuais (4 slots, (1 - d^2/range^2)^2 * max(n.l, 0), por vértice) nos programas VU1 difuso, textura, near e skinned (vu1/include/point_lights.i) e no caminho em C; neblina por distância via GS (XYZF2, PRIM.FGE, FOGCOL) em todos os programas Render3D (vu1/include/fog.i), configurada em Lights.setFog(). shade_prepare deixou de limpar a estrutura inteira em desenhos sem luz.",
+  "findings": [
+    "Grade de 49 cubos: direcional 855.8 us; +3 luzes pontuais 884.2 us (+0,6 us por objeto); com a câmera cruzando o near (programa near) 946.0 us; com neblina 1081.7 us (outra câmera, mais cubos na tela).",
+    "Imagens: poças vermelha, verde e azul seguindo as luzes; cubo recortado no near iluminado; neblina azul escura nas fileiras do fundo.",
+    "Bug: os vetores de luzes pontuais em AthenaLightsView ficavam 4 bytes fora do alinhamento de 16; as cargas de 128 bits do owl_add_uquad_ptr leem a partir do endereço alinhado para baixo, deslocando uma lane (vermelho perdido, sem atenuação). Alinhados, com _Static_assert no Render3D.",
+    "OpenVCL de novo: mfir.w e ftoi4.xy pareados no mesmo registrador no mesmo ciclo (acusado por tools/check_vsm_loops.py); a lane w agora vai por isw.w. Uma variante que preparava a flag de neblina e a máscara de kick antes do laço (registradores VI) apagou triângulos e foi revertida, sem isolar a causa.",
+    "Regressão sem luzes: inside-batch 663.3 -> 626.5 us, edge-batch 731.0 -> 694.2 us, clip-batch 1087.2 -> 1050.4 us, por não limpar mais ~560 bytes por desenho sem luz."
+  ],
+  "point_lights_drawTicksMean": {"directional": 855.8, "point-3": 884.2, "point-3-near": 946.0, "point-3-fog": 1081.7}
+}

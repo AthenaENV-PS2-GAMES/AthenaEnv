@@ -1,0 +1,8 @@
+{
+  "id": "physics3d", "name": "Physics3D", "description": "Rigid bodies in C: dynamic, kinematic and static spheres, boxes and capsules with sequential impulses, friction, restitution, warm starting and island sleeping, ball/hinge/distance/weld joints, colliding with each other and with the static triangles of a Collision3D world; bodies drive Scene3D nodes and each world steps in its own Loop system with fixed 1/60 s substeps.",
+  "category": "Physics", "version": "1.0.0", "default": false,
+  "sources": ["native/physics3d.c", "native/joint3d.c"],
+  "dependencies": {"modules": ["collision3d", "scene3d", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_physics3d.c"], "module_name": "Physics3D", "global_alias": "Physics3D", "init_func": "athena_physics3d_js_init", "cleanup_func": "athena_physics3d_js_cleanup"},
+  "types": "physics3d.d.ts"
+}

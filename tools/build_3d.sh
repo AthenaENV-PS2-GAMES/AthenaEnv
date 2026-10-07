@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run inside the PS2SDK build image, after module configuration on the host:
-# node tools/modules.js configure --modules=screen,loop,scene3d,draw,tilemap,system,timer,usbmass
+# node tools/modules.js configure --modules=screen,loop,scene3d,animation3d,gltf3d,camerarig3d,collision3d,physics3d,tween3d,tween,particles2d,particles3d,image,color,draw,tilemap,system,timer,usbmass
 # docker run --rm --entrypoint /bin/sh -v "$PWD:/src" -w /src <build-image> tools/build_3d.sh
 set -eu
 cd "$(dirname "$0")/.."

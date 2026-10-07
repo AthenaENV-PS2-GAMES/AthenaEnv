@@ -1,0 +1,342 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "environment": "PCSX2 v2.8.2 (Flatpak), renderer Vulkan, 640x448 NTSC, velocidade 100%, BIOS SCPH-39001 v01.60; executado nesta sessão via -batch -fastboot.",
+  "elfs": {
+    "native": "athena_3d_profile_native.elf",
+    "quickjs": "athena_3d_js.elf --cfg=3d_profile.ini"
+  },
+  "source": {
+    "native": "samples/native/3d_profile/main.c",
+    "quickjs": "bin/3d_profile.js"
+  },
+  "codeRevision": "7621811 com alterações locais não commitadas (passos 5.3/5.5: float na câmera/slerp/athena_js_float, athena_quaternion_euler).",
+  "clockTicksPerSecond": 1000000,
+  "isPerformanceBaseline": true,
+  "repetitions": 1,
+  "findings": [
+    "set_euler direto (Rz*Ry*Rx): quaternionEulerUs 2.72 us; batch-lit-animated update 583.7 -> 238.0 us (-59%), scene-lit-animated 1022.9 -> 677.4 us (-34%).",
+    "scene-lit-rows 362.7 -> 319.2 us e scene-many-nodes 374.9 -> 326.4 us: ganho da câmera/slerp em float.",
+    "Draw inalterado em todas as etapas (esperado: 5.3/5.5 não tocam o caminho de render); contadores de geometria idênticos a 2026-10-05.",
+    "Binding JS->C: setEuler custa ~12.2 ticks por chamada em JS contra 2.72 us nativos, ~9.5 us de overhead; setPosition 7.1 ticks.",
+    "QuickJS batch-lit-animated: update 677.6 ticks contra 238.0 us nativos; ~440 us/frame (65%) é overhead de 64 chamadas setEuler + laço JS.",
+    "QuickJS draw por passe fica ~10-13% acima do nativo (16.9 vs 15.1 unlit, 23.7 vs 22.0 lit)."
+  ],
+  "nativeMicro": {
+    "calls": 2000,
+    "matrix4MultiplyUs": 0.35,
+    "quaternionTrsUs": 2.242,
+    "boxRelationInsideUs": 5.899,
+    "boxRelationIntersectUs": 5.897,
+    "doubleMulDivAddUs": 7.205,
+    "quaternionEulerUs": 2.72,
+    "quaternionSlerpUs": 4.422,
+    "cameraMoveUs": 6.794
+  },
+  "quickjsMicro": {
+    "calls": 2000,
+    "nodeSetPositionTicks": 7.117,
+    "nodeSetEulerTicks": 12.184,
+    "instanceSetEulerTicks": 12.142,
+    "quaternionSetEulerTicks": 11.956,
+    "cameraMoveTicks": 14.119,
+    "mathSinTicks": 23.506
+  },
+  "native": [
+    {
+      "stage": "batch-unlit-static",
+      "samples": 120,
+      "updateUsMean": 0.9,
+      "updateUsMedian": 1.0,
+      "drawUsMean": 967.2,
+      "drawUsMedian": 967.0,
+      "drawUsPerPass": 15.1,
+      "worldUpdatesPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 36864.0
+    },
+    {
+      "stage": "batch-lit-static",
+      "samples": 120,
+      "updateUsMean": 0.7,
+      "updateUsMedian": 0.0,
+      "drawUsMean": 1407.6,
+      "drawUsMedian": 1408.0,
+      "drawUsPerPass": 22.0,
+      "worldUpdatesPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 64512.0
+    },
+    {
+      "stage": "scene-lit-static",
+      "samples": 120,
+      "updateUsMean": 0.8,
+      "updateUsMedian": 0.0,
+      "drawUsMean": 1128.6,
+      "drawUsMedian": 1129.0,
+      "drawUsPerPass": 17.6,
+      "worldUpdatesPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 64512.0
+    },
+    {
+      "stage": "batch-lit-animated",
+      "samples": 120,
+      "updateUsMean": 238.0,
+      "updateUsMedian": 236.0,
+      "drawUsMean": 1552.1,
+      "drawUsMedian": 1552.0,
+      "drawUsPerPass": 24.3,
+      "worldUpdatesPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 64512.0
+    },
+    {
+      "stage": "scene-lit-animated",
+      "samples": 120,
+      "updateUsMean": 677.4,
+      "updateUsMedian": 676.0,
+      "drawUsMean": 1128.5,
+      "drawUsMedian": 1128.0,
+      "drawUsPerPass": 17.6,
+      "worldUpdatesPerFrame": 64.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 64512.0
+    },
+    {
+      "stage": "scene-lit-rows",
+      "samples": 120,
+      "updateUsMean": 319.2,
+      "updateUsMedian": 318.0,
+      "drawUsMean": 1128.6,
+      "drawUsMedian": 1129.0,
+      "drawUsPerPass": 17.6,
+      "worldUpdatesPerFrame": 72.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 768.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 64512.0
+    },
+    {
+      "stage": "scene-many-nodes",
+      "samples": 120,
+      "updateUsMean": 326.4,
+      "updateUsMedian": 326.0,
+      "drawUsMean": 1707.7,
+      "drawUsMedian": 1809.0,
+      "drawUsPerPass": 26.7,
+      "worldUpdatesPerFrame": 73.0,
+      "drawPassesPerFrame": 64.0,
+      "trianglesPerFrame": 774.4,
+      "clippedTrianglesPerFrame": 15.15,
+      "vuBatchesPerFrame": 64.27,
+      "geometryBytesPerFrame": 64242.0
+    }
+  ],
+  "quickjs": [
+    {
+      "stage": "batch-unlit-static",
+      "samples": 120,
+      "updateTicksMean": 14.3,
+      "updateTicksMedian": 14,
+      "drawTicksMean": 1080.9,
+      "drawTicksMedian": 1081,
+      "drawTicksPerPass": 16.9,
+      "worldUpdatesPerFrame": 0,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 36864
+    },
+    {
+      "stage": "batch-lit-static",
+      "samples": 120,
+      "updateTicksMean": 14.2,
+      "updateTicksMedian": 14,
+      "drawTicksMean": 1518.1,
+      "drawTicksMedian": 1518,
+      "drawTicksPerPass": 23.7,
+      "worldUpdatesPerFrame": 0,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 64512
+    },
+    {
+      "stage": "scene-lit-static",
+      "samples": 120,
+      "updateTicksMean": 58.9,
+      "updateTicksMedian": 59,
+      "drawTicksMean": 1271.3,
+      "drawTicksMedian": 1271,
+      "drawTicksPerPass": 19.9,
+      "worldUpdatesPerFrame": 0,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 64512
+    },
+    {
+      "stage": "batch-lit-animated",
+      "samples": 120,
+      "updateTicksMean": 677.6,
+      "updateTicksMedian": 675,
+      "drawTicksMean": 1666.2,
+      "drawTicksMedian": 1666,
+      "drawTicksPerPass": 26,
+      "worldUpdatesPerFrame": 0,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 64512
+    },
+    {
+      "stage": "scene-lit-animated",
+      "samples": 120,
+      "updateTicksMean": 1161.7,
+      "updateTicksMedian": 1160,
+      "drawTicksMean": 1273.8,
+      "drawTicksMedian": 1274,
+      "drawTicksPerPass": 19.9,
+      "worldUpdatesPerFrame": 64,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 64512
+    },
+    {
+      "stage": "scene-lit-rows",
+      "samples": 120,
+      "updateTicksMean": 487.9,
+      "updateTicksMedian": 487,
+      "drawTicksMean": 1273,
+      "drawTicksMedian": 1273,
+      "drawTicksPerPass": 19.9,
+      "worldUpdatesPerFrame": 72,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 768,
+      "clippedTrianglesPerFrame": 0,
+      "vuBatchesPerFrame": 64,
+      "geometryBytesPerFrame": 64512
+    },
+    {
+      "stage": "scene-many-nodes",
+      "samples": 120,
+      "updateTicksMean": 501,
+      "updateTicksMedian": 500,
+      "drawTicksMean": 1851.6,
+      "drawTicksMedian": 1953,
+      "drawTicksPerPass": 28.9,
+      "worldUpdatesPerFrame": 73,
+      "drawPassesPerFrame": 64,
+      "trianglesPerFrame": 774.4,
+      "clippedTrianglesPerFrame": 15.15,
+      "vuBatchesPerFrame": 64.27,
+      "geometryBytesPerFrame": 64242
+    }
+  ],
+  "comparisonWith20261005": {
+    "note": "[antes, depois]; antes = 'after' de 3d-profile-2026-10-05.json (scene-many-nodes de afterClipFloat).",
+    "stages": [
+      {
+        "stage": "batch-unlit-static",
+        "updateUsMean": [
+          0.8,
+          0.9
+        ],
+        "drawUsMean": [
+          967.2,
+          967.2
+        ]
+      },
+      {
+        "stage": "batch-lit-static",
+        "updateUsMean": [
+          0.9,
+          0.7
+        ],
+        "drawUsMean": [
+          1407.6,
+          1407.6
+        ]
+      },
+      {
+        "stage": "scene-lit-static",
+        "updateUsMean": [
+          0.8,
+          0.8
+        ],
+        "drawUsMean": [
+          1128.6,
+          1128.6
+        ]
+      },
+      {
+        "stage": "batch-lit-animated",
+        "updateUsMean": [
+          583.7,
+          238.0
+        ],
+        "drawUsMean": [
+          1552.1,
+          1552.1
+        ]
+      },
+      {
+        "stage": "scene-lit-animated",
+        "updateUsMean": [
+          1022.9,
+          677.4
+        ],
+        "drawUsMean": [
+          1128.7,
+          1128.5
+        ]
+      },
+      {
+        "stage": "scene-lit-rows",
+        "updateUsMean": [
+          362.7,
+          319.2
+        ],
+        "drawUsMean": [
+          1128,
+          1128.6
+        ]
+      },
+      {
+        "stage": "scene-many-nodes",
+        "updateUsMean": [
+          374.9,
+          326.4
+        ],
+        "drawUsMean": [
+          1707,
+          1707.7
+        ]
+      }
+    ]
+  },
+  "visualAcceptance": "Etapas 0-5 mostram o grid 8x8; não houve captura dedicada do perfil."
+}

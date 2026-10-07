@@ -1,0 +1,8 @@
+{
+  "id": "collision3d", "name": "Collision3D", "description": "Light 3D collision in C: static triangles of level meshes, glTF scenes and boxes in a bounding volume hierarchy, raycasts, sphere casts and overlaps with layers, and kinematic characters (an upright ellipsoid) that walk with collide-and-slide: gravity, walkable slopes, steps, ground snapping, no tunneling, driving a Scene3D node from one Loop system.",
+  "category": "Physics", "version": "1.0.0", "default": false,
+  "sources": ["native/collision3d.c", "native/character3d.c"],
+  "dependencies": {"modules": ["scene3d", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_collision3d.c"], "module_name": "Collision3D", "global_alias": "Collision3D", "init_func": "athena_collision3d_js_init", "cleanup_func": "athena_collision3d_js_cleanup"},
+  "types": "collision3d.d.ts"
+}

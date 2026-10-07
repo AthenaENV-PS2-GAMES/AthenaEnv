@@ -1,0 +1,29 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "bin/particles3d_profile.js (--cfg=particles3d_profile.ini)",
+  "change": "Particles3D 1.0: emissores 3D nativos desenhados como billboards por vu1/draw_3D_billboards.vcl (2 qwords por partícula; VU1 monta os cantos com os eixos da câmera, projeta e descarta por guard band via ADC); near/far testados no EE; depth test GEQUAL sem escrita de profundidade.",
+  "findings": [
+    "Update 0.29 us e draw 0.79 us por partícula (1000 e 2000 partículas).",
+    "Imagem: fonte de billboards atrás dos cubos, oculta por eles (depth test).",
+    "A divisão diagonal das faces dos cubos era backface culling quebrado nos programas VU1 do Render3D (registrador do vértice anterior reaproveitado pelo OpenVCL); corrigido no mesmo dia, ver docs/3D.md."
+  ],
+  "stages": [
+    {
+      "stage": "billboards-1000",
+      "samples": 120,
+      "updateTicksMean": 224.2,
+      "drawTicksMean": 616,
+      "particlesMean": 776.1,
+      "particlesAlive": 750
+    },
+    {
+      "stage": "billboards-2000",
+      "samples": 120,
+      "updateTicksMean": 434.3,
+      "drawTicksMean": 1223.1,
+      "particlesMean": 1551.3,
+      "particlesAlive": 1500
+    }
+  ]
+}

@@ -61,6 +61,16 @@ static JSValue throw_geometry(JSContext *ctx,const AthenaGeometry3D *g) {
             return JS_ThrowRangeError(ctx,"texcoords require one uv pair per source vertex; textured materials require UVs");
         case ATHENA_GEOMETRY3D_TEXCOORD:
             return JS_ThrowRangeError(ctx,"texcoords[%u] must be finite and in [0,1]",offset);
+        case ATHENA_GEOMETRY3D_SKIN_COUNT:
+            return JS_ThrowRangeError(ctx,"joints and weights need four values per source vertex, together");
+        case ATHENA_GEOMETRY3D_SKIN:
+            return JS_ThrowRangeError(ctx,"Invalid skin at offset %u: joints below %u, weights finite, >= 0 and not all zero",
+                offset,(unsigned)ATHENA_MODEL3D_MAX_JOINTS);
+        case ATHENA_GEOMETRY3D_TARGET_COUNT:
+            return JS_ThrowRangeError(ctx,"At most %u morph targets, with position deltas; normal deltas need normals",
+                (unsigned)ATHENA_MODEL3D_MAX_TARGETS);
+        case ATHENA_GEOMETRY3D_TARGET:
+            return JS_ThrowRangeError(ctx,"Morph target delta %u must be finite",offset);
         default:
             return JS_ThrowRangeError(ctx,"Invalid geometry counts (issue %d, vertices %u, colors %u, indices %u)",
                 issue,g->vertex_count,g->color_count,g->index_count);
@@ -133,6 +143,9 @@ done:
     JS_FreeValue(ctx,pos); JS_FreeValue(ctx,colors); JS_FreeValue(ctx,indices);
     JS_FreeValue(ctx,normals); JS_FreeValue(ctx,material); JS_FreeValue(ctx,texcoords); JS_FreeValue(ctx,uv.backing);
     athena_texture3d_release(descriptor.texture); return result;
+}
+int athena_model3d_js_material(JSContext *ctx,JSValueConst value,AthenaMaterial3D *out) {
+    return material_option(ctx,value,out);
 }
 static JSValue load(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
@@ -225,6 +238,32 @@ static JSValue set_vector(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     if(!ok) return JS_ThrowRangeError(ctx,"Invalid transform");
     return JS_DupValue(ctx,self);
 }
+static void *instance_item(JSContext *ctx,JSValueConst v) { return athena_instance3d_from_value(ctx,v); }
+static void instance_retain(void *i) { athena_instance3d_retain(i); }
+static void instance_release(void *i) { athena_instance3d_release(i); }
+/* Model3D.setPositions/setRotationsEuler(instances, values): xyz per instance
+ * from a Float32Array, validated before any instance changes. */
+static JSValue set_many(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic) {
+    (void)self;
+    const char *name=magic?"Model3D.setRotationsEuler":"Model3D.setPositions";
+    if(!athena_js_argc(ctx,argc,2,2,name)) return JS_EXCEPTION;
+    AthenaJSHandles h;
+    if(!athena_js_handles(ctx,argv[0],&h,instance_item,instance_retain,instance_release,"instances")) return JS_EXCEPTION;
+    AthenaJSArray values;
+    if(!athena_js_array(ctx,argv[1],JS_TYPED_ARRAY_FLOAT32,&values,"values")) { athena_js_handles_free(&h); return JS_EXCEPTION; }
+    const float *v=values.data; JSValue result=JS_NewUint32(ctx,h.count);
+    if(values.count/3<h.count) result=JS_ThrowRangeError(ctx,"values needs 3 floats per instance");
+    else for(uint32_t i=0;i<h.count*3;i++) if(!athena_float_isfinite(v[i])) {
+        result=JS_ThrowRangeError(ctx,"values[%u] is not a finite float",(unsigned)i); break;
+    }
+    if(!JS_IsException(result)) for(uint32_t i=0;i<h.count;i++) {
+        const float *x=&v[i*3];
+        int ok=magic?athena_instance3d_set_euler(h.items[i],x[0],x[1],x[2]):
+            athena_instance3d_set_position(h.items[i],x[0],x[1],x[2]);
+        if(!ok) { result=JS_ThrowRangeError(ctx,"Invalid transform for instances[%u]",(unsigned)i); break; }
+    }
+    JS_FreeValue(ctx,values.backing); athena_js_handles_free(&h); return result;
+}
 static JSValue get_matrix(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,0,1,"Instance.getTransform")) return JS_EXCEPTION;
     AthenaInstance3D *i=athena_instance3d_from_value(ctx,self); if(!i) return JS_EXCEPTION;
@@ -252,6 +291,7 @@ static const JSCFunctionListEntry instance_methods[]={
     JS_CFUNC_MAGIC_DEF("setRotationEuler",3,set_vector,2),JS_CFUNC_MAGIC_DEF("setRotationQuaternion",4,set_vector,3),
     JS_CFUNC_DEF("getTransform",0,get_matrix),JS_CFUNC_DEF("dispose",0,instance_dispose)};
 static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("load",1,load),
+    JS_CFUNC_MAGIC_DEF("setPositions",2,set_many,0),JS_CFUNC_MAGIC_DEF("setRotationsEuler",2,set_many,1),
     JS_PROP_INT32_DEF("MAX_VERTICES",ATHENA_MODEL3D_MAX_VERTICES,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("UNLIT",ATHENA_MATERIAL3D_UNLIT,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("DIFFUSE",ATHENA_MATERIAL3D_DIFFUSE,JS_PROP_ENUMERABLE)};

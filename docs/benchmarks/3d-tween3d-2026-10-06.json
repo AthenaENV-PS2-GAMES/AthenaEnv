@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "environment": "PCSX2 v2.8.2 (Flatpak), Vulkan, 640x448 NTSC, velocidade 100%.",
+  "change": "Roadmap 7.4 item 4: módulo Tween3D 1.0 — tweens de Scene3D.Node, Model3D.Instance e Camera3D.Camera avançados em C (posição, escala, rotação por slerp, olho/mira da câmera), curvas do Ease em C (ease_curves.c), delay, repeat, yoyo, overwrite e handles aguardáveis.",
+  "codeRevision": "7621811 com alterações locais não commitadas.",
+  "ticksPerSecond": 1000000,
+  "repetitions": 1,
+  "findings": [
+    "64 cubos com yoyo infinito inOutSine, por quadro: Tween JS em objetos + setPosition por cubo 8048.9 ticks (metade do quadro de 16.6 ms) contra Tween3D.advance 110.4 ticks (-98.6%, 73x).",
+    "Etapa scene-lit-tween (Tween3D + Scene3D.update de 64 nós): update 407.9 ticks; draw inalterado.",
+    "Imagem: grade com colunas oscilando em fases diferentes."
+  ],
+  "micro": {
+    "tween64JsFrameTicks": 8048.9,
+    "tween64NativeFrameTicks": 110.4
+  },
+  "stage": {
+    "updateTicksMean": 407.9,
+    "drawTicksMean": 1084.8,
+    "worldUpdatesPerFrame": 64
+  }
+}

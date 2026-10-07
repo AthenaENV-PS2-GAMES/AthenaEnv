@@ -59,3 +59,70 @@ $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/scene3d_test" \
     src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
     src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/scene3d_test"
+$CC $FLAGS $INC -Isrc/modules/animation3d/include -Wall -Wextra -Werror -o "$OUT/animation3d_test" \
+    tests/host/animation3d_test.c src/modules/animation3d/native/animation3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/animation3d_test"
+$CC $FLAGS $INC -Isrc/modules/animation3d/include -Isrc/modules/gltf3d/include -Wall -Wextra -Werror -o "$OUT/gltf3d_test" \
+    tests/host/gltf3d_test.c src/modules/gltf3d/native/gltf3d.c src/modules/animation3d/native/animation3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/gltf3d_test"
+$CC $FLAGS $INC -Isrc/modules/camerarig3d/include -Wall -Wextra -Werror -o "$OUT/camerarig3d_test" \
+    tests/host/camerarig3d_test.c src/modules/camerarig3d/native/camerarig3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/camerarig3d_test"
+$CC $FLAGS $INC -Isrc/modules/tween3d/include -Wall -Wextra -Werror -o "$OUT/tween3d_test" \
+    tests/host/tween3d_test.c src/modules/tween3d/native/tween3d.c src/modules/tween3d/native/ease_curves.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/tween3d_test"
+$CC $FLAGS $INC -Isrc/modules/collision3d/include -Wall -Wextra -Werror -o "$OUT/collision3d_test" \
+    tests/host/collision3d_test.c src/modules/collision3d/native/collision3d.c src/modules/collision3d/native/character3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/collision3d_test"
+$CC $FLAGS $INC -Isrc/modules/collision3d/include -Isrc/modules/physics3d/include -Wall -Wextra -Werror -o "$OUT/physics3d_test" \
+    tests/host/physics3d_test.c src/modules/physics3d/native/physics3d.c src/modules/physics3d/native/joint3d.c \
+    src/modules/collision3d/native/collision3d.c src/modules/collision3d/native/character3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/physics3d_test"
+$CC $FLAGS -Isrc/core/include -Isrc/modules/particles2d/include -Isrc/modules/loop/include \
+    -Itests/host/particles_stubs -Wall -Wextra -Werror \
+    -o "$OUT/particles2d_test" tests/host/particles2d_test.c src/modules/particles2d/native/particles2d.c \
+    src/modules/loop/native/loop_systems.c -lm
+"$OUT/particles2d_test"
+$CC $FLAGS -Isrc/core/include -Isrc/modules/particles3d/include -Isrc/modules/loop/include \
+    -Isrc/modules/camera3d/include -Isrc/modules/matrix4/include -Isrc/modules/vector/include \
+    -Itests/host/particles_stubs -Wall -Wextra -Werror \
+    -o "$OUT/particles3d_test" tests/host/particles3d_test.c src/modules/particles3d/native/particles3d.c \
+    src/modules/camera3d/native/camera3d.c src/modules/matrix4/native/matrix4.c \
+    src/modules/loop/native/loop_systems.c -lm
+"$OUT/particles3d_test"

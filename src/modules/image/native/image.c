@@ -396,6 +396,15 @@ void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[
 	draw_tex_triangle_gouraud_list(image->surface, 0.0f, 0.0f, triangles, 2);
 }
 
+void athena_image_draw_triangles(AthenaImage *image, prim_tex_gouraud_triangle *list, int count)
+{
+	if (!athena_image_is_loaded(image) || count <= 0)
+		return;
+	if (image->delayed && image->status == ATHENA_IMAGE_STATUS_DECODED)
+		image->status = ATHENA_IMAGE_STATUS_UPLOAD_PENDING;
+	draw_tex_triangle_gouraud_list(image->surface, 0.0f, 0.0f, list, count);
+}
+
 bool athena_image_lock(AthenaImage *image)
 {
 	int result;

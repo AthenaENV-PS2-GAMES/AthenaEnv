@@ -1,6 +1,11 @@
 /* Deterministic counterpart of bin/3d_regression.js. No external assets.
  * Build with screen,loop,render3d,draw,tilemap,system,timer,usbmass.
- * 9 stages x 180 frames; first 60 frames of each stage are warm-up. */
+ * 11 stages x 180 frames; first 60 frames of each stage are warm-up. Stage 9
+ * spins a closed cube with one colour per face under CULL_BACK: every face
+ * must show whole, in one colour (a broken cull shows inner triangles).
+ * Stage 10 puts 64 triangles across the left and right screen edges (not
+ * the near plane): drawn by VU1 inside the GS guard band and trimmed by the
+ * scissor, so the edges must look cut straight, with nothing clipped in C. */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +21,7 @@
 #define WARMUP 60
 #define COUNT 64
 static const char *names[]={"depth","cull-back","cull-front","camera-tile-camera","recreate",
-    "inside-batch","clip-batch","inside-individual","clip-individual"};
+    "inside-batch","clip-batch","inside-individual","clip-individual","closed-cull","edge-batch"};
 typedef struct { AthenaInstance3D *items[COUNT]; unsigned count; AthenaBatch3D *batch; } Scene;
 static void release(Scene *s) {
     athena_batch3d_destroy(s->batch);
@@ -44,10 +49,31 @@ static int pair(Scene *s,int depth) {
     }
     athena_mesh3d_release(a); athena_mesh3d_release(b); return code;
 }
-static int collection(Scene *s,int crossing) {
+/* Counter-clockwise from outside, as tools/make_3d_lighting_asset.js. */
+static int cube(Scene *s) {
+    static const float p[8][3]={{-1,-1,-1},{1,-1,-1},{1,1,-1},{-1,1,-1},{-1,-1,1},{1,-1,1},{1,1,1},{-1,1,1}};
+    static const unsigned char faces[6][6]={{0,2,1,0,3,2},{4,5,6,4,6,7},{0,1,5,0,5,4},
+        {3,7,6,3,6,2},{0,4,7,0,7,3},{1,2,6,1,6,5}};
+    static const float tint[6][4]={{1,0,0,1},{0,1,0,1},{0,0,1,1},{1,1,0,1},{0,1,1,1},{1,0,1,1}};
+    float positions[36*3],colors[36*4];
+    for(unsigned f=0;f<6;f++) for(unsigned k=0;k<6;k++) {
+        memcpy(positions+(f*6+k)*3,p[faces[f][k]],sizeof(p[0])); memcpy(colors+(f*6+k)*4,tint[f],sizeof(tint[0]));
+    }
+    AthenaGeometry3D g={.positions=positions,.vertex_count=36,.colors=colors,.color_count=36};
+    AthenaMesh3D *mesh=NULL; int code=athena_mesh3d_create(&g,&mesh);
+    if(code<0) return code;
+    s->items[0]=athena_instance3d_create(mesh); athena_mesh3d_release(mesh);
+    if(!s->items[0]) return -2;
+    s->count=1;
+    return athena_instance3d_set_position(s->items[0],0,0,-3)&&athena_instance3d_set_scale(s->items[0],.6f,.6f,.6f)?0:-1;
+}
+/* crossing: 0 inside, 1 through the near plane, 2 across the screen edges. */
+static int collection(Scene *s,int crossing,float edge) {
     const float inside[]={-.06,-.06,-2.5, .06,-.06,-2.5, 0,.06,-2.5};
     const float clip[]={-.06,-.06,-.4, .06,-.06,-2.5, 0,.06,-2.5},color[]={0,.8,1,1};
-    AthenaMesh3D *mesh=NULL; int code=make_mesh(crossing?clip:inside,color,&mesh);
+    const float wide[]={-.3,-.06,-2.5, .3,-.06,-2.5, 0,.06,-2.5},orange[]={1,.5,0,1};
+    AthenaMesh3D *mesh=NULL;
+    int code=make_mesh(crossing==2?wide:crossing?clip:inside,crossing==2?orange:color,&mesh);
     if(code<0) return code;
     s->batch=athena_batch3d_create();
     if(!s->batch) code=-2;
@@ -55,16 +81,19 @@ static int collection(Scene *s,int crossing) {
         AthenaInstance3D *item=athena_instance3d_create(mesh);
         if(!item) { code=-2; break; }
         s->items[s->count++]=item;
-        if(!athena_instance3d_set_position(item,((int)(i%8)-3.5f)*.12f,((int)(i/8)-3.5f)*.12f,0)) code=-1;
+        /* Edges: alternately on the left and right edge at z = -2.5. */
+        float x=crossing==2?(i&1?edge:-edge):((int)(i%8)-3.5f)*.12f,y=crossing==2?((int)(i/2)-15.5f)*.04f:((int)(i/8)-3.5f)*.12f;
+        if(!athena_instance3d_set_position(item,x,y,0)) code=-1;
         else code=athena_batch3d_add(s->batch,item);
     }
     athena_mesh3d_release(mesh); return code;
 }
 static void add_stats(AthenaRender3DStats *a,const AthenaRender3DStats *b) {
     a->submitted_objects+=b->submitted_objects; a->culled_objects+=b->culled_objects;
-    a->draw_passes+=b->draw_passes; a->triangles+=b->triangles; a->vu_batches+=b->vu_batches;
+    a->draw_passes+=b->draw_passes; a->pipeline_passes+=b->pipeline_passes; a->triangles+=b->triangles; a->vu_batches+=b->vu_batches;
     a->source_triangles+=b->source_triangles; a->clipped_triangles+=b->clipped_triangles;
     a->rejected_triangles+=b->rejected_triangles; a->geometry_bytes+=b->geometry_bytes;
+    a->guard_band_objects+=b->guard_band_objects;
 }
 static int compare_ticks(const void *a,const void *b) {
     clock_t x=*(const clock_t *)a,y=*(const clock_t *)b; return (x>y)-(x<y);
@@ -75,14 +104,15 @@ static void report(unsigned stage,clock_t samples[FRAMES-WARMUP],const AthenaRen
     qsort(samples,n,sizeof(*samples),compare_ticks);
     printf("3D_BASELINE {\"stage\":\"%s\",\"samples\":%u,\"drawTicksMean\":%.3f,"
         "\"drawTicksP95\":%ld,\"drawTicksP99\":%ld,\"allocs\":%u,"
-        "\"submittedObjectsPerFrame\":%.3f,\"culledObjectsPerFrame\":%.3f,\"drawPassesPerFrame\":%.3f,"
+        "\"submittedObjectsPerFrame\":%.3f,\"culledObjectsPerFrame\":%.3f,\"drawPassesPerFrame\":%.3f,\"pipelinePassesPerFrame\":%.3f,"
         "\"sourceTrianglesPerFrame\":%.3f,\"trianglesPerFrame\":%.3f,\"clippedTrianglesPerFrame\":%.3f,"
-        "\"rejectedTrianglesPerFrame\":%.3f,\"vuBatchesPerFrame\":%.3f,\"geometryBytesPerFrame\":%.3f}\n",
+        "\"rejectedTrianglesPerFrame\":%.3f,\"vuBatchesPerFrame\":%.3f,\"geometryBytesPerFrame\":%.3f,"
+        "\"guardBandObjectsPerFrame\":%.3f}\n",
         names[stage],n,mean/n,(long)samples[(unsigned)ceil(n*.95)-1],(long)samples[(unsigned)ceil(n*.99)-1],
         (unsigned)get_allocs_size(),totals->submitted_objects/(double)n,totals->culled_objects/(double)n,
-        totals->draw_passes/(double)n,totals->source_triangles/(double)n,totals->triangles/(double)n,
+        totals->draw_passes/(double)n,totals->pipeline_passes/(double)n,totals->source_triangles/(double)n,totals->triangles/(double)n,
         totals->clipped_triangles/(double)n,totals->rejected_triangles/(double)n,
-        totals->vu_batches/(double)n,totals->geometry_bytes/(double)n);
+        totals->vu_batches/(double)n,totals->geometry_bytes/(double)n,totals->guard_band_objects/(double)n);
 }
 int athena_main(int argc,char **argv) {
     (void)argc; (void)argv;
@@ -104,7 +134,10 @@ int athena_main(int argc,char **argv) {
     printf("3D regression: CLOCKS_PER_SEC=%ld; drawTicks exclude HUD, flip and reporting.\n",(long)CLOCKS_PER_SEC);
     for(unsigned stage=0;stage<sizeof(names)/sizeof(names[0]);stage++) {
         release(&scene);
-        int code=stage>=5?collection(&scene,stage==6||stage==8):pair(&scene,stage==0||stage==4);
+        /* The screen edge at z = -2.5: tan(30 deg) * aspect * 2.5. */
+        float edge=2.5f*tanf(30*3.14159265f/180)*(float)mode.width/height;
+        int code=stage==9?cube(&scene):stage==10?collection(&scene,2,edge):
+            stage>=5?collection(&scene,stage==6||stage==8,edge):pair(&scene,stage==0||stage==4);
         if(code<0) { printf("3D regression create error %d\n",code); goto cleanup; }
         printf("3D regression stage %u: %s\n",stage,names[stage]);
         AthenaRender3DStats totals={0};
@@ -112,8 +145,9 @@ int athena_main(int argc,char **argv) {
             if(athena_modules_stop_requested()) { result=0; goto cleanup; }
             if(stage==4&&!scene.count&&pair(&scene,1)<0) goto cleanup;
             clearScreen(0); AthenaRender3DStats stats={0}; clock_t start=clock();
-            AthenaRender3DCull cull=stage==1?ATHENA_RENDER3D_CULL_BACK:stage==2?ATHENA_RENDER3D_CULL_FRONT:ATHENA_RENDER3D_CULL_NONE;
-            if(stage==5||stage==6) code=athena_batch3d_draw(scene.batch,&camera,cull,&stats);
+            AthenaRender3DCull cull=stage==1||stage==9?ATHENA_RENDER3D_CULL_BACK:stage==2?ATHENA_RENDER3D_CULL_FRONT:ATHENA_RENDER3D_CULL_NONE;
+            if(stage==9&&!athena_instance3d_set_euler(scene.items[0],local*.03f,local*.02f,0)) goto cleanup;
+            if(stage==5||stage==6||stage==10) code=athena_batch3d_draw(scene.batch,&camera,cull,&stats);
             else for(unsigned n=0;n<scene.count;n++) {
                 unsigned index=(stage==0||stage==4)&&(local/30)%2?scene.count-1-n:n;
                 code=athena_render3d_draw(scene.items[index],stage==3&&n==1?&camera_b:&camera,cull,&stats);

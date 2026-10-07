@@ -3,7 +3,7 @@
   "name": "Sprite",
   "description": "Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed and rotated frames, tags and slices, loadable in the background) and animation clips (fps or per-frame durations, loop, once and pingpong, chained clips, frame events, promises), animated sprites with origin, scale, rotation and flip, batched drawing, and batch animation of TileMap sprites, all advanced in C by the Loop.",
   "category": "Graphics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": true,
   "sources": [

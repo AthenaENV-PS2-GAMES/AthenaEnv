@@ -1,0 +1,237 @@
+{
+  "date": "2026-10-06",
+  "source": "Log PCSX2 coletado nesta sessão (run_regression_native.log).",
+  "environment": "PCSX2 v2.8.2 (Flatpak), renderer Vulkan, 640x448 NTSC, velocidade 100%, BIOS SCPH-39001 v01.60; executado nesta sessão via -batch -fastboot.",
+  "runtime": "native",
+  "elf": "athena_3d_regression_native.elf",
+  "clocksPerSecond": 1000000,
+  "warmupFramesPerStage": 60,
+  "measuredFramesPerStage": 120,
+  "visualAcceptance": "Regressão não capturada; cenas scene, clipping e lighting (nativo e QuickJS) conferidas por captura em cada etapa: imagens corretas e iguais entre runtimes.",
+  "repetitions": 1,
+  "codeRevision": "7621811 com alterações locais não commitadas (passos 5.3/5.5: float na câmera/slerp/athena_js_float, athena_quaternion_euler).",
+  "geometryBytesScope": "Payload de posições/cores com padding; exclui tags, estado, constantes, uploads e 2D.",
+  "comparisonWith20261004": {
+    "note": "drawTicksMean [antes, depois]; inclui as mudanças de float de 2026-10-05 e 2026-10-06. Contadores de geometria idênticos; allocs/memória com pequeno acréscimo constante.",
+    "stages": [
+      {
+        "stage": "depth",
+        "drawTicksMean": [
+          100.45,
+          26.95
+        ]
+      },
+      {
+        "stage": "cull-back",
+        "drawTicksMean": [
+          100.317,
+          27.183
+        ]
+      },
+      {
+        "stage": "cull-front",
+        "drawTicksMean": [
+          100.325,
+          27.025
+        ]
+      },
+      {
+        "stage": "camera-tile-camera",
+        "drawTicksMean": [
+          109.442,
+          36.117
+        ]
+      },
+      {
+        "stage": "recreate",
+        "drawTicksMean": [
+          101.433,
+          27.2
+        ]
+      },
+      {
+        "stage": "inside-batch",
+        "drawTicksMean": [
+          3135.983,
+          817.45
+        ]
+      },
+      {
+        "stage": "clip-batch",
+        "drawTicksMean": [
+          18342.158,
+          2439.067
+        ]
+      },
+      {
+        "stage": "inside-individual",
+        "drawTicksMean": [
+          3134.1,
+          815.375
+        ]
+      },
+      {
+        "stage": "clip-individual",
+        "drawTicksMean": [
+          18341.9,
+          2437.017
+        ]
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage": "depth",
+      "samples": 120,
+      "drawTicksMean": 26.95,
+      "drawTicksP95": 28,
+      "drawTicksP99": 28,
+      "allocs": 1576,
+      "submittedObjectsPerFrame": 2.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 2.0,
+      "sourceTrianglesPerFrame": 2.0,
+      "trianglesPerFrame": 2.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 2.0,
+      "geometryBytesPerFrame": 128.0
+    },
+    {
+      "stage": "cull-back",
+      "samples": 120,
+      "drawTicksMean": 27.183,
+      "drawTicksP95": 28,
+      "drawTicksP99": 28,
+      "allocs": 1576,
+      "submittedObjectsPerFrame": 2.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 2.0,
+      "sourceTrianglesPerFrame": 2.0,
+      "trianglesPerFrame": 2.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 2.0,
+      "geometryBytesPerFrame": 128.0
+    },
+    {
+      "stage": "cull-front",
+      "samples": 120,
+      "drawTicksMean": 27.025,
+      "drawTicksP95": 28,
+      "drawTicksP99": 28,
+      "allocs": 1576,
+      "submittedObjectsPerFrame": 2.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 2.0,
+      "sourceTrianglesPerFrame": 2.0,
+      "trianglesPerFrame": 2.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 2.0,
+      "geometryBytesPerFrame": 128.0
+    },
+    {
+      "stage": "camera-tile-camera",
+      "samples": 120,
+      "drawTicksMean": 36.117,
+      "drawTicksP95": 37,
+      "drawTicksP99": 37,
+      "allocs": 1604,
+      "submittedObjectsPerFrame": 2.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 2.0,
+      "sourceTrianglesPerFrame": 2.0,
+      "trianglesPerFrame": 2.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 2.0,
+      "geometryBytesPerFrame": 128.0
+    },
+    {
+      "stage": "recreate",
+      "samples": 120,
+      "drawTicksMean": 27.2,
+      "drawTicksP95": 28,
+      "drawTicksP99": 31,
+      "allocs": 868,
+      "submittedObjectsPerFrame": 2.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 2.0,
+      "sourceTrianglesPerFrame": 2.0,
+      "trianglesPerFrame": 2.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 2.0,
+      "geometryBytesPerFrame": 128.0
+    },
+    {
+      "stage": "inside-batch",
+      "samples": 120,
+      "drawTicksMean": 817.45,
+      "drawTicksP95": 818,
+      "drawTicksP99": 823,
+      "allocs": 11344,
+      "submittedObjectsPerFrame": 64.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "sourceTrianglesPerFrame": 64.0,
+      "trianglesPerFrame": 64.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 4096.0
+    },
+    {
+      "stage": "clip-batch",
+      "samples": 120,
+      "drawTicksMean": 2439.067,
+      "drawTicksP95": 2440,
+      "drawTicksP99": 2444,
+      "allocs": 11344,
+      "submittedObjectsPerFrame": 64.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "sourceTrianglesPerFrame": 64.0,
+      "trianglesPerFrame": 128.0,
+      "clippedTrianglesPerFrame": 64.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 10240.0
+    },
+    {
+      "stage": "inside-individual",
+      "samples": 120,
+      "drawTicksMean": 815.375,
+      "drawTicksP95": 816,
+      "drawTicksP99": 816,
+      "allocs": 11344,
+      "submittedObjectsPerFrame": 64.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "sourceTrianglesPerFrame": 64.0,
+      "trianglesPerFrame": 64.0,
+      "clippedTrianglesPerFrame": 0.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 4096.0
+    },
+    {
+      "stage": "clip-individual",
+      "samples": 120,
+      "drawTicksMean": 2437.017,
+      "drawTicksP95": 2438,
+      "drawTicksP99": 2443,
+      "allocs": 11344,
+      "submittedObjectsPerFrame": 64.0,
+      "culledObjectsPerFrame": 0.0,
+      "drawPassesPerFrame": 64.0,
+      "sourceTrianglesPerFrame": 64.0,
+      "trianglesPerFrame": 128.0,
+      "clippedTrianglesPerFrame": 64.0,
+      "rejectedTrianglesPerFrame": 0.0,
+      "vuBatchesPerFrame": 64.0,
+      "geometryBytesPerFrame": 10240.0
+    }
+  ]
+}

@@ -9,6 +9,7 @@
 static owl_qword memory[512];
 static int active[CHANNEL_SIZE],waits[CHANNEL_SIZE],sends[CHANNEL_SIZE];
 static owl_qword *reading[CHANNEL_SIZE];
+static int flusha_tags,flushe_tags,model_uploads;
 static int parse_chains,position_chunks,color_chunks,clipped_chunks,clip_mode,normal_chunks,light_uploads,uv_chunks,textured_tags;
 static uint32_t geometry_bytes;
 static GSCONTEXT gs={.ZBuffering=1,.Width=640,.Height=448,.PSMZ=GS_ZBUF_16S};
@@ -37,6 +38,9 @@ void dmaKit_send_chain_ucab(owl_channel c,void *data) {
         unsigned count=p->sword[0]&0xffffu, tag=(p->sword[0]>>28)&7u;
         assert(tag==DMA_CNT||tag==DMA_END); /* Geometry must never be DMA_REF. */
         unsigned code=p->sword[3], cmd=code>>24, dest=code&0x3ffu, vertices=(code>>16)&255u;
+        if(cmd==0x13) flusha_tags++;
+        if(cmd==0x10) flushe_tags++;
+        if(cmd==0x6c && dest==5 && !(code&(1u<<15))) { assert(count==4); model_uploads++; }
         if(cmd==0x6c && dest==26) { assert(count==1); clip_mode=p[1].sword[1]; }
         if(cmd==0x68 && dest==2) {
             assert(!clip_mode);
@@ -152,18 +156,53 @@ int main(void) {
     assert(athena_camera3d_set_projection(&camera,60,1,1,10));
     assert(athena_camera3d_look_at(&camera,0,0,-1));
     assert(athena_camera3d_set_position(&camera,0,0,0));
+    /* A 4096-pixel screen leaves no guard band (factor 1): the C clipper. */
+    gs.Width=4096;
     stats=(AthenaRender3DStats){0};
     assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
     control=owl_get_controller();
     assert((size_t)(internal_packet.ptr-control->base-(control->context?control->size:0))==control->alloc);
     assert(stats.source_triangles==18 && stats.clipped_triangles==18 && stats.triangles==36 && stats.vu_batches==3);
+    assert(!stats.near_clip_objects && !stats.guard_band_objects);
     assert(registers[GS_CACHE_TEST]==123 && registers[GS_CACHE_ZBUF]==(1ull<<32));
-    athena_instance3d_release(instance); /* Clipped scratch must have been copied into DMA. */
     owl_wait_generation(owl_flush_generation());
     assert(clipped_chunks==3 && position_chunks==2 && color_chunks==5);
     assert(stats.geometry_bytes==108*20 && geometry_bytes==stats.geometry_bytes);
+    /* With the guard band, only the near plane cuts it: VU1 clips it, in
+     * batches of at most 24 untransformed vertices (24 + 24 + 6). */
+    gs.Width=640; geometry_bytes=0;
+    stats=(AthenaRender3DStats){0};
+    assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+    assert(stats.near_clip_objects==1 && !stats.clipped_triangles && stats.vu_batches==3);
+    assert(stats.source_triangles==18 && stats.triangles==18);
+    athena_instance3d_release(instance); /* Inline geometry must have been copied into DMA. */
+    owl_wait_generation(owl_flush_generation());
+    assert(stats.geometry_bytes==(24+24+8)*16 && geometry_bytes==stats.geometry_bytes);
+    /* VU1 morph: 66 untextured unlit vertices with 5 targets, 2 active:
+     * batches of 33, positions 12 + colours 4 + 2 deltas 24 bytes each. */
+    {
+        float mp[66*3],deltas[5*66*3];
+        for(unsigned i=0;i<66;i++) { mp[i*3]=(i%3)*.1f; mp[i*3+1]=(i%3==2)*.1f; mp[i*3+2]=-3; }
+        for(unsigned i=0;i<5*66*3;i++) deltas[i]=.01f;
+        AthenaGeometry3D mg={.positions=mp,.vertex_count=66,.target_positions=deltas,.target_count=5};
+        AthenaMesh3D *morph_mesh=NULL; assert(!athena_mesh3d_create(&mg,&morph_mesh));
+        AthenaMesh3DView mv; athena_mesh3d_view(morph_mesh,&mv);
+        AthenaMatrix4 identity; ath_matrix4_identity(&identity);
+        const float two[5]={.5f,0,0,.25f,0},five[5]={.1f,.1f,.1f,.1f,.1f};
+        geometry_bytes=0; stats=(AthenaRender3DStats){0};
+        assert(athena_render3d_draw_morph(&mv,&identity,two,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&stats)==0);
+        assert(stats.vu_morph_objects==1&&stats.vu_batches==2&&stats.submitted_objects==1&&stats.triangles==22);
+        assert(stats.geometry_bytes==(36+36)*(12+4+24));
+        stats=(AthenaRender3DStats){0};
+        assert(athena_render3d_draw_morph(&mv,&identity,five,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&stats)==1);
+        assert(!stats.submitted_objects&&!stats.vu_batches); /* the caller blends on the EE */
+        athena_mesh3d_release(morph_mesh);
+        owl_wait_generation(owl_flush_generation());
+    }
+    /* The checks below exercise the C clipper: no guard band from here. */
+    gs.Width=4096;
     athena_render3d_module_shutdown();
-    assert(program_loads==1 && program_unloads==1);
+    assert(program_loads==3 && program_unloads==3); /* the colour, near and morph programs */
     /* Recreate resources/programs repeatedly, comparing Batch and individual
      * draws through the production packet path and a second camera/context. */
     const float small[]={-.1,-.1,-3, .1,-.1,-3, 0,.1,-3};
@@ -201,7 +240,7 @@ int main(void) {
         athena_render3d_module_shutdown();
         assert(geometry_bytes==128);
         athena_render3d_module_shutdown(); /* Idempotent, then reload next cycle. */
-        assert(program_loads==cycle+2 && program_unloads==cycle+2);
+        assert(program_loads==cycle+4 && program_unloads==cycle+4);
         gs.PrimContext=0;
     }
     /* Alternate the new diffuse program with the existing clipping/color
@@ -234,7 +273,7 @@ int main(void) {
     assert(registers[GS_CACHE_TEST]==123&&registers[GS_CACHE_ZBUF]==(1ull<<32));
     athena_render3d_module_shutdown();
     assert(normal_chunks==2&&light_uploads==2&&geometry_bytes==384);
-    assert(program_loads==15&&program_unloads==15);
+    assert(program_loads==17&&program_unloads==17); /* 15 plus the near and morph programs once */
     /* Texture UV streams remain inline after releasing every mesh/instance.
      * Switch contexts and programs while preserving all cached GS registers. */
     uint32_t pixel=255; AthenaTexture3DPixels pixels={.width=1,.height=1,.pixels=&pixel,.pixel_count=1};
@@ -257,6 +296,75 @@ int main(void) {
     }
     athena_texture3d_release(texture); athena_render3d_module_shutdown();
     assert(uv_chunks==4&&textured_tags==4&&geometry_bytes==688);
-    assert(program_loads==16&&program_unloads==16);
+    assert(program_loads==18&&program_unloads==18);
+    /* Grouping: a Batch shares one pass among consecutive objects of the same
+     * pipeline. Contained and clipped unlit objects both use the color
+     * program; a diffuse object between them needs its own pass. */
+    gs.PrimContext=0;
+    AthenaMaterial3D unlit; athena_material3d_default(&unlit);
+    athena_material3d_default(&material); material.shading=ATHENA_MATERIAL3D_DIFFUSE;
+    AthenaMesh3D *inside_mesh=NULL,*crossing_mesh=NULL,*lit_mesh=NULL;
+    geometry=(AthenaGeometry3D){.positions=small,.vertex_count=3,.material=&unlit};
+    assert(!athena_mesh3d_create(&geometry,&inside_mesh));
+    geometry=(AthenaGeometry3D){.positions=crossing,.vertex_count=3,.material=&unlit};
+    assert(!athena_mesh3d_create(&geometry,&crossing_mesh));
+    geometry=(AthenaGeometry3D){.positions=small,.vertex_count=3,.material=&material};
+    assert(!athena_mesh3d_create(&geometry,&lit_mesh));
+    AthenaBatch3D *batch=athena_batch3d_create(); assert(batch);
+    AthenaMesh3D *order[]={inside_mesh,crossing_mesh,inside_mesh,inside_mesh};
+    for(unsigned i=0;i<4;i++) {
+        instance=athena_instance3d_create(order[i]); assert(instance);
+        assert(athena_instance3d_set_position(instance,i*.01f,0,0));
+        assert(!athena_batch3d_add(batch,instance)); athena_instance3d_release(instance);
+    }
+    owl_wait_generation(owl_flush_generation());
+    flusha_tags=flushe_tags=model_uploads=0; clipped_chunks=position_chunks=0;
+    assert(!athena_batch3d_draw(batch,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+    owl_wait_generation(owl_flush_generation());
+    assert(stats.draw_passes==4&&stats.pipeline_passes==1&&stats.clipped_triangles==1);
+    assert(flusha_tags==2&&flushe_tags==3&&model_uploads==4);
+    assert(position_chunks==3&&clipped_chunks==1);
+    assert(registers[GS_CACHE_TEST]==123&&registers[GS_CACHE_ZBUF]==(1ull<<32));
+    /* Individual draws keep one pass each. */
+    flusha_tags=flushe_tags=0; stats=(AthenaRender3DStats){0};
+    instance=athena_instance3d_create(inside_mesh);
+    assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+    assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+    athena_instance3d_release(instance);
+    owl_wait_generation(owl_flush_generation());
+    assert(stats.draw_passes==2&&stats.pipeline_passes==2&&flusha_tags==4&&!flushe_tags);
+    /* A diffuse object splits the run: unlit, diffuse, unlit is three passes. */
+    athena_batch3d_clear(batch);
+    AthenaMesh3D *mixed[]={inside_mesh,lit_mesh,inside_mesh};
+    for(unsigned i=0;i<3;i++) {
+        instance=athena_instance3d_create(mixed[i]); assert(!athena_batch3d_add(batch,instance));
+        athena_instance3d_release(instance);
+    }
+    lights=athena_lights_create(); assert(lights&&athena_lights_set_ambient(lights,.5f,.5f,.5f));
+    flusha_tags=flushe_tags=model_uploads=0; light_uploads=0;
+    assert(!athena_batch3d_draw_lit(batch,&camera,lights,ATHENA_RENDER3D_CULL_NONE,&stats));
+    owl_wait_generation(owl_flush_generation());
+    assert(stats.draw_passes==3&&stats.pipeline_passes==3&&flusha_tags==6&&!flushe_tags&&model_uploads==3&&light_uploads==1);
+    /* A caller's group spans several Batch draws and is not closed by them;
+     * a nested begin fails. A failed draw inside a group still restores. */
+    assert(!athena_render3d_group_begin()); assert(athena_render3d_group_begin()==-1);
+    athena_batch3d_clear(batch);
+    instance=athena_instance3d_create(inside_mesh); assert(!athena_batch3d_add(batch,instance));
+    flusha_tags=flushe_tags=0;
+    AthenaRender3DStats first_draw,second_draw;
+    assert(!athena_batch3d_draw(batch,&camera,ATHENA_RENDER3D_CULL_NONE,&first_draw));
+    assert(!athena_batch3d_draw(batch,&camera,ATHENA_RENDER3D_CULL_NONE,&second_draw));
+    assert(first_draw.pipeline_passes==1&&second_draw.pipeline_passes==0);
+    assert(registers[GS_CACHE_TEST]!=123); /* Pass still open. */
+    stats=(AthenaRender3DStats){0};
+    assert(athena_render3d_draw(instance,&camera,(AthenaRender3DCull)3,&stats)==-1);
+    athena_render3d_group_end();
+    owl_wait_generation(owl_flush_generation());
+    assert(flusha_tags==2&&flushe_tags==1);
+    assert(registers[GS_CACHE_TEST]==123&&registers[GS_CACHE_ZBUF]==(1ull<<32));
+    assert(!athena_render3d_group_begin()); athena_render3d_group_end();
+    athena_instance3d_release(instance); athena_lights_destroy(lights); athena_batch3d_destroy(batch);
+    athena_mesh3d_release(inside_mesh); athena_mesh3d_release(crossing_mesh); athena_mesh3d_release(lit_mesh);
+    athena_render3d_module_shutdown();
     puts("3D packets and cross-channel DMA lifetime tests passed"); return 0;
 }

@@ -89,6 +89,11 @@ if command -v openvcl > /dev/null && command -v masp > /dev/null; then
 else
     echo "vcl: openvcl or masp not found, .vsm check skipped"
 fi
+# OpenVCL scheduling hazards in the committed .vsm (values lost across a
+# loop's back edge, two slots writing one register in a cycle).
+if command -v python3 > /dev/null; then
+    python3 tools/check_vsm_loops.py $(find src -name '*.vsm') || exit 1
+fi
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js
 # (references from tests/host/wav2adp/make_refs.mjs) and, for 16-bit mono,

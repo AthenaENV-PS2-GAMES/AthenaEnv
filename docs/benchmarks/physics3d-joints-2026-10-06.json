@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "bin/joints_example.js (--cfg=joints_example.ini)",
+  "change": "Juntas no Physics3D: ball (bloco 3x3 de ponto), hinge (ponto + 2 linhas angulares, limites e motor), distance (rígida ou corda) e weld (ponto + 3 linhas angulares), resolvidas nas mesmas iterações dos contatos com Baumgarte e warm starting; ilhas e sono atravessam as juntas; corpos ligados não colidem entre si.",
+  "findings": [
+    "Cena com corrente de 10 elos, cata-vento com motor, porta com limites de +-60 graus e pêndulo de corda (15 corpos, 14 juntas): 663.1 us por passo com as pás soldadas colidindo entre si -> 593.5 us sem colisão entre corpos ligados.",
+    "Porta parou em 0.89-1.01 rad, dentro do limite de pi/3 (1.047).",
+    "Bug achado: o weld media a rotação relativa no mundo (qa * conj(qb)), que muda quando o conjunto gira; agora em b (conj(qb) * qa), com teste host que gira em torno de outro eixo e falha na fórmula antiga.",
+    "As pás do cata-vento sobrepostas no eixo colidiam e brigavam com o weld; corpos ligados por junta não geram contatos entre si.",
+    "Imagem conferida na primeira execução (corrente, porta, pêndulo); a do cata-vento corrigido ficou pendente: a área de captura estava coberta por outra janela."
+  ],
+  "stage": {"samples": 540, "stepTicksMean": 593.5, "drawTicksMean": 366.1, "bodies": 15, "joints": 14}
+}

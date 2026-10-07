@@ -284,6 +284,9 @@ $(EE_SRC_DIR)%.vsm: $(EE_SRC_DIR)%.vcl
 src/modules/render3d/vu1/draw_3D_colors.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
 src/modules/render3d/vu1/draw_3D_diffuse.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
 src/modules/render3d/vu1/draw_3D_texture.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
+src/modules/render3d/vu1/draw_3D_skinned.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
+src/modules/render3d/vu1/draw_3D_near.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
+src/modules/render3d/vu1/draw_3D_morph.vsm: $(wildcard src/modules/render3d/vu1/include/*.i)
 
 $(EE_OBJ_DIR)%.o: $(EE_SRC_DIR)%.vsm
 	@echo DVP - $<

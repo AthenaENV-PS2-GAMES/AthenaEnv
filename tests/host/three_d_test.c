@@ -31,6 +31,32 @@ int main(void) {
     AthenaVector4 pos={10,20,30,1},scale={2,3,4,0};
     assert(athena_quaternion_trs(&m,&pos,&q,&scale));
     ath_matrix4_apply(&v,&m,&point); closef(v.x,10); closef(v.y,22); closef(v.z,30);
+    /* Closed-form Euler equals the former composition qz * qy * qx. */
+    for(int k=0;k<200;k++) {
+        float ex=k*.173f-17,ey=k*-.291f+9,ez=k*.057f-3;
+        AthenaQuaternion qx,qy,qz,composed,closed;
+        assert(athena_quaternion_axis_angle(&qx,1,0,0,ex)&&athena_quaternion_axis_angle(&qy,0,1,0,ey)&&
+            athena_quaternion_axis_angle(&qz,0,0,1,ez));
+        assert(athena_quaternion_multiply(&composed,&qy,&qx)&&athena_quaternion_multiply(&composed,&qz,&composed));
+        assert(athena_quaternion_euler(&closed,ex,ey,ez));
+        float sign=composed.w*closed.w+composed.x*closed.x+composed.y*closed.y+composed.z*closed.z<0?-1:1;
+        assert(fabsf(closed.x*sign-composed.x)<2e-6f&&fabsf(closed.y*sign-composed.y)<2e-6f&&
+            fabsf(closed.z*sign-composed.z)<2e-6f&&fabsf(closed.w*sign-composed.w)<2e-6f);
+    }
+    before=q; assert(!athena_quaternion_euler(&q,NAN,0,0)&&!memcmp(&before,&q,sizeof(q)));
+    /* Float slerp against a double reference, including the nlerp branch. */
+    for(int k=0;k<100;k++) {
+        AthenaQuaternion a,b,r; float t=(k%11)/10.0f;
+        assert(athena_quaternion_axis_angle(&a,1,2,3,k*.07f)&&athena_quaternion_axis_angle(&b,-2,1,.5f,k*-.05f+.01f));
+        assert(athena_quaternion_slerp(&r,&a,&b,t));
+        double d=(double)a.x*b.x+(double)a.y*b.y+(double)a.z*b.z+(double)a.w*b.w,sb=1;
+        if(d<0) { d=-d; sb=-1; }
+        double s0=1-t,s1=t;
+        if(d<0.9995) { double an=acos(d>1?1:d); s0=sin((1-t)*an)/sin(an); s1=sin(t*an)/sin(an); }
+        double e[4]={a.x*s0+b.x*sb*s1,a.y*s0+b.y*sb*s1,a.z*s0+b.z*sb*s1,a.w*s0+b.w*sb*s1};
+        double n=sqrt(e[0]*e[0]+e[1]*e[1]+e[2]*e[2]+e[3]*e[3]);
+        assert(fabs(r.x-e[0]/n)<1e-5&&fabs(r.y-e[1]/n)<1e-5&&fabs(r.z-e[2]/n)<1e-5&&fabs(r.w-e[3]/n)<1e-5);
+    }
     AthenaCamera3D c,saved;
     athena_camera3d_init(&c);
     assert(athena_camera3d_set_projection(&c,60,1,1,10)); saved=c;
@@ -39,6 +65,32 @@ int main(void) {
     assert(!athena_camera3d_set_position(&c,0,0,0));
     assert(!athena_camera3d_set_up(&c,0,0,1));
     point=(AthenaVector4){0,0,-1,1}; ath_matrix4_apply(&v,&c.projection,&point); closef(v.z/v.w,1);
+    /* Float view: orthonormal and equal to a double look-at reference; the
+     * setters keep the validated view, so update() only multiplies. */
+    {
+        AthenaCamera3D moving; athena_camera3d_init(&moving);
+        assert(athena_camera3d_set_position(&moving,3,-2,7)&&athena_camera3d_look_at(&moving,-1,4,-2)&&
+            athena_camera3d_set_up(&moving,.1f,1,.2f)&&athena_camera3d_update(&moving));
+        double z[3]={4,-6,9},x[3],y[3],up[3]={.1f,1,.2f},n=sqrt(16+36+81);
+        for(int i=0;i<3;i++) z[i]/=n;
+        x[0]=up[1]*z[2]-up[2]*z[1]; x[1]=up[2]*z[0]-up[0]*z[2]; x[2]=up[0]*z[1]-up[1]*z[0];
+        n=sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]); for(int i=0;i<3;i++) x[i]/=n;
+        y[0]=z[1]*x[2]-z[2]*x[1]; y[1]=z[2]*x[0]-z[0]*x[2]; y[2]=z[0]*x[1]-z[1]*x[0];
+        double p[3]={3,-2,7};
+        for(int i=0;i<3;i++) {
+            assert(fabs(moving.view.value[i*4]-x[i])<1e-6&&fabs(moving.view.value[i*4+1]-y[i])<1e-6&&
+                fabs(moving.view.value[i*4+2]-z[i])<1e-6);
+        }
+        assert(fabs(moving.view.value[12]+(x[0]*p[0]+x[1]*p[1]+x[2]*p[2]))<1e-5&&
+            fabs(moving.view.value[14]+(z[0]*p[0]+z[1]*p[1]+z[2]*p[2]))<1e-5);
+        AthenaMatrix4 vp; ath_matrix4_multiply(&vp,&moving.projection,&moving.view);
+        assert(ath_matrix4_equals(&vp,&moving.view_projection));
+        saved=moving;
+        assert(!athena_camera3d_look_at(&moving,3,-2,7)); /* target == position */
+        assert(!athena_camera3d_set_position(&moving,3e38f,0,-3e38f)); /* overflowing translation */
+        assert(!memcmp(&saved,&moving,sizeof(moving)));
+        assert(athena_camera3d_set_position(&moving,1e30f,0,0)&&athena_camera3d_update(&moving)==1);
+    }
     point.z=-10; ath_matrix4_apply(&v,&c.projection,&point); closef(v.z/v.w,-1);
     float xyz[]={-1,-1,0, 1,-1,0, 0,1,0};
     float rgba[]={1,0,0,1, 0,1,0,1, 0,0,1,1};

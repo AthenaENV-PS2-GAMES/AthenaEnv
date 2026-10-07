@@ -4,7 +4,9 @@
  * 180-frame stages over the same 8x8 grid of 64 cubes (60 warm-up frames):
  * batch/scene, unlit/diffuse, static/animated. The grid stays fully inside
  * the frustum in stages 0-5, so no object takes the C clipping path; stage 6
- * repeats 3d_scene "many-nodes" for reference, clipping included.
+ * repeats 3d_scene "many-nodes" for reference, clipping included; stage 7
+ * spins the stage 4 cubes natively (set once, athena_scene3d_advance());
+ * stage 8 plays an Animation3D rotation clip per cube (athena_animation3d_advance()).
  * Update ticks include the transform setters; draw ticks exclude HUD/flip. */
 #include <math.h>
 #include <stdio.h>
@@ -14,6 +16,7 @@
 #include <athena.h>
 #include <athena/screen.h>
 #include <athena/scene3d.h>
+#include <athena/animation3d.h>
 #include <athena/render3d.h>
 #include <athena/draw.h>
 
@@ -23,16 +26,20 @@
 #define WARMUP 60
 #define CALLS 2000
 static const char *names[]={"batch-unlit-static","batch-lit-static","scene-lit-static",
-    "batch-lit-animated","scene-lit-animated","scene-lit-rows","scene-many-nodes"};
+    "batch-lit-animated","scene-lit-animated","scene-lit-rows","scene-many-nodes",
+    "scene-lit-spin","scene-lit-clip"};
 typedef struct {
     AthenaBatch3D *batch;
     AthenaInstance3D *items[COUNT];
     AthenaScene3D *scene;
     AthenaNode3D *system,*rows[GRID],*cubes[COUNT];
+    AthenaPlayer3D *players[COUNT];
 } Grid;
 static void release(Grid *g) {
     athena_batch3d_destroy(g->batch);
-    for(unsigned i=0;i<COUNT;i++) { athena_instance3d_release(g->items[i]); athena_node3d_release(g->cubes[i]); }
+    for(unsigned i=0;i<COUNT;i++) {
+        athena_instance3d_release(g->items[i]); athena_node3d_release(g->cubes[i]); athena_player3d_release(g->players[i]);
+    }
     for(unsigned i=0;i<GRID;i++) athena_node3d_release(g->rows[i]);
     athena_node3d_release(g->system); athena_scene3d_release(g->scene);
     memset(g,0,sizeof(*g));
@@ -45,6 +52,18 @@ static AthenaNode3D *child(AthenaNode3D *parent,AthenaMesh3D *mesh,int *code) {
     if(*code==0) *code=athena_node3d_set_mesh(n,mesh);
     if(*code==0) *code=athena_node3d_add_child(parent,n);
     return n;
+}
+/* Rotation keys every 0.25 s over 3 s, matching the stage 4 Euler rates. */
+static AthenaClip3D *rotation_clip(void) {
+    enum { KEYS=13 };
+    float times[KEYS],values[KEYS*4];
+    for(unsigned k=0;k<KEYS;k++) {
+        float t=k*.25f,angle=t*2*3.14159265358979323846f/3; AthenaQuaternion q;
+        if(!athena_quaternion_euler(&q,angle,angle*.5f,0)) return NULL;
+        times[k]=t; values[k*4]=q.x; values[k*4+1]=q.y; values[k*4+2]=q.z; values[k*4+3]=q.w;
+    }
+    AthenaTrack3DDesc track={.path=ATHENA_ANIM3D_ROTATION,.times=times,.values=values,.key_count=KEYS};
+    AthenaClip3D *clip=NULL; return athena_clip3d_create(&track,1,&clip)<0?NULL:clip;
 }
 static int create(Grid *g,unsigned stage,AthenaMesh3D *unlit,AthenaMesh3D *lit) {
     int code=0;
@@ -70,6 +89,14 @@ static int create(Grid *g,unsigned stage,AthenaMesh3D *unlit,AthenaMesh3D *lit) 
             AthenaNode3D *n=g->cubes[r*GRID+c]=child(g->rows[r],lit,&code);
             if(code==0) code=athena_node3d_set_position(n,cube_x(c),0,0);
             if(code==0) code=athena_node3d_set_scale(n,.25f,.25f,.25f);
+            /* Comparable to stage 4: 2pi/3 and pi/3 rad/s about local x and y. */
+            if(code==0&&stage==7) code=athena_node3d_set_spin(n,2*3.14159265358979323846f/3,3.14159265358979323846f/3,0);
+            if(code==0&&stage==8) {
+                AthenaClip3D *clip=rotation_clip(); if(!clip) return -2;
+                AthenaPlayer3D *p=g->players[r*GRID+c]=athena_player3d_create(clip,&n,1);
+                athena_clip3d_release(clip); if(!p) return -2;
+                athena_player3d_set_loop(p,1); athena_player3d_play(p);
+            }
         }
     }
     return code;
@@ -81,6 +108,10 @@ static int animate(Grid *g,unsigned stage,unsigned local) {
         for(unsigned i=0;i<COUNT;i++) if(!athena_instance3d_set_euler(g->items[i],angle,angle*.5f,0)) return -1;
     } else if(stage==4) {
         for(unsigned i=0;i<COUNT;i++) if(athena_node3d_set_euler(g->cubes[i],angle,angle*.5f,0)<0) return -1;
+    } else if(stage==8) {
+        int finished=athena_animation3d_advance(1/60.0f); if(finished<0) return finished;
+    } else if(stage==7) {
+        int moved=athena_scene3d_advance(g->scene,1/60.0f); if(moved<0) return moved;
     } else if(stage==5||stage==6) {
         if(stage==6&&athena_node3d_set_euler(g->system,.3f,angle*.25f,0)<0) return -1;
         for(unsigned r=0;r<GRID;r++) if(athena_node3d_set_euler(g->rows[r],angle*(r&1?1:-1),0,0)<0) return -1;
@@ -106,10 +137,23 @@ static void micro(AthenaCamera3D *camera) {
     clock_t t4=clock();
     for(unsigned i=0;i<CALLS;i++) { volatile double x=i*.37,y=x*1.0001+.5; sink=(float)(x*y-y/x); }
     clock_t t5=clock();
+    for(unsigned i=0;i<CALLS;i++) { athena_quaternion_euler(&q,i*1e-3f,i*.5e-3f,0); sink=q.w; }
+    clock_t t6=clock();
+    AthenaQuaternion from=q,to; athena_quaternion_axis_angle(&to,0,1,0,2);
+    for(unsigned i=0;i<CALLS;i++) { athena_quaternion_slerp(&q,&from,&to,(i&255)/255.0f); sink=q.w; }
+    clock_t t7=clock();
+    /* A follow camera: new position and target, then the view-projection. */
+    AthenaCamera3D moving=*camera;
+    for(unsigned i=0;i<CALLS;i++) {
+        athena_camera3d_set_position(&moving,i*1e-3f,1,2); athena_camera3d_look_at(&moving,0,0,-7);
+        athena_camera3d_update(&moving); sink=moving.view_projection.value[0];
+    }
+    clock_t t8=clock();
     double us=1e6/CLOCKS_PER_SEC/CALLS;
     printf("3D_PROFILE_MICRO {\"calls\":%u,\"matrix4MultiplyUs\":%.3f,\"quaternionTrsUs\":%.3f,"
-        "\"boxRelationInsideUs\":%.3f,\"boxRelationIntersectUs\":%.3f,\"doubleMulDivAddUs\":%.3f}\n",
-        CALLS,(t1-t0)*us,(t2-t1)*us,(t3-t2)*us,(t4-t3)*us,(t5-t4)*us);
+        "\"boxRelationInsideUs\":%.3f,\"boxRelationIntersectUs\":%.3f,\"doubleMulDivAddUs\":%.3f,"
+        "\"quaternionEulerUs\":%.3f,\"quaternionSlerpUs\":%.3f,\"cameraMoveUs\":%.3f}\n",
+        CALLS,(t1-t0)*us,(t2-t1)*us,(t3-t2)*us,(t4-t3)*us,(t5-t4)*us,(t6-t5)*us,(t7-t6)*us,(t8-t7)*us);
 }
 static int compare_ticks(const void *a,const void *b) {
     clock_t x=*(const clock_t *)a,y=*(const clock_t *)b; return (x>y)-(x<y);
@@ -166,7 +210,7 @@ int athena_main(int argc,char **argv) {
             if(local>=WARMUP) {
                 update_samples[local-WARMUP]=middle-start; draw_samples[local-WARMUP]=end-middle;
                 totals.triangles+=stats.triangles; totals.clipped_triangles+=stats.clipped_triangles;
-                totals.draw_passes+=stats.draw_passes; totals.vu_batches+=stats.vu_batches;
+                totals.draw_passes+=stats.draw_passes; totals.pipeline_passes+=stats.pipeline_passes; totals.vu_batches+=stats.vu_batches;
                 totals.geometry_bytes+=stats.geometry_bytes; world_updates+=us.world_updates;
             }
             for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++)
@@ -180,12 +224,12 @@ int athena_main(int argc,char **argv) {
         double tick_us=1e6/CLOCKS_PER_SEC;
         printf("3D_PROFILE {\"stage\":\"%s\",\"samples\":%u,\"updateUsMean\":%.1f,\"updateUsMedian\":%.1f,"
             "\"drawUsMean\":%.1f,\"drawUsMedian\":%.1f,\"drawUsPerPass\":%.1f,\"worldUpdatesPerFrame\":%.2f,"
-            "\"drawPassesPerFrame\":%.2f,\"trianglesPerFrame\":%.2f,\"clippedTrianglesPerFrame\":%.2f,"
+            "\"drawPassesPerFrame\":%.2f,\"pipelinePassesPerFrame\":%.2f,\"trianglesPerFrame\":%.2f,\"clippedTrianglesPerFrame\":%.2f,"
             "\"vuBatchesPerFrame\":%.2f,\"geometryBytesPerFrame\":%.1f}\n",
             names[stage],n,update_mean*tick_us,median(update_samples,n)*tick_us,
             draw_mean*tick_us,median(draw_samples,n)*tick_us,
             totals.draw_passes?draw_mean*tick_us*n/totals.draw_passes:0,world_updates/(double)n,
-            totals.draw_passes/(double)n,totals.triangles/(double)n,totals.clipped_triangles/(double)n,
+            totals.draw_passes/(double)n,totals.pipeline_passes/(double)n,totals.triangles/(double)n,totals.clipped_triangles/(double)n,
             totals.vu_batches/(double)n,totals.geometry_bytes/(double)n);
     }
     puts("3D profile complete; stages 0-5 should show the same 8x8 grid of 64 cubes."); result=0;

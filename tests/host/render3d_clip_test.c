@@ -38,7 +38,46 @@ static int capture(const AthenaVector4 *positions,const AthenaColor3D *colors,ui
 static int refuse(const AthenaVector4 *p,const AthenaColor3D *c,uint32_t n,void *unused) {
     (void)p; (void)c; (void)n; (void)unused; return -2;
 }
+/* box_relation() reference: every corner transformed on its own. */
+static int reference_relation(const AthenaMatrix4 *m,const float min[3],const float max[3]) {
+    unsigned common=63; int contained=1;
+    for(int i=0;i<8;i++) {
+        AthenaVector4 in={i&1?max[0]:min[0],i&2?max[1]:min[1],i&4?max[2]:min[2],1},v;
+        ath_matrix4_apply(&v,m,&in);
+        common&=(v.x < -v.w?1u:0u)|(v.x>v.w?2u:0u)|(v.y < -v.w?4u:0u)|
+            (v.y>v.w?8u:0u)|(v.z < -v.w?16u:0u)|(v.z>v.w?32u:0u);
+        float inner=v.w-fabsf(v.w)*1e-5f;
+        if(v.w<=0 || fabsf(v.x)>=inner || fabsf(v.y)>=inner || fabsf(v.z)>=inner) contained=0;
+    }
+    return common?ATHENA_FRUSTUM3D_OUTSIDE:contained?ATHENA_FRUSTUM3D_INSIDE:ATHENA_FRUSTUM3D_INTERSECT;
+}
+/* Corners built from one transformed corner plus scaled columns round
+ * differently from eight full transforms: random boxes and models must
+ * agree with the reference except within float noise of a plane. */
+static void check_box_relation_random(void) {
+    AthenaCamera3D camera; athena_camera3d_init(&camera);
+    assert(athena_camera3d_set_projection(&camera,60,4.0f/3.0f,.5f,50));
+    assert(athena_camera3d_set_position(&camera,1,2,6) && athena_camera3d_look_at(&camera,0,0,-4));
+    assert(athena_camera3d_update(&camera));
+    unsigned counts[3]={0},mismatches=0;
+    for(unsigned n=0;n<20000;n++) {
+        AthenaMatrix4 model={{0}},m; float min[3],max[3];
+        for(int i=0;i<12;i++) model.value[i]=(float)(random_value()*2-1);
+        for(int i=0;i<3;i++) model.value[12+i]=(float)(random_value()*30-15);
+        model.value[14]-=10; model.value[15]=1;
+        for(int i=0;i<3;i++) { float a=(float)(random_value()*4-2); min[i]=a; max[i]=a+(float)(random_value()*3); }
+        int relation=athena_camera3d_box_relation(&camera,&model,min,max);
+        ath_matrix4_multiply(&m,&camera.view_projection,&model);
+        assert(relation>=0); counts[relation]++;
+        if(relation!=reference_relation(&m,min,max)) mismatches++;
+    }
+    /* All three outcomes are exercised; disagreements are boundary cases. */
+    assert(counts[ATHENA_FRUSTUM3D_INSIDE]>500 && counts[ATHENA_FRUSTUM3D_OUTSIDE]>500 &&
+        counts[ATHENA_FRUSTUM3D_INTERSECT]>500);
+    assert(mismatches<=2);
+}
 int main(void) {
+    check_box_relation_random();
     AthenaClipVertex3D input[3]={
         {.position={-.5,-.5,0,1},.color={255,0,0,255}},
         {.position={.5,-.5,0,1},.color={0,0,255,255}},
@@ -108,6 +147,27 @@ int main(void) {
     float outside_min[]={100,100,-3},outside_max[]={101,101,-2};
     assert(athena_camera3d_box_relation(&camera,NULL,inside_min,inside_max)==ATHENA_FRUSTUM3D_INSIDE);
     assert(athena_camera3d_box_relation(&camera,NULL,outside_min,outside_max)==ATHENA_FRUSTUM3D_OUTSIDE);
+    /* Guard band: crossing only a side plane is INSIDE a wider frustum;
+     * crossing the near plane never is. */
+    float side_min[]={.4f,-.1f,-3},side_max[]={1.5f,.1f,-2.5f};
+    assert(athena_camera3d_box_relation(&camera,NULL,side_min,side_max)==ATHENA_FRUSTUM3D_INTERSECT);
+    assert(athena_camera3d_box_relation_guard(&camera,NULL,side_min,side_max,4)==ATHENA_FRUSTUM3D_INSIDE);
+    assert(athena_camera3d_box_relation_guard(&camera,NULL,side_min,side_max,1)==ATHENA_FRUSTUM3D_INTERSECT);
+    float near_min[]={-.1f,-.1f,-2},near_max[]={.1f,.1f,.5f};
+    assert(athena_camera3d_box_relation_guard(&camera,NULL,near_min,near_max,8)==ATHENA_FRUSTUM3D_INTERSECT);
+    float far_side_min[]={30,0,-3},far_side_max[]={31,1,-2.5f};
+    assert(athena_camera3d_box_relation_guard(&camera,NULL,far_side_min,far_side_max,4)==ATHENA_FRUSTUM3D_OUTSIDE);
+    assert(athena_camera3d_box_relation_guard(&camera,NULL,side_min,side_max,.5f)==-1);
+    /* Near guard: crossing only the near plane (camera at the origin
+     * looking down -z, near 1, far 10). */
+    assert(athena_camera3d_box_near_guard(&camera,NULL,near_min,near_max,8)==1);
+    float wide_near_min[]={-50,-.1f,-2},wide_near_max[]={50,.1f,.5f};
+    assert(athena_camera3d_box_near_guard(&camera,NULL,wide_near_min,wide_near_max,8)==0);
+    float behind_min[]={-.1f,-.1f,1},behind_max[]={.1f,.1f,2};
+    assert(athena_camera3d_box_near_guard(&camera,NULL,behind_min,behind_max,8)==0);
+    float deep_min[]={-.1f,-.1f,-20},deep_max[]={.1f,.1f,.5f};
+    assert(athena_camera3d_box_near_guard(&camera,NULL,deep_min,deep_max,8)==0); /* past far */
+    assert(athena_camera3d_box_near_guard(&camera,NULL,inside_min,inside_max,1)==1);
     AthenaCamera3D saved=camera;
     assert(!athena_camera3d_set_projection(&camera,NAN,1,1,10));
     assert(!athena_camera3d_set_position(&camera,INFINITY,0,0));

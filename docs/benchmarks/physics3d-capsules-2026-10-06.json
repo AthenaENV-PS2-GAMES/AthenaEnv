@@ -1,0 +1,16 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "bin/physics3d_example.js (--cfg=physics3d_example.ini), um terço dos corpos como cápsulas",
+  "change": "Cápsulas no Physics3D: segmento ao longo do y local com raio; inércia de cilindro + hemisférios; contatos cápsula x esfera/cápsula/caixa/triângulo pelos pontos mais próximos do segmento (pontas sempre, e o ponto central mais próximo quando longe das pontas; cápsulas quase paralelas com contatos nas duas pontas); resistência ao rolamento como as esferas.",
+  "findings": [
+    "32 corpos (caixas, esferas e cápsulas): 1287.8 us por passo (1089.7 só com caixas e esferas); 128: 10147.5 (10161.1); 256: 29496.1 us (25264), com 651 contatos contra 557.",
+    "Testes host: em pé repousa com o centro a raio + meia altura, deitada a raio e continua deitada, cruzada sobre outra cápsula, sobre uma caixa, esfera equilibrada no topo, cápsulas paralelas; todas dormem.",
+    "Sem captura de imagem nesta etapa: a área de captura estava ocupada por outra janela."
+  ],
+  "stages": [
+    {"stage": "bodies-32", "stepTicksMean": 1287.8, "contactsMean": 33.3, "sleepingAtEnd": 22},
+    {"stage": "bodies-128", "stepTicksMean": 10147.5, "contactsMean": 253, "sleepingAtEnd": 73},
+    {"stage": "bodies-256", "stepTicksMean": 29496.1, "contactsMean": 650.9, "sleepingAtEnd": 19}
+  ]
+}

@@ -1,5 +1,6 @@
 #include <athena_js_args.h>
 #include <athena/render3d.h>
+#include <athena/js/render3d.h>
 #include <athena/js/model3d.h>
 #include <athena/js/camera3d.h>
 #include <athena/js/lights.h>
@@ -44,22 +45,28 @@ static JSValue clear(JSContext *ctx,JSValueConst self,int argc,JSValueConst *arg
 static JSValue size(JSContext *ctx,JSValueConst self) {
     AthenaBatch3D *b=get_batch(ctx,self); return b?JS_NewUint32(ctx,athena_batch3d_size(b)):JS_EXCEPTION;
 }
-static JSValue stats_value(JSContext *ctx,int code,const AthenaRender3DStats *s) {
+static const char *const stat_names[]={"submittedObjects","culledObjects","drawPasses","pipelinePasses",
+    "triangles","vuBatches","sourceTriangles","clippedTriangles","rejectedTriangles","geometryBytes","guardBandObjects","nearClipObjects","vuMorphObjects"};
+static JSAtom stat_atoms[countof(stat_names)];
+static AthenaJSAtoms stat_table={stat_names,countof(stat_names),stat_atoms,NULL};
+int athena_render3d_js_put_stats(JSContext *ctx,JSValueConst obj,int define,const AthenaRender3DStats *s) {
+    const uint32_t values[]={s->submitted_objects,s->culled_objects,s->draw_passes,s->pipeline_passes,
+        s->triangles,s->vu_batches,s->source_triangles,s->clipped_triangles,s->rejected_triangles};
+    for(unsigned i=0;i<countof(values);i++)
+        if(athena_js_put(ctx,&stat_table,obj,define,i,JS_NewUint32(ctx,values[i]))<0) return -1;
+    if(athena_js_put(ctx,&stat_table,obj,define,9,JS_NewFloat64(ctx,(double)s->geometry_bytes))<0) return -1;
+    if(athena_js_put(ctx,&stat_table,obj,define,10,JS_NewUint32(ctx,s->guard_band_objects))<0) return -1;
+    if(athena_js_put(ctx,&stat_table,obj,define,11,JS_NewUint32(ctx,s->near_clip_objects))<0) return -1;
+    return athena_js_put(ctx,&stat_table,obj,define,12,JS_NewUint32(ctx,s->vu_morph_objects));
+}
+/* out: optional object to reuse, so a draw per frame allocates nothing. */
+static JSValue stats_value(JSContext *ctx,int code,const AthenaRender3DStats *s,JSValueConst out) {
     if(code==-2) return JS_ThrowOutOfMemory(ctx);
     if(code==-3) return JS_ThrowInternalError(ctx,"Render3D requires a screen mode with zbuffering enabled");
     if(code<0) return JS_ThrowRangeError(ctx,"Invalid or overflowing 3D transform");
-    JSValue obj=JS_NewObject(ctx); if(JS_IsException(obj)) return obj;
-    if(JS_SetPropertyStr(ctx,obj,"submittedObjects",JS_NewUint32(ctx,s->submitted_objects))<0||
-        JS_SetPropertyStr(ctx,obj,"culledObjects",JS_NewUint32(ctx,s->culled_objects))<0||
-        JS_SetPropertyStr(ctx,obj,"drawPasses",JS_NewUint32(ctx,s->draw_passes))<0||
-        JS_SetPropertyStr(ctx,obj,"triangles",JS_NewUint32(ctx,s->triangles))<0||
-        JS_SetPropertyStr(ctx,obj,"vuBatches",JS_NewUint32(ctx,s->vu_batches))<0||
-        JS_SetPropertyStr(ctx,obj,"sourceTriangles",JS_NewUint32(ctx,s->source_triangles))<0||
-        JS_SetPropertyStr(ctx,obj,"clippedTriangles",JS_NewUint32(ctx,s->clipped_triangles))<0||
-        JS_SetPropertyStr(ctx,obj,"rejectedTriangles",JS_NewUint32(ctx,s->rejected_triangles))<0||
-        JS_SetPropertyStr(ctx,obj,"geometryBytes",JS_NewFloat64(ctx,(double)s->geometry_bytes))<0) {
-        JS_FreeValue(ctx,obj); return JS_EXCEPTION;
-    }
+    JSValue obj; int define;
+    if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
+    if(athena_render3d_js_put_stats(ctx,obj,define,s)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
     return obj;
 }
 static int cull_option(JSContext *ctx,int argc,JSValueConst *argv,AthenaRender3DCull *out) {
@@ -74,16 +81,18 @@ static int cull_option(JSContext *ctx,int argc,JSValueConst *argv,AthenaRender3D
 }
 static JSValue draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
-    if(!athena_js_argc(ctx,argc,2,4,"Render3D.draw")) return JS_EXCEPTION;
+    if(!athena_js_argc(ctx,argc,2,5,"Render3D.draw")) return JS_EXCEPTION;
     AthenaRender3DCull cull; if(!cull_option(ctx,argc,argv,&cull)) return JS_EXCEPTION;
     AthenaInstance3D *i=athena_instance3d_from_value(ctx,argv[0]);
     AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[1]); if(!i||!c) return JS_EXCEPTION;
     AthenaLights *lights=NULL;
-    if(argc==4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
-    AthenaRender3DStats s={0}; int result=athena_render3d_draw_lit(i,c,lights,cull,&s); return stats_value(ctx,result,&s);
+    if(argc>=4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
+    JSValueConst out=argc==5?argv[4]:JS_UNDEFINED;
+    if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    AthenaRender3DStats s={0}; int result=athena_render3d_draw_lit(i,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
 }
 static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
-    if(!athena_js_argc(ctx,argc,1,3,"Batch.draw")) return JS_EXCEPTION;
+    if(!athena_js_argc(ctx,argc,1,4,"Batch.draw")) return JS_EXCEPTION;
     AthenaRender3DCull cull=ATHENA_RENDER3D_CULL_BACK;
     if(argc>=2&&!JS_IsUndefined(argv[1])) {
         float value;
@@ -94,8 +103,10 @@ static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     AthenaBatch3D *b=get_batch(ctx,self);
     AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[0]); if(!b||!c) return JS_EXCEPTION;
     AthenaLights *lights=NULL;
-    if(argc==3&&!JS_IsUndefined(argv[2])) { lights=athena_lights_from_value(ctx,argv[2]); if(!lights) return JS_EXCEPTION; }
-    AthenaRender3DStats s={0}; int result=athena_batch3d_draw_lit(b,c,lights,cull,&s); return stats_value(ctx,result,&s);
+    if(argc>=3&&!JS_IsUndefined(argv[2])) { lights=athena_lights_from_value(ctx,argv[2]); if(!lights) return JS_EXCEPTION; }
+    JSValueConst out=argc==4?argv[3]:JS_UNDEFINED;
+    if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    AthenaRender3DStats s={0}; int result=athena_batch3d_draw_lit(b,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
 }
 static JSClassDef class_def={"Render3D.Batch",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
@@ -113,6 +124,7 @@ static int init(JSContext *ctx,JSModuleDef *m) {
     if(JS_SetModuleExport(ctx,m,"Batch",cls)<0) return -1;
     return JS_SetModuleExportList(ctx,m,exports,countof(exports));
 }
+void athena_render3d_js_cleanup(JSContext *ctx) { athena_js_atoms_free(ctx,&stat_table); }
 JSModuleDef *athena_render3d_js_init(JSContext *ctx) {
     JSModuleDef *m=athena_push_module(ctx,init,exports,countof(exports),"Render3D");
     if(m) JS_AddModuleExport(ctx,m,"Batch");

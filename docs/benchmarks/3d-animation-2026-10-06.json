@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "environment": "PCSX2 v2.8.2 (Flatpak), Vulkan, 640x448 NTSC, velocidade 100%.",
+  "change": "Roadmap 7.4 item 2: módulo Animation3D 1.0 — Clip (trilhas position/rotation/scale, linear ou step, copiadas e validadas), Player (play/pause/stop, time, speed, loop) e um sistema de Loop do módulo. Rotação: keys normalizadas no mesmo hemisfério e arco/1-sin pré-calculados por segmento.",
+  "codeRevision": "7621811 com alterações locais não commitadas.",
+  "ticksPerSecond": 1000000,
+  "repetitions": 1,
+  "stage": "scene-lit-clip: 64 players, um por cubo, cada um com um clipe de rotação de 13 keys (0,25 s) em loop; por quadro Animation3D.advance(1/60) + Scene3D.update().",
+  "findings": [
+    "Com athena_quaternion_slerp genérico: C 888.3 us, JS 937.7 ticks (amostragem ~6 us por player).",
+    "Com arco pré-calculado por segmento: C 610.4 us, JS 659.6 ticks — 1.7 us por player; abaixo do set_euler por cubo em C (677.6 us).",
+    "JS: 1148.3 ticks com setRotationEuler por cubo -> 659.6 ticks com clipes (-43%).",
+    "Imagem conferida em C e JS: grade 8x8 girando."
+  ],
+  "native": {
+    "scene-lit-static": {
+      "updateUsMean": 0.9,
+      "drawUsMean": 985.7
+    },
+    "scene-lit-animated": {
+      "updateUsMean": 677.6,
+      "drawUsMean": 985.7
+    },
+    "scene-lit-spin": {
+      "updateUsMean": 573.2,
+      "drawUsMean": 985.5
+    },
+    "scene-lit-clip": {
+      "updateUsMean": 610.4,
+      "drawUsMean": 985.9
+    }
+  },
+  "quickjs": {
+    "scene-lit-static": {
+      "updateTicksMean": 46.1,
+      "drawTicksMean": 1085.1
+    },
+    "scene-lit-animated": {
+      "updateTicksMean": 1148.3,
+      "drawTicksMean": 1085.4
+    },
+    "scene-lit-spin": {
+      "updateTicksMean": 621.7,
+      "drawTicksMean": 1084.8
+    },
+    "scene-lit-clip": {
+      "updateTicksMean": 659.6,
+      "drawTicksMean": 1082.9
+    }
+  },
+  "genericSlerp": {
+    "nativeUpdateUs": 888.3,
+    "quickjsUpdateTicks": 937.7
+  }
+}

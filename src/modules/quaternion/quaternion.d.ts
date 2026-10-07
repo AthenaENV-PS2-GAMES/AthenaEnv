@@ -5,6 +5,8 @@ declare namespace Quaternion {
         constructor();
         constructor(x: number, y: number, z: number, w: number);
         setAxisAngle(x: number, y: number, z: number, radians: number): this;
+        /** Euler radians composed as Rz * Ry * Rx (x applied first). */
+        setEuler(x: number, y: number, z: number): this;
         /** Sets this = this * other. */
         multiply(other: Quaternion): this;
         /** Shortest path toward other, t in [0,1]. */

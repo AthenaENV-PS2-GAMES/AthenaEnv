@@ -46,6 +46,13 @@ static JSValue axis_angle(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     if(!athena_quaternion_axis_angle(q,v[0],v[1],v[2],v[3])) return JS_ThrowRangeError(ctx,"Axis must be nonzero");
     return JS_DupValue(ctx,self);
 }
+static JSValue euler(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,3,3,"Quaternion.setEuler")) return JS_EXCEPTION;
+    AthenaQuaternion *q=get(ctx,self); float v[3]; if(!q) return JS_EXCEPTION;
+    for(int i=0;i<3;i++) if(!athena_js_float(ctx,argv[i],&v[i],"angle")) return JS_EXCEPTION;
+    if(!athena_quaternion_euler(q,v[0],v[1],v[2])) return JS_ThrowRangeError(ctx,"Invalid Euler angles");
+    return JS_DupValue(ctx,self);
+}
 static JSValue multiply(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Quaternion.multiply")) return JS_EXCEPTION;
     AthenaQuaternion *q=get(ctx,self),*other=get(ctx,argv[0]); if(!q||!other) return JS_EXCEPTION;
@@ -61,7 +68,7 @@ static JSValue slerp(JSContext *ctx,JSValueConst self,int argc,JSValueConst *arg
 }
 static JSClassDef class_def={"Quaternion",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
-    JS_CFUNC_DEF("toArray",0,to_array),JS_CFUNC_DEF("setAxisAngle",4,axis_angle),
+    JS_CFUNC_DEF("toArray",0,to_array),JS_CFUNC_DEF("setAxisAngle",4,axis_angle),JS_CFUNC_DEF("setEuler",3,euler),
     JS_CFUNC_DEF("multiply",1,multiply),JS_CFUNC_DEF("slerp",2,slerp),JS_CFUNC_DEF("dispose",0,dispose)};
 static int init(JSContext *ctx,JSModuleDef *m) {
     if(athena_register_class(ctx,&quaternion_id,&class_def)<0) return -1;

@@ -1,0 +1,8 @@
+{
+  "id": "gltf3d", "name": "GLTF3D", "description": "glTF 2.0 / GLB scenes: node hierarchy as Scene3D nodes (TRS or decomposed matrices), every triangle primitive as a Model3D mesh, and animations as Animation3D clips that play on the loaded nodes.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/gltf3d.c"],
+  "dependencies": {"modules": ["model3d", "scene3d", "animation3d"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_gltf3d.c"], "module_name": "GLTF3D", "global_alias": "GLTF3D", "init_func": "athena_gltf3d_js_init"},
+  "types": "gltf3d.d.ts"
+}

@@ -96,6 +96,9 @@ void athena_image_draw_list(AthenaImage *image, float x, float y,
  */
 void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[4],
 	const float u[4], const float v[4], uint32_t color);
+/* Textured Gouraud triangles in one packet per chunk, through the 2D view:
+ * rotated sprites and particles without a packet per quad. */
+void athena_image_draw_triangles(AthenaImage *image, prim_tex_gouraud_triangle *list, int count);
 bool athena_image_lock(AthenaImage *image);
 /*
  * Main thread only: makes a loaded image resident in VRAM now, and locks it

@@ -60,6 +60,15 @@ camera.setPosition(5, 0, 40).lookAt(5, 0, 0);
 const lights = new Lights.Set();
 let s = scene.draw(camera, 0, lights);
 assert(s.queuedObjects === 2 && s.submittedObjects === 2 && s.triangles === 2 && s.culledSubtrees === 0, "draw queue");
+assert(s.drawPasses === 2 && s.pipelinePasses === 1, "meshes of one pipeline share a pass");
+const drawOut = {};
+assert(scene.draw(camera, 0, lights, drawOut) === drawOut && drawOut.queuedObjects === 2 && drawOut.pipelinePasses === 1 &&
+    drawOut.geometryBytes === s.geometryBytes, "draw stats reuse an object");
+throws(() => scene.draw(camera, 0, lights, "x"), TypeError, "draw stats must be an object");
+const updateOut = {};
+assert(scene.update(updateOut) === updateOut && updateOut.worldUpdates === 0 && updateOut.visitedNodes === 0,
+    "update stats reuse an object");
+throws(() => scene.update(1), TypeError, "update stats must be an object");
 parent.visible = false; assert(scene.stale && !parent.visible, "visibility marks dirty");
 u = scene.update(); assert(u.worldUpdates === 0, "visibility does not recompute transforms");
 assert(parent.getWorldBounds() === null && scene.draw(camera).queuedObjects === 0, "hidden subtree");
@@ -94,6 +103,47 @@ survivor.attachLoop(); survivor.dispose(); survivor.dispose();
 assert(kept.getParent() === null, "disposing the scene detaches it from the Loop and frees the graph");
 const orphan = new Scene3D.Scene(); orphan.root.add(new Scene3D.Node()); orphan.attachLoop();
 // orphan stays attached: runtime cleanup must detach it before teardown.
+// Bulk setters match the per-node setters, mark nodes dirty and validate first.
+const bulkNodes = [new Scene3D.Node(), new Scene3D.Node()], singleNodes = [new Scene3D.Node(), new Scene3D.Node()];
+for (const n of bulkNodes) root.add(n);
+assert(!scene.stale || scene.update(), "settled");
+const xyz = new Float32Array([1, 2, 3, -4, .5, 6]), euler = new Float32Array([.1, .2, .3, -.4, .5, -.6]);
+assert(Scene3D.setPositions(bulkNodes, xyz) === 2 && Scene3D.setRotationsEuler(bulkNodes, euler) === 2, "bulk count");
+assert(scene.stale, "bulk setters mark the scene dirty");
+for (let i = 0; i < 2; i++) {
+    singleNodes[i].setPosition(xyz[i*3], xyz[i*3+1], xyz[i*3+2]).setRotationEuler(euler[i*3], euler[i*3+1], euler[i*3+2]);
+    const a = bulkNodes[i].getLocalTransform(), b = singleNodes[i].getLocalTransform();
+    let same = true; for (let k = 0; k < 16; k++) same = same && a.get(k) === b.get(k);
+    assert(same, "bulk node " + i + " equals per-node setters");
+}
+throws(() => Scene3D.setRotationsEuler(bulkNodes, new Float32Array([0, 0, 0, Infinity, 0, 0])), RangeError, "non-finite");
+throws(() => Scene3D.setPositions(bulkNodes, new Float32Array(3)), RangeError, "short values");
+throws(() => Scene3D.setPositions([bulkNodes[0], 1], xyz), TypeError, "nodes only");
+assert(bulkNodes[0].getLocalTransform().get(12) === 1, "failed bulk calls change nothing");
+// 2D physics layout: x, y, angle about Z; z kept.
+bulkNodes[1].setPosition(0, 0, -7);
+assert(Scene3D.setTransforms2D(bulkNodes, new Float32Array([3, 4, 0, 5, 6, Math.PI / 2])) === 2, "2D transforms");
+const t2d = bulkNodes[1].getLocalTransform();
+assert(close(t2d.get(12), 5) && close(t2d.get(13), 6) && close(t2d.get(14), -7), "x, y set and z kept");
+assert(close(t2d.get(0), 0) && close(t2d.get(1), 1), "angle turns about Z");
+throws(() => Scene3D.setTransforms2D(bulkNodes, new Float32Array([0, 0, NaN, 0, 0, 0])), RangeError, "finite angle");
+scene.update();
+// Native motion: configured once, integrated by advance() without JS per frame.
+const mover = new Scene3D.Node().setPosition(1, 0, 0).setVelocity(2, 0, 0).setSpin(0, Math.PI, 0);
+root.add(mover); scene.update();
+assert(scene.advance(.5) === 1 && scene.stale, "advance moves the node and marks the scene dirty");
+scene.update();
+let local = mover.getLocalTransform();
+assert(close(local.get(12), 2) && close(local.get(0), 0) && close(local.get(8), 1) && close(local.get(2), -1), "velocity and local spin");
+assert(scene.advance(0) === 0, "zero dt moves nothing");
+throws(() => scene.advance(-1), RangeError, "negative dt");
+throws(() => scene.advance("x"), TypeError, "dt is a number");
+throws(() => mover.setSpin(NaN, 0, 0), RangeError, "finite spin");
+mover.setVelocity(0, 0, 0).setSpin(0, 0, 0);
+assert(scene.advance(1) === 0, "zero motion stops");
+mover.dispose();
+for (const n of bulkNodes) n.dispose();
+for (const n of singleNodes) n.dispose();
 for (let i = 0; i < 64; i++) { const n = new Scene3D.Node(); root.add(n); if (i & 1) n.detach(); }
 scene.update(); lights.dispose(); camera.dispose();
 console.log("Scene3D tests passed (" + checks + " checks)");

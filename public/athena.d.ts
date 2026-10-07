@@ -84,6 +84,901 @@ declare namespace std {
 }
 
 
+/* === Module: Loop (loop) === */
+/**
+ * Game loop driven by the runtime.
+ *
+ * `Loop.run()` registers the frame handlers and returns immediately; frames
+ * start once the entry script finishes. Each frame clears the screen, runs
+ * `update` and `draw`, then flips. Timers, promises and async functions keep
+ * running between frames, and the frame rate follows VSync.
+ *
+ * Variable step: `update(dt)` runs once per frame with the time since the
+ * previous frame, in seconds.
+ * ```js
+ * let x = 0;
+ * Loop.run(dt => {
+ *     x += 120 * dt; // 120 pixels per second at any frame rate
+ *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
+ * });
+ * ```
+ *
+ * Fixed step: `update(step)` runs zero or more times per frame with the same
+ * `step`, as physics engines expect, and `draw(alpha)` once per frame.
+ * ```js
+ * Loop.run({
+ *     update(step) { world.step(step, 4); },
+ *     draw(alpha) { Box2DDraw.draw(world); },
+ * }, { fixedStep: 1 / 60 });
+ * ```
+ */
+declare namespace Loop {
+    /** Frame handlers. `this` inside them is the handlers object. */
+    interface Handlers {
+        /**
+         * Advances the game. Receives the scaled frame delta in seconds, or
+         * `fixedStep` when set; the first frame's delta is `0`.
+         */
+        update?(dt: number): void;
+        /**
+         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
+         * is the fraction of a step not simulated yet, to interpolate
+         * between the previous and the current state; otherwise it is `1`.
+         */
+        draw?(alpha: number): void;
+    }
+
+    interface Options {
+        /** Clears the screen before each frame. Defaults to `true`. */
+        clear?: boolean;
+        /** Packed RGBA color used to clear. Defaults to opaque black. */
+        clearColor?: number;
+        /**
+         * Longest real frame time counted, in seconds; longer stalls such as
+         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
+         */
+        maxDelta?: number;
+        /**
+         * Runs `update` with this constant step, in seconds, as many times as
+         * the elapsed time holds. `0`, the default, runs it once per frame
+         * with the frame delta.
+         */
+        fixedStep?: number;
+        /**
+         * Fixed steps per frame at most; the time beyond it is dropped so a
+         * slow frame cannot snowball. Defaults to `5`.
+         */
+        maxSteps?: number;
+        /**
+         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
+         * 25 FPS on PAL. Defaults to `1`.
+         */
+        vsyncInterval?: number;
+    }
+
+    interface Stats {
+        /** Frames per second, measured over the last second. */
+        fps: number;
+        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
+        frameMs: number;
+        /**
+         * Milliseconds of work in the last frame: from the previous flip up to
+         * this one, timers and promises included, without the VSync wait.
+         */
+        cpuMs: number;
+        /** `update` calls in the last frame. */
+        steps: number;
+        /** Interpolation factor passed to the last `draw`. */
+        alpha: number;
+    }
+
+    /**
+     * Starts the loop. A function is the same as `{ update: fn }`. Called
+     * again, even from a handler, it replaces the handlers and options without
+     * restarting the frame timing; the rest of the current frame is skipped.
+     * An exception thrown by a handler stops the program.
+     */
+    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
+    /**
+     * Stops the loop after the current frame; the program ends once no timers
+     * remain. Registered systems stay registered and run again with the next
+     * `Loop.run()`.
+     */
+    function stop(): void;
+    /** Returns whether the loop is running. */
+    function isRunning(): boolean;
+    /**
+     * Scales the time passed to `update`: `0.5` is slow motion and `0`
+     * pauses the game. At `0`, a variable-step `update` still runs with a
+     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
+     */
+    function setTimeScale(scale: number): void;
+    /** Returns the time scale; `1` by default. */
+    function getTimeScale(): number;
+    /** Returns the scaled delta of the current frame, in seconds. */
+    function getDeltaTime(): number;
+    /** Returns the scaled time since the loop started, in seconds. */
+    function getElapsedTime(): number;
+    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
+    function getRealElapsedTime(): number;
+    /** Returns the number of frames since the loop started. */
+    function getFrameCount(): number;
+    /** Returns the frame statistics of the last frame. */
+    function getStats(): Stats;
+
+    /**
+     * A system: per-frame work that a module or the game registers once, and
+     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
+     * long as the loop runs, surviving `Loop.run()` replacements and
+     * `Loop.stop()`. Each frame runs, in order:
+     *
+     * 1. `preUpdate(dt)` of every system, once;
+     * 2. `update(step)` of every system, then the `update` handler: once with
+     *    `dt`, or once per fixed step with `fixedStep`;
+     * 3. `postUpdate(dt)` of every system, once;
+     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
+     *    overlays such as debug information or screen transitions.
+     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
+     *    loop, so a system can close what it opened (Camera2D's view).
+     *
+     * Within a phase, systems run by ascending `priority`, then in the order
+     * they were added. `this` is the system object. An exception thrown by a
+     * system stops the program, as one thrown by a handler.
+     */
+    interface System {
+        /** Unique name, for `removeSystem()` and `getSystems()`. */
+        name?: string;
+        /** Lower runs first. Integer; defaults to `0`. */
+        priority?: number;
+        /**
+         * `preUpdate` and `postUpdate` receive the real delta, ignoring
+         * `setTimeScale()`: for menus and transitions that keep moving while
+         * the game is paused. Defaults to `false`.
+         */
+        realTime?: boolean;
+        preUpdate?(dt: number): void;
+        /** Same cadence and argument as the `update` handler. */
+        update?(step: number): void;
+        postUpdate?(dt: number): void;
+        preDraw?(alpha: number): void;
+        postDraw?(alpha: number): void;
+    }
+
+    /** A registered system, as listed by `getSystems()`. */
+    interface SystemInfo {
+        name: string | undefined;
+        priority: number;
+        realTime: boolean;
+        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
+        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
+        /** True for systems registered by native modules. */
+        native: boolean;
+    }
+
+    /**
+     * Registers a system and returns it. Its methods are read now: replacing
+     * them later has no effect until it is added again. A system added during
+     * a frame starts with the next phase. Throws when the object has no phase
+     * method, was already added, or its name is taken.
+     *
+     * @example
+     * ```js
+     * const flash = Loop.addSystem({
+     *     name: "flash",
+     *     priority: 100,
+     *     alpha: 128,              // 0x80 is opaque on the GS
+     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
+     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
+     * });
+     * ```
+     */
+    function addSystem<T extends System>(system: T): T;
+    /**
+     * Unregisters a system, given the object or its name. Returns whether it
+     * was registered. A system removed during a phase does not run again.
+     */
+    function removeSystem(system: System | string): boolean;
+    /** Registered systems, in run order. */
+    function getSystems(): SystemInfo[];
+}
+
+
+/* === Module: Vector (vector) === */
+/**
+ * PS2-aligned vector types.
+ *
+ * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
+ * by the `Vector` module. Arithmetic methods return new vectors and do not
+ * mutate their operands. `div()` rejects zero components.
+ *
+ * Example:
+ * ```js
+ * import * as Vector from 'Vector';
+ * const direction = new Vector.Vector3(3, 4, 0);
+ * console.log(direction.norm());
+ * const right = direction.cross(new Vector.Vector3(0, 0, 1));
+ * ```
+ */
+declare class Vector2 {
+    /** Creates a two-component vector. */
+    constructor(x: number, y: number);
+    /** Horizontal component. */
+    x: number;
+    /** Vertical component. */
+    y: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector2): number;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector2): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector2): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector2): Vector2;
+    /** Returns the component-wise difference. */
+    sub(value: Vector2): Vector2;
+    /** Returns the component-wise product. */
+    mul(value: Vector2): Vector2;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector2): Vector2;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector3 {
+    /** Creates a three-component vector. */
+    constructor(x: number, y: number, z: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector3): number;
+    /** Returns the 3D cross product. */
+    cross(value: Vector3): Vector3;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector3): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector3): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector3): Vector3;
+    /** Returns the component-wise difference. */
+    sub(value: Vector3): Vector3;
+    /** Returns the component-wise product. */
+    mul(value: Vector3): Vector3;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector3): Vector3;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector4 {
+    /** Creates a homogeneous four-component vector. */
+    constructor(x: number, y: number, z: number, w: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Homogeneous component: commonly 1 for points and 0 for directions. */
+    w: number;
+    /** Returns four-dimensional Euclidean length. */
+    norm(): number;
+    /** Returns the four-component dot product. */
+    dot(value: Vector4): number;
+    /** Returns the cross product with homogeneous component cleared. */
+    cross(value: Vector4): Vector4;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector4): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector4): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector4): Vector4;
+    /** Returns the component-wise difference. */
+    sub(value: Vector4): Vector4;
+    /** Returns the component-wise product. */
+    mul(value: Vector4): Vector4;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector4): Vector4;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+
+/* === Module: Matrix4 (matrix4) === */
+/**
+ * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
+ *
+ * Values are stored in column-major order. Translation components are at
+ * indices 12, 13 and 14; index 15 is the homogeneous component.
+ *
+ * Example:
+ * ```js
+ * const transform = new Matrix4();
+ * transform.set(12, 10).set(13, 20).set(14, 30);
+ * const inverse = transform.clone().invert();
+ * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
+ * ```
+ */
+declare class Matrix4 {
+    /** Creates identity matrix, or initializes all 16 values when supplied. */
+    constructor();
+    constructor(
+        m00: number, m01: number, m02: number, m03: number,
+        m10: number, m11: number, m12: number, m13: number,
+        m20: number, m21: number, m22: number, m23: number,
+        m30: number, m31: number, m32: number, m33: number
+    );
+    /** Number of scalar components in the matrix. */
+    readonly length: 16;
+    /** Reads a scalar component at index 0..15. */
+    get(index: number): number;
+    /** Writes a scalar component at index 0..15 and returns this matrix. */
+    set(index: number, value: number): this;
+    /** Compares all 16 components exactly. */
+    equals(value: Matrix4): boolean;
+    /** Compares all components using an absolute epsilon tolerance. */
+    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
+    /** Returns the 16 components as a new array. */
+    toArray(): number[];
+    /** Copies 16 values from an array-like object into this matrix. */
+    fromArray(values: ArrayLike<number>): this;
+    /** Returns an independent copy of this matrix. */
+    clone(): Matrix4;
+    /** Copies another matrix into this matrix. */
+    copy(value: Matrix4): this;
+    /** Returns this * value (column vectors); neither operand is mutated. */
+    multiply(value: Matrix4): Matrix4;
+    /** Replaces this matrix with identity. */
+    identity(): this;
+    /** Transposes this matrix in place. */
+    transpose(): this;
+    /** Inverts this matrix in place; throws for a singular matrix. */
+    invert(): this;
+    /** Returns a readable 16-value representation. */
+    toString(): string;
+}
+
+
+/* === Module: Quaternion (quaternion) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=quaternion,... */
+/** Right-handed, normalized xyzw rotation. Angles are radians.
+ * Mutating methods return this; operands are unchanged; dispose is idempotent. */
+declare namespace Quaternion {
+    class Quaternion {
+        constructor();
+        constructor(x: number, y: number, z: number, w: number);
+        setAxisAngle(x: number, y: number, z: number, radians: number): this;
+        /** Euler radians composed as Rz * Ry * Rx (x applied first). */
+        setEuler(x: number, y: number, z: number): this;
+        /** Sets this = this * other. */
+        multiply(other: Quaternion): this;
+        /** Shortest path toward other, t in [0,1]. */
+        slerp(other: Quaternion, t: number): this;
+        /** Independent snapshot. */
+        toArray(): [number, number, number, number];
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Camera3D (camera3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=camera3d,... */
+/** Independent cameras; right-handed, facing -Z. Projection has reversed depth.
+ * Matrix getters return an owned snapshot, or overwrite and return out. */
+declare namespace Camera3D {
+    interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
+    class Camera {
+        /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
+        constructor(options?: Projection);
+        setProjection(options: Projection): this;
+        setPosition(x: number, y: number, z: number): this;
+        lookAt(x: number, y: number, z: number): this;
+        setUp(x: number, y: number, z: number): this;
+        getView(out?: Matrix4): Matrix4;
+        getProjection(out?: Matrix4): Matrix4;
+        getViewProjection(out?: Matrix4): Matrix4;
+        /** Idempotent; other operations reject a disposed camera. */
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Lights (lights) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=lights,... */
+/** Independent linear RGB lights. World directions point toward the source.
+ * Point lights (4 slots) light per vertex and fade with the distance as
+ * (1 - d^2 / range^2)^2, reaching 0 at range. */
+declare namespace Lights {
+    const MAX_DIRECTIONAL: 4;
+    const MAX_POINT: 4;
+    class Set {
+        /** Starts with black ambient and all four directional slots disabled. */
+        constructor();
+        /** Changes only when effective state changes; invalid setters are atomic. */
+        readonly revision: number;
+        setAmbient(r: number, g: number, b: number): this;
+        /** Slots 0..3; nonzero direction normalized in native code. RGB in [0,1]. */
+        setDirectional(slot: number, x: number, y: number, z: number, r: number, g: number, b: number): this;
+        disable(slot: number): this;
+        /** Slots 0..3: a world position, RGB in [0,1] and a range > 0. */
+        setPoint(slot: number, x: number, y: number, z: number, r: number, g: number, b: number, range: number): this;
+        disablePoint(slot: number): this;
+        /** Distance fog, applied by the GS to everything drawn with this set:
+         * full colour up to start, the fog colour from end on (view depth).
+         * 0 <= start < end, RGB in [0,1]. Ignored with 32-bit Z buffers. */
+        setFog(start: number, end: number, r: number, g: number, b: number): this;
+        disableFog(): this;
+        clear(): this;
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Image (image) === */
+/**
+ * Image loading, CPU pixel access and textured 2D drawing.
+ *
+ * `Image` accepts paths understood by the active PS2 filesystem driver,
+ * including paths relative to the boot directory. A newly loaded image is
+ * CPU-resident; call `lock()` when it must remain resident in VRAM.
+ *
+ * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
+ * images, `pixels` contains four bytes per pixel. Palette data is used only
+ * by indexed 4-bit and 8-bit formats.
+ *
+ * Some Images borrow a texture owned by another object, such as
+ * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
+ * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
+ * `optimize()` returns false.
+ *
+ * @example
+ * ```js
+ * const logo = new Image('my_image.png');
+ * if (!logo.ready()) throw new Error('image load failed');
+ * logo.color = Color.new(255, 255, 255, 255);
+ * logo.lock();
+ * logo.draw(100, 80);
+ * Screen.flip();
+ * ```
+ */
+
+/** Optional destination, source-rectangle and tint overrides for `draw()`. */
+type ImageDrawOptions = {
+    /** Destination width in pixels; defaults to `width`. */
+    width?: number;
+    /** Destination height in pixels; defaults to `height`. */
+    height?: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx?: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty?: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx?: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy?: number;
+    /** Rotation angle in radians. */
+    angle?: number;
+    /** Packed RGBA tint, normally created with `Color.new()`. */
+    color?: number;
+};
+
+/** Options of `drawList()`. */
+type ImageDrawListOptions = {
+    /** Offset added to every sprite; defaults to 0. */
+    x?: number;
+    y?: number;
+    /** First record to draw; defaults to 0. */
+    first?: number;
+    /** Records to draw; defaults to the rest of the buffer. */
+    count?: number;
+};
+
+/** Options controlling image creation and texture upload behavior. */
+type ImageOptions = {
+    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
+    delayed?: boolean;
+};
+
+declare class Image {
+    /** Loads an image from `path`, or creates an empty image when omitted. */
+    constructor(options?: ImageOptions);
+    constructor(path: string, options?: ImageOptions);
+    /** Linear size in bytes of the current pixel buffer. */
+    readonly size: number;
+    /** Whether texture uploads use the deferred VIF1 path. */
+    readonly delayed: boolean;
+    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
+    pixels: ArrayBuffer;
+    /** CPU palette buffer for indexed images; required for indexed images. */
+    palette: ArrayBuffer;
+    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
+    texWidth: number;
+    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
+    texHeight: number;
+    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
+    bpp: number;
+    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
+    filter: number;
+    /** Whether dimensions and a valid pixel buffer are available for drawing. */
+    renderable: boolean;
+    /** Destination draw width in pixels. */
+    width: number;
+    /** Destination draw height in pixels. */
+    height: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy: number;
+    /** Rotation angle in radians used by `draw()`. */
+    angle: number;
+    /** Packed RGBA tint multiplied with sampled texture color. */
+    color: number;
+
+    /** True when dimensions, pixel data and indexed palette data are valid. */
+    ready(): boolean;
+    /** True while an ImageList request is waiting or being processed. */
+    loading(): boolean;
+    /** True when the most recent ImageList request failed. */
+    failed(): boolean;
+    /**
+     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
+     * has a queued VRAM upload; `ready` is resident in VRAM.
+     */
+    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
+    /** Returns structured load diagnostics, or undefined when no load failed. */
+    error(): ImageLoadError | undefined;
+    /** Queues a textured sprite at `(x, y)` for the current frame. */
+    draw(x: number, y: number, options?: ImageDrawOptions): void;
+    /**
+     * Queues many sprites of this image at once: the texture state is sent
+     * once per 128 sprites instead of once per sprite, which makes it several
+     * times cheaper than as many `draw()` calls. `sprites` uses the record
+     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
+     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
+     * buffer serves both; the TileMap module is not required. Records with a
+     * zero width or height are skipped, and so are, under a Camera2D camera,
+     * records outside its viewport.
+     *
+     * @example
+     * ```js
+     * const sprites = new Float32Array(16 * count);        // 64-byte records
+     * const colors = new Uint32Array(sprites.buffer);
+     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
+     * //           colors[16*i + 8..11] = r, g, b, a
+     * image.drawList(sprites, { x: cameraX, y: cameraY });
+     * ```
+     */
+    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
+    /** Uploads the image synchronously and pins its VRAM allocation. */
+    lock(): boolean;
+    /** Allows the texture manager to evict the image from VRAM. */
+    unlock(): boolean;
+    /** Returns whether the image is currently pinned in VRAM. */
+    locked(): boolean;
+    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
+    optimize(): boolean;
+    /** Releases the native image and its CPU/VRAM resources. */
+    free(): void;
+
+    /** Copies a rectangular VRAM region between two resident images. */
+    static copyVRAMBlock(
+        source: Image,
+        sourceX: number,
+        sourceY: number,
+        destination: Image,
+        destinationX: number,
+        destinationY: number
+    ): void;
+}
+
+/** Structured diagnostics for a failed image load. */
+interface ImageLoadError {
+    /** Path as it was requested. */
+    path: string;
+    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
+    /** `upload` is reported only for ImageList requests with an `upload` option. */
+    stage: "open" | "decode" | "surface" | "upload";
+    /** Human-readable description. */
+    message: string;
+}
+
+
+/* === Module: Model3D (model3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=model3d,... */
+/** Immutable static meshes. Geometry and material descriptors are copied;
+ * instances/batches retain native resources, including textures. */
+declare namespace Model3D {
+    const MAX_VERTICES: number;
+    const UNLIT: 0; const DIFFUSE: 1;
+    class Texture {
+        private constructor();
+        static readonly NEAREST: 0; static readonly LINEAR: 1;
+        /** Copies 0xAABBGGRR pixels, alpha ignored. Power-of-two sizes 1..512;
+         * clamp-to-edge, no mipmaps. Honors subarray(); main thread only. */
+        static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1}): Texture;
+        /** Synchronous RGB/RGBA image decoding. Palette images unsupported. */
+        static load(path: string, filter?: 0 | 1): Texture;
+        readonly width: number; readonly height: number;
+        /** Existing meshes retain the texture. Final native release waits GS. */
+        dispose(): void;
+    }
+    interface Material {
+        /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
+        shading?: 0 | 1;
+        /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
+         * and stored as RGBA8. Defaults to white. Alpha is opaque in this pass. */
+        baseColor?: Float32Array;
+        texture?: Texture;
+    }
+    interface Geometry {
+        positions: Float32Array; colors?: Float32Array; indices?: Uint32Array;
+        /** One nonzero xyz normal per source vertex; normalized during copy.
+         * Missing DIFFUSE normals are generated per face, before expansion. */
+        normals?: Float32Array;
+        /** One finite uv pair in [0,1] per source vertex. Origin top-left. */
+        texcoords?: Float32Array;
+        material?: Material;
+    }
+    class Mesh {
+        private constructor();
+        /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
+        static fromGeometry(geometry: Geometry): Mesh;
+        /** Expanded triangle vertex count, at most MAX_VERTICES. */
+        readonly vertexCount: number;
+        createInstance(): Instance;
+        /** Drops this handle; existing instances retain the native mesh. */
+        dispose(): void;
+    }
+    class Instance {
+        private constructor();
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Owned snapshot, or fills and returns out; never a borrowed matrix. */
+        getTransform(out?: Matrix4): Matrix4;
+        dispose(): void;
+    }
+    /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset. */
+    function load(path: string, material?: Material): Mesh;
+    /** Bulk setters, one call per frame instead of one per instance: values holds
+     * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any instance changes. Returns the count. */
+    function setPositions(instances: Instance[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Instance.setRotationEuler(). */
+    function setRotationsEuler(instances: Instance[], values: Float32Array): number;
+}
+
+
+/* === Module: Render3D (render3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=render3d,... */
+/** Native opaque unlit/diffuse and textured triangles with homogeneous clipping in C for
+ * crossing objects; VU1 transforms and lights fully contained objects.
+ * Draw never advances animation/physics. Enable Screen zbuffering. */
+declare namespace Render3D {
+    const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
+    type CullMode = 0 | 1 | -1;
+    interface Stats {
+        submittedObjects: number; culledObjects: number;
+        /** Accepted objects drawn, even when clipping rejects all their triangles. */
+        drawPasses: number;
+        /** GS/VU1 passes emitted. Batch and Scene3D draws share one pass among
+         * consecutive objects with the same camera, program and texture. */
+        pipelinePasses: number;
+        /** Triangle list sent to VU1 after native clipping; not rasterized count. */
+        triangles: number; vuBatches: number;
+        /** Source triangles of objects retained by AABB culling. */
+        sourceTriangles: number;
+        /** Source triangles partially clipped and producing visible polygons. */
+        clippedTriangles: number;
+        /** Source triangles rejected by precise clipping. */
+        rejectedTriangles: number;
+        /** Copied position/color/normal/UV DMA payload, including chunk padding.
+         * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
+        geometryBytes: number;
+        /** Objects crossing the screen edges drawn by VU1 without clipping,
+         * inside the GS guard band (the scissor trims them). */
+        guardBandObjects: number;
+        /** Objects crossing the near plane clipped on VU1 (inside the guard
+         * band otherwise); their triangles count before clipping. */
+        nearClipObjects: number;
+        /** Meshes with morph targets blended on VU1. */
+        vuMorphObjects: number;
+    }
+    /** Lights are borrowed for this call. Omitted lights mean black ambient and
+     * no directional lights. UNLIT materials ignore lights. Singular DIFFUSE
+     * normal transforms throw; drawing does not update lights or transforms.
+     * Pass `stats` to reuse an object every frame: its fields are assigned and
+     * it is returned, instead of allocating a new Stats per call. */
+    function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
+        lights?: Lights.Set, stats?: T): T & Stats;
+    class Batch {
+        constructor();
+        readonly size: number;
+        /** Retains the native instance, independently of its JS handle. */
+        add(instance: Model3D.Instance): this;
+        clear(): this;
+        /** Optional `stats` is reused and returned, as in Render3D.draw(). */
+        draw<T extends object = Stats>(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set,
+            stats?: T): T & Stats;
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Scene3D (scene3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=scene3d,... */
+/** Native transform hierarchy. A Node is the scene-graph instance of a mesh;
+ * world = parent world * local TRS. Setters only mark dirty flags: call
+ * scene.update() (or attachLoop()) before draw and world queries, which throw
+ * while the scene is stale instead of returning outdated data. */
+declare namespace Scene3D {
+    /** Levels from the root, root included. Deeper hierarchies are rejected. */
+    const MAX_DEPTH: number;
+    /** Bulk setters, one call per frame instead of one per node: values holds
+     * x, y, z for nodes[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any node changes. Returns the count. */
+    function setPositions(nodes: Node[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Node.setRotationEuler(). */
+    function setRotationsEuler(nodes: Node[], values: Float32Array): number;
+    /** 2D physics on 3D nodes: x, y and an angle about Z (radians) per node,
+     * the layout of Box2D's `world.readTransforms()`. Each node keeps its z.
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Scene3D.setTransforms2D(crates, transforms);
+     * ``` */
+    function setTransforms2D(nodes: Node[], values: Float32Array): number;
+    interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    interface DrawStats extends Render3D.Stats {
+        /** Subtrees rejected by their world bounds; their meshes count as culled. */
+        culledSubtrees: number;
+        /** Meshes sent to Render3D, sorted by pipeline in traversal order. */
+        queuedObjects: number;
+    }
+    interface Bounds { min: [number, number, number]; max: [number, number, number]; }
+    class Node {
+        /** Retains the optional mesh natively, independently of its handle. */
+        constructor(mesh?: Model3D.Mesh);
+        /** Replaces the retained mesh; null removes it. */
+        setMesh(mesh: Model3D.Mesh | null): this;
+        readonly hasMesh: boolean;
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Native motion, integrated by scene.advance(dt) / attachLoop() without
+         * a JS call per frame. Units per second in the parent space. */
+        setVelocity(x: number, y: number, z: number): this;
+        /** Angular velocity in rad/s about the local axes: direction is the
+         * axis, length the speed. (0, 0, 0) stops the spin. */
+        setSpin(x: number, y: number, z: number): this;
+        /** Hidden nodes and descendants are not drawn nor included in bounds. */
+        visible: boolean;
+        /** Reparents child, keeping its local transform; the parent retains it.
+         * Throws RangeError for cycles, scene roots and MAX_DEPTH overflow. */
+        add(child: Node): this;
+        /** Removes this node from its parent; harmless without one. */
+        detach(): this;
+        /** New handle for the parent, or null. Handles are not identical objects. */
+        getParent(): Node | null;
+        readonly childCount: number;
+        /** New handle for the child at index. */
+        getChild(index: number): Node;
+        /** Always current. Owned snapshot, or fills and returns out. */
+        getLocalTransform(out?: Matrix4): Matrix4;
+        /** Transform of the last update. Throws while stale or outside a scene. */
+        getWorldTransform(out?: Matrix4): Matrix4;
+        /** World AABB of visible meshes in the subtree, or null when empty.
+         * Throws while stale or outside a scene. */
+        getWorldBounds(): Bounds | null;
+        /** Morph target weights (up to 8; missing ones become 0). A mesh with
+         * morph targets is blended in C at draw: base + sum(weight * delta). */
+        setWeights(weights: ArrayLike<number>): this;
+        /** One weight per morph target of the node's mesh (empty without). */
+        getWeights(): number[];
+        /** Drops this handle; parents and other handles keep the node alive. */
+        dispose(): void;
+    }
+    class Scene {
+        constructor();
+        /** New handle for the root node owned by the scene. */
+        readonly root: Node;
+        /** True when a node changed after the last update. */
+        readonly stale: boolean;
+        /** True while a Loop POST_UPDATE system updates this scene. */
+        readonly attached: boolean;
+        /** Integrates node motion (setVelocity/setSpin) for dt seconds and
+         * returns the moved node count. attachLoop() does it every frame with
+         * the Loop dt, before update(). */
+        advance(dt: number): number;
+        /** Recomputes dirty world transforms and subtree bounds. Optional
+         * `stats` is reused and returned instead of allocating a new object. */
+        update<T extends object = UpdateStats>(stats?: T): T & UpdateStats;
+        /** Culls subtrees, queues meshes and draws them through Render3D.
+         * Never updates the scene; throws while stale. Lights are borrowed. */
+        draw<T extends object = DrawStats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
+            stats?: T): T & DrawStats;
+        /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
+        attachLoop(priority?: number): this;
+        detachLoop(): this;
+        /** Also detaches from the Loop; existing node handles stay valid. */
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Animation3D (animation3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=animation3d,... */
+/** Keyframe clips sampled in native code and applied to Scene3D nodes. The
+ * script starts and stops players; poses are not computed in JavaScript.
+ * Players advance in one Loop system (attachLoop()) that runs before Scene3D
+ * systems at the default priorities, or manually with advance(dt). */
+declare namespace Animation3D {
+    /** Default attachLoop() priority: before Scene3D.attachLoop() (0). */
+    const LOOP_PRIORITY: number;
+    interface Track {
+        /** Index into the player's nodes; default 0. */
+        target?: number;
+        path: "position" | "rotation" | "scale" | "weights";
+        /** Seconds, >= 0 and strictly increasing. */
+        times: Float32Array;
+        /** 3 floats per key (position, scale), 4 (rotation xyzw; normalized,
+         * slerp on the short arc) or 1..8 (morph target weights, see
+         * Scene3D.Node.setWeights(); values.length / times.length per key). */
+        values: Float32Array;
+        /** Default "linear". */
+        interpolation?: "linear" | "step";
+    }
+    /** Tracks are copied; the arrays can be reused afterwards. */
+    class Clip {
+        constructor(tracks: Track[]);
+        /** Last key time of all tracks, in seconds. */
+        readonly duration: number;
+        /** Nodes a player needs: highest target + 1. */
+        readonly targetCount: number;
+        dispose(): void;
+    }
+    /** Binds a clip to nodes (retained, also after their handles are
+     * disposed). Created stopped at time 0, speed 1, not looping. Players
+     * stay alive until dispose(), even when no variable holds them. */
+    class Player {
+        constructor(clip: Clip, nodes: Scene3D.Node[]);
+        play(): this;
+        pause(): this;
+        /** Pauses and rewinds (to the end when speed is negative). */
+        stop(): this;
+        /** Seconds; setting it seeks and applies the pose. */
+        time: number;
+        /** Negative plays backwards. */
+        speed: number;
+        loop: boolean;
+        readonly playing: boolean;
+        /** Advances by dt * speed seconds; true when it just reached the end. */
+        advance(dt: number): boolean;
+        dispose(): void;
+    }
+    /** Advances every playing player; returns how many reached their end. */
+    function advance(dt: number): number;
+    /** One native POST_UPDATE system for every player; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
 /* === Module: Mutex (mutex) === */
 /**
  * Native EE mutex primitives.
@@ -1079,6 +1974,8 @@ declare namespace Box2D {
          * the fastest way to sync sprites every frame.
          */
         readTransforms(bodies: Body[], out: Float32Array): number;
+        // `out` goes as it is to Sprite.drawAll(sprites, out, { stride: 3 })
+        // and Scene3D.setTransforms2D(nodes, out).
         /** Milliseconds spent in each phase of the last step (EE cycle counter). */
         getProfile(): {
             step: number; pairs: number; collide: number; solve: number; solverSetup: number;
@@ -1530,205 +2427,6 @@ declare namespace Box2DDraw {
 }
 
 
-/* === Module: Loop (loop) === */
-/**
- * Game loop driven by the runtime.
- *
- * `Loop.run()` registers the frame handlers and returns immediately; frames
- * start once the entry script finishes. Each frame clears the screen, runs
- * `update` and `draw`, then flips. Timers, promises and async functions keep
- * running between frames, and the frame rate follows VSync.
- *
- * Variable step: `update(dt)` runs once per frame with the time since the
- * previous frame, in seconds.
- * ```js
- * let x = 0;
- * Loop.run(dt => {
- *     x += 120 * dt; // 120 pixels per second at any frame rate
- *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
- * });
- * ```
- *
- * Fixed step: `update(step)` runs zero or more times per frame with the same
- * `step`, as physics engines expect, and `draw(alpha)` once per frame.
- * ```js
- * Loop.run({
- *     update(step) { world.step(step, 4); },
- *     draw(alpha) { Box2DDraw.draw(world); },
- * }, { fixedStep: 1 / 60 });
- * ```
- */
-declare namespace Loop {
-    /** Frame handlers. `this` inside them is the handlers object. */
-    interface Handlers {
-        /**
-         * Advances the game. Receives the scaled frame delta in seconds, or
-         * `fixedStep` when set; the first frame's delta is `0`.
-         */
-        update?(dt: number): void;
-        /**
-         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
-         * is the fraction of a step not simulated yet, to interpolate
-         * between the previous and the current state; otherwise it is `1`.
-         */
-        draw?(alpha: number): void;
-    }
-
-    interface Options {
-        /** Clears the screen before each frame. Defaults to `true`. */
-        clear?: boolean;
-        /** Packed RGBA color used to clear. Defaults to opaque black. */
-        clearColor?: number;
-        /**
-         * Longest real frame time counted, in seconds; longer stalls such as
-         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
-         */
-        maxDelta?: number;
-        /**
-         * Runs `update` with this constant step, in seconds, as many times as
-         * the elapsed time holds. `0`, the default, runs it once per frame
-         * with the frame delta.
-         */
-        fixedStep?: number;
-        /**
-         * Fixed steps per frame at most; the time beyond it is dropped so a
-         * slow frame cannot snowball. Defaults to `5`.
-         */
-        maxSteps?: number;
-        /**
-         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
-         * 25 FPS on PAL. Defaults to `1`.
-         */
-        vsyncInterval?: number;
-    }
-
-    interface Stats {
-        /** Frames per second, measured over the last second. */
-        fps: number;
-        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
-        frameMs: number;
-        /**
-         * Milliseconds of work in the last frame: from the previous flip up to
-         * this one, timers and promises included, without the VSync wait.
-         */
-        cpuMs: number;
-        /** `update` calls in the last frame. */
-        steps: number;
-        /** Interpolation factor passed to the last `draw`. */
-        alpha: number;
-    }
-
-    /**
-     * Starts the loop. A function is the same as `{ update: fn }`. Called
-     * again, even from a handler, it replaces the handlers and options without
-     * restarting the frame timing; the rest of the current frame is skipped.
-     * An exception thrown by a handler stops the program.
-     */
-    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
-    /**
-     * Stops the loop after the current frame; the program ends once no timers
-     * remain. Registered systems stay registered and run again with the next
-     * `Loop.run()`.
-     */
-    function stop(): void;
-    /** Returns whether the loop is running. */
-    function isRunning(): boolean;
-    /**
-     * Scales the time passed to `update`: `0.5` is slow motion and `0`
-     * pauses the game. At `0`, a variable-step `update` still runs with a
-     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
-     */
-    function setTimeScale(scale: number): void;
-    /** Returns the time scale; `1` by default. */
-    function getTimeScale(): number;
-    /** Returns the scaled delta of the current frame, in seconds. */
-    function getDeltaTime(): number;
-    /** Returns the scaled time since the loop started, in seconds. */
-    function getElapsedTime(): number;
-    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
-    function getRealElapsedTime(): number;
-    /** Returns the number of frames since the loop started. */
-    function getFrameCount(): number;
-    /** Returns the frame statistics of the last frame. */
-    function getStats(): Stats;
-
-    /**
-     * A system: per-frame work that a module or the game registers once, and
-     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
-     * long as the loop runs, surviving `Loop.run()` replacements and
-     * `Loop.stop()`. Each frame runs, in order:
-     *
-     * 1. `preUpdate(dt)` of every system, once;
-     * 2. `update(step)` of every system, then the `update` handler: once with
-     *    `dt`, or once per fixed step with `fixedStep`;
-     * 3. `postUpdate(dt)` of every system, once;
-     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
-     *    overlays such as debug information or screen transitions.
-     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
-     *    loop, so a system can close what it opened (Camera2D's view).
-     *
-     * Within a phase, systems run by ascending `priority`, then in the order
-     * they were added. `this` is the system object. An exception thrown by a
-     * system stops the program, as one thrown by a handler.
-     */
-    interface System {
-        /** Unique name, for `removeSystem()` and `getSystems()`. */
-        name?: string;
-        /** Lower runs first. Integer; defaults to `0`. */
-        priority?: number;
-        /**
-         * `preUpdate` and `postUpdate` receive the real delta, ignoring
-         * `setTimeScale()`: for menus and transitions that keep moving while
-         * the game is paused. Defaults to `false`.
-         */
-        realTime?: boolean;
-        preUpdate?(dt: number): void;
-        /** Same cadence and argument as the `update` handler. */
-        update?(step: number): void;
-        postUpdate?(dt: number): void;
-        preDraw?(alpha: number): void;
-        postDraw?(alpha: number): void;
-    }
-
-    /** A registered system, as listed by `getSystems()`. */
-    interface SystemInfo {
-        name: string | undefined;
-        priority: number;
-        realTime: boolean;
-        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
-        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
-        /** True for systems registered by native modules. */
-        native: boolean;
-    }
-
-    /**
-     * Registers a system and returns it. Its methods are read now: replacing
-     * them later has no effect until it is added again. A system added during
-     * a frame starts with the next phase. Throws when the object has no phase
-     * method, was already added, or its name is taken.
-     *
-     * @example
-     * ```js
-     * const flash = Loop.addSystem({
-     *     name: "flash",
-     *     priority: 100,
-     *     alpha: 128,              // 0x80 is opaque on the GS
-     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
-     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
-     * });
-     * ```
-     */
-    function addSystem<T extends System>(system: T): T;
-    /**
-     * Unregisters a system, given the object or its name. Returns whether it
-     * was registered. A system removed during a phase does not run again.
-     */
-    function removeSystem(system: System | string): boolean;
-    /** Registered systems, in run order. */
-    function getSystems(): SystemInfo[];
-}
-
-
 /* === Module: Camera2D (camera2d) === */
 /**
  * 2D cameras, applied in C by every 2D draw: `Draw`, `Image`, `Font` and
@@ -2155,188 +2853,76 @@ declare namespace Camera2D {
 }
 
 
-/* === Module: Vector (vector) === */
-/**
- * PS2-aligned vector types.
- *
- * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
- * by the `Vector` module. Arithmetic methods return new vectors and do not
- * mutate their operands. `div()` rejects zero components.
- *
- * Example:
- * ```js
- * import * as Vector from 'Vector';
- * const direction = new Vector.Vector3(3, 4, 0);
- * console.log(direction.norm());
- * const right = direction.cross(new Vector.Vector3(0, 0, 1));
- * ```
- */
-declare class Vector2 {
-    /** Creates a two-component vector. */
-    constructor(x: number, y: number);
-    /** Horizontal component. */
-    x: number;
-    /** Vertical component. */
-    y: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector2): number;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector2): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector2): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector2): Vector2;
-    /** Returns the component-wise difference. */
-    sub(value: Vector2): Vector2;
-    /** Returns the component-wise product. */
-    mul(value: Vector2): Vector2;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector2): Vector2;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector3 {
-    /** Creates a three-component vector. */
-    constructor(x: number, y: number, z: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector3): number;
-    /** Returns the 3D cross product. */
-    cross(value: Vector3): Vector3;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector3): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector3): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector3): Vector3;
-    /** Returns the component-wise difference. */
-    sub(value: Vector3): Vector3;
-    /** Returns the component-wise product. */
-    mul(value: Vector3): Vector3;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector3): Vector3;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector4 {
-    /** Creates a homogeneous four-component vector. */
-    constructor(x: number, y: number, z: number, w: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Homogeneous component: commonly 1 for points and 0 for directions. */
-    w: number;
-    /** Returns four-dimensional Euclidean length. */
-    norm(): number;
-    /** Returns the four-component dot product. */
-    dot(value: Vector4): number;
-    /** Returns the cross product with homogeneous component cleared. */
-    cross(value: Vector4): Vector4;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector4): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector4): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector4): Vector4;
-    /** Returns the component-wise difference. */
-    sub(value: Vector4): Vector4;
-    /** Returns the component-wise product. */
-    mul(value: Vector4): Vector4;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector4): Vector4;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-
-/* === Module: Matrix4 (matrix4) === */
-/**
- * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
- *
- * Values are stored in column-major order. Translation components are at
- * indices 12, 13 and 14; index 15 is the homogeneous component.
- *
- * Example:
- * ```js
- * const transform = new Matrix4();
- * transform.set(12, 10).set(13, 20).set(14, 30);
- * const inverse = transform.clone().invert();
- * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
- * ```
- */
-declare class Matrix4 {
-    /** Creates identity matrix, or initializes all 16 values when supplied. */
-    constructor();
-    constructor(
-        m00: number, m01: number, m02: number, m03: number,
-        m10: number, m11: number, m12: number, m13: number,
-        m20: number, m21: number, m22: number, m23: number,
-        m30: number, m31: number, m32: number, m33: number
-    );
-    /** Number of scalar components in the matrix. */
-    readonly length: 16;
-    /** Reads a scalar component at index 0..15. */
-    get(index: number): number;
-    /** Writes a scalar component at index 0..15 and returns this matrix. */
-    set(index: number, value: number): this;
-    /** Compares all 16 components exactly. */
-    equals(value: Matrix4): boolean;
-    /** Compares all components using an absolute epsilon tolerance. */
-    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
-    /** Returns the 16 components as a new array. */
-    toArray(): number[];
-    /** Copies 16 values from an array-like object into this matrix. */
-    fromArray(values: ArrayLike<number>): this;
-    /** Returns an independent copy of this matrix. */
-    clone(): Matrix4;
-    /** Copies another matrix into this matrix. */
-    copy(value: Matrix4): this;
-    /** Returns this * value (column vectors); neither operand is mutated. */
-    multiply(value: Matrix4): Matrix4;
-    /** Replaces this matrix with identity. */
-    identity(): this;
-    /** Transposes this matrix in place. */
-    transpose(): this;
-    /** Inverts this matrix in place; throws for a singular matrix. */
-    invert(): this;
-    /** Returns a readable 16-value representation. */
-    toString(): string;
-}
-
-
-/* === Module: Camera3D (camera3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=camera3d,... */
-/** Independent cameras; right-handed, facing -Z. Projection has reversed depth.
- * Matrix getters return an owned snapshot, or overwrite and return out. */
-declare namespace Camera3D {
-    interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
-    class Camera {
-        /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
-        constructor(options?: Projection);
-        setProjection(options: Projection): this;
-        setPosition(x: number, y: number, z: number): this;
-        lookAt(x: number, y: number, z: number): this;
-        setUp(x: number, y: number, z: number): this;
-        getView(out?: Matrix4): Matrix4;
-        getProjection(out?: Matrix4): Matrix4;
-        getViewProjection(out?: Matrix4): Matrix4;
-        /** Idempotent; other operations reject a disposed camera. */
+/* === Module: CameraRig3D (camerarig3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=camerarig3d,... */
+/** Native Camera3D controllers. The script configures a rig and feeds input
+ * (rotate/zoom); following, orbiting and smoothing run in C every frame in one
+ * Loop system (attachLoop()) after Scene3D updates world transforms, or
+ * manually with update(dt). A rig keeps its camera alive, also after the
+ * camera handle is disposed, and skips frames whose target node is stale.
+ * Rigs stay active until dispose(), even when no variable holds them. */
+declare namespace CameraRig3D {
+    /** Default attachLoop() priority: after Scene3D.attachLoop() (0). */
+    const LOOP_PRIORITY: number;
+    interface Rig {
+        /** null: Orbit uses its fixed centre; Follow stops moving. */
+        setTarget(target: Scene3D.Node | null): this;
+        /** Exponential smoothing in 1/s for the eye and the look point; 0 is
+         * rigid (default). Frame-rate independent. */
+        setSharpness(eye: number, look: number): this;
+        /** The next update jumps to the goal without smoothing. */
+        snap(): this;
+        enabled: boolean;
+        /** True when it moved the camera. */
+        update(dt: number): boolean;
         dispose(): void;
     }
+    class Follow implements Rig {
+        constructor(camera: Camera3D.Camera, target: Scene3D.Node);
+        /** Eye offset; local (default) turns and scales with the target,
+         * otherwise it is added to the target's world position. Default 0, 2, 6. */
+        setOffset(x: number, y: number, z: number, local?: boolean): this;
+        /** Look point in the target's local space. Default 0, 0, 0. */
+        setLookOffset(x: number, y: number, z: number): this;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    class Orbit implements Rig {
+        /** Without a target, the centre is the fixed point of setCenter(). */
+        constructor(camera: Camera3D.Camera, target?: Scene3D.Node | null);
+        /** Offset from the target's world position, or the fixed centre. */
+        setCenter(x: number, y: number, z: number): this;
+        /** Radians: yaw about +Y (0 sits on +Z looking down -Z), pitch up. */
+        setAngles(yaw: number, pitch: number): this;
+        /** Input deltas, clamped to the limits. */
+        rotate(yaw: number, pitch: number): this;
+        zoom(delta: number): this;
+        /** Pitch within -1.56..1.56 rad; 0 < distanceMin <= distanceMax.
+         * Defaults -1.5, 1.5, 0.1, 1e6. */
+        setLimits(pitchMin: number, pitchMax: number, distanceMin: number, distanceMax: number): this;
+        readonly yaw: number;
+        readonly pitch: number;
+        /** Default 6. */
+        distance: number;
+        /** Yaw speed in rad/s. */
+        autoRotate: number;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    /** Updates every enabled rig; returns how many moved their camera. */
+    function update(dt: number): number;
+    /** One native POST_UPDATE system for every rig; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 
@@ -2728,6 +3314,147 @@ declare namespace Collision {
     /** Where the segment enters the shape, or null when it misses or starts inside. */
     function segment(x1: number, y1: number, x2: number, y2: number, shape: Shape):
         { fraction: number; x: number; y: number; normalX: number; normalY: number } | null;
+}
+
+
+/* === Module: Collision3D (collision3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=collision3d,... */
+/** Light 3D collision in C, for levels and characters; not a rigid body
+ * solver. A `World` holds static triangles (level meshes, whole Scene3D or
+ * glTF subtrees, boxes) in a bounding volume hierarchy, answers raycasts,
+ * sphere casts and overlaps, and is what `Character`s walk on.
+ *
+ * Characters are upright ellipsoids placed by their feet, moved with
+ * collide-and-slide (swept, so they never tunnel through thin walls). Up is
+ * +Y. Faces up to `maxSlope` are ground (standing on them does not slide),
+ * steeper faces are walls, edges up to `stepHeight` above the feet are
+ * climbed, and walking down slopes and steps keeps them on the ground. They
+ * move by themselves in one Loop system (`attachLoop()`), after the game's
+ * update and before Scene3D, and stay active until `dispose()`.
+ *
+ * Triangles face their counter-clockwise side: characters and sphere casts
+ * collide with front faces only, rays hit both sides. Layers and masks are
+ * 32-bit flags (-1: all).
+ *
+ * ```js
+ * const level = GLTF3D.load("models/level.glb");
+ * scene.root.add(level.root);
+ * const world = new Collision3D.World();
+ * world.addNode(level.root);
+ * const player = new Collision3D.Character(world, { radius: .4, height: 1.8, position: [0, 1, 0] });
+ * player.bind(heroNode);                      // the node follows the feet
+ * Collision3D.attachLoop(); scene.attachLoop();
+ * Loop.run({ update() {
+ *     player.vx = stick.x * 4; player.vz = stick.y * 4;
+ *     if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = 5;
+ * } });
+ * ```
+ */
+declare namespace Collision3D {
+    /** Default attachLoop() priority: after Animation3D (-100), before Scene3D (0). */
+    const LOOP_PRIORITY: number;
+    const MAX_TRIANGLES: number;
+    type Vec3 = [number, number, number] | Float32Array;
+    interface ShapeOptions {
+        /** Default 1. */
+        layer?: number;
+    }
+    interface QueryOptions {
+        /** Layers hit. Default -1 (all). */
+        mask?: number;
+    }
+    /** A hit along a ray or sweep; the normal points toward the query. */
+    interface Hit {
+        distance: number;
+        x: number; y: number; z: number;
+        nx: number; ny: number; nz: number;
+        /** The shape id returned by add*(). */
+        shape: number;
+        /** Triangle index within the shape. */
+        triangle: number;
+    }
+    class World {
+        constructor();
+        /** A mesh's triangles under transform (base pose for skinned or
+         * morphed meshes). Returns the shape id. */
+        addMesh(mesh: Model3D.Mesh, transform?: Matrix4 | null, options?: ShapeOptions): number;
+        /** Every visible mesh of the subtree, with the node's ancestors'
+         * transforms composed (no scene update needed). One shape. */
+        addNode(node: Scene3D.Node, options?: ShapeOptions): number;
+        /** An axis-aligned box, 12 triangles facing out. */
+        addBox(min: Vec3, max: Vec3, options?: ShapeOptions): number;
+        /** World-space triangles, 9 floats each (copied). */
+        addTriangles(positions: Float32Array, options?: ShapeOptions): number;
+        /** False for an unknown id. The tree is rebuilt by the next query. */
+        remove(shape: number): boolean;
+        setLayer(shape: number, layer: number): boolean;
+        /** Nearest hit within maxDistance (world units), or null. out is
+         * filled and returned instead of a new object. */
+        raycast(origin: Vec3, direction: Vec3, maxDistance: number, options?: QueryOptions, out?: Hit): Hit | null;
+        /** Many rays in one call: origins 3n floats, directions 3 (shared)
+         * or 3n, out 4n floats filled with [distance, nx, ny, nz] per ray
+         * (distance -1 on a miss). Returns the number of hits. */
+        raycastMany(origins: Float32Array, directions: Float32Array, maxDistance: number,
+            out: Float32Array, options?: QueryOptions): number;
+        /** A sphere swept along direction: the first front face it touches. */
+        sphereCast(center: Vec3, radius: number, direction: Vec3, maxDistance: number,
+            options?: QueryOptions, out?: Hit): Hit | null;
+        /** Ids of the shapes within radius (both sides; at most 64). */
+        overlapSphere(center: Vec3, radius: number, options?: QueryOptions): number[];
+        readonly triangleCount: number;
+        /** Characters keep their world alive after this. */
+        dispose(): void;
+    }
+    interface CharacterOptions {
+        /** Default 0.4. */
+        radius?: number;
+        /** Default 1.8. */
+        height?: number;
+        /** Ledges up to this are climbed. Default 0.3. */
+        stepHeight?: number;
+        /** Degrees; steeper faces are walls. Default 45. */
+        maxSlope?: number;
+        /** Default [0, -9.81, 0]. */
+        gravity?: Vec3;
+        /** Default -1. */
+        mask?: number;
+        /** Feet. Default [0, 0, 0]. */
+        position?: Vec3;
+    }
+    class Character {
+        constructor(world: World, options?: CharacterOptions);
+        /** Feet position. */
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+        /** Velocity in units/s; vy is reset on landing and on ceilings. */
+        vx: number;
+        vy: number;
+        vz: number;
+        readonly onGround: boolean;
+        readonly hitWall: boolean;
+        readonly hitCeiling: boolean;
+        /** [x, y, z] of the ground under the feet ([0, 1, 0] in the air). */
+        readonly groundNormal: number[];
+        /** Teleports, without collisions. */
+        setPosition(x: number, y: number, z: number): this;
+        setVelocity(x: number, y: number, z: number): this;
+        /** Moves by a displacement with collisions, without gravity. */
+        move(dx: number, dy: number, dz: number): this;
+        /** Gravity, then velocity * dt with collisions. */
+        step(dt: number): this;
+        /** A node whose position follows the feet; null unbinds. */
+        bind(node: Scene3D.Node | null): this;
+        /** Disabled characters are skipped by the Loop system and step(). */
+        enabled: boolean;
+        dispose(): void;
+    }
+    /** Steps every enabled character. */
+    function step(dt: number): void;
+    /** One native POST_UPDATE system stepping every character; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 
@@ -3806,176 +4533,35 @@ declare namespace Ease {
 }
 
 
-/* === Module: Image (image) === */
-/**
- * Image loading, CPU pixel access and textured 2D drawing.
- *
- * `Image` accepts paths understood by the active PS2 filesystem driver,
- * including paths relative to the boot directory. A newly loaded image is
- * CPU-resident; call `lock()` when it must remain resident in VRAM.
- *
- * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
- * images, `pixels` contains four bytes per pixel. Palette data is used only
- * by indexed 4-bit and 8-bit formats.
- *
- * Some Images borrow a texture owned by another object, such as
- * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
- * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
- * `optimize()` returns false.
- *
- * @example
+/* === Module: GLTF3D (gltf3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=gltf3d,... */
+/** glTF 2.0 / GLB scenes with their node hierarchy and animations.
+ * Model3D.load() keeps reading single meshes; GLTF3D.load() reads whole
+ * scenes: nodes become Scene3D nodes (TRS, or a matrix decomposed into TRS),
+ * every triangle primitive a Model3D mesh (extra primitives of a mesh become
+ * child nodes), and every animation an Animation3D clip whose targets are
+ * node indices. Skins deform their meshes every draw (in C) from the joint
+ * nodes, which the clips animate. Morph targets are not supported;
+ * CUBICSPLINE samplers keep their keyframe values and play linearly.
  * ```js
- * const logo = new Image('my_image.png');
- * if (!logo.ready()) throw new Error('image load failed');
- * logo.color = Color.new(255, 255, 255, 255);
- * logo.lock();
- * logo.draw(100, 80);
- * Screen.flip();
- * ```
- */
-
-/** Optional destination, source-rectangle and tint overrides for `draw()`. */
-type ImageDrawOptions = {
-    /** Destination width in pixels; defaults to `width`. */
-    width?: number;
-    /** Destination height in pixels; defaults to `height`. */
-    height?: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx?: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty?: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx?: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy?: number;
-    /** Rotation angle in radians. */
-    angle?: number;
-    /** Packed RGBA tint, normally created with `Color.new()`. */
-    color?: number;
-};
-
-/** Options of `drawList()`. */
-type ImageDrawListOptions = {
-    /** Offset added to every sprite; defaults to 0. */
-    x?: number;
-    y?: number;
-    /** First record to draw; defaults to 0. */
-    first?: number;
-    /** Records to draw; defaults to the rest of the buffer. */
-    count?: number;
-};
-
-/** Options controlling image creation and texture upload behavior. */
-type ImageOptions = {
-    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
-    delayed?: boolean;
-};
-
-declare class Image {
-    /** Loads an image from `path`, or creates an empty image when omitted. */
-    constructor(options?: ImageOptions);
-    constructor(path: string, options?: ImageOptions);
-    /** Linear size in bytes of the current pixel buffer. */
-    readonly size: number;
-    /** Whether texture uploads use the deferred VIF1 path. */
-    readonly delayed: boolean;
-    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
-    pixels: ArrayBuffer;
-    /** CPU palette buffer for indexed images; required for indexed images. */
-    palette: ArrayBuffer;
-    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
-    texWidth: number;
-    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
-    texHeight: number;
-    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
-    bpp: number;
-    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
-    filter: number;
-    /** Whether dimensions and a valid pixel buffer are available for drawing. */
-    renderable: boolean;
-    /** Destination draw width in pixels. */
-    width: number;
-    /** Destination draw height in pixels. */
-    height: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy: number;
-    /** Rotation angle in radians used by `draw()`. */
-    angle: number;
-    /** Packed RGBA tint multiplied with sampled texture color. */
-    color: number;
-
-    /** True when dimensions, pixel data and indexed palette data are valid. */
-    ready(): boolean;
-    /** True while an ImageList request is waiting or being processed. */
-    loading(): boolean;
-    /** True when the most recent ImageList request failed. */
-    failed(): boolean;
-    /**
-     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
-     * has a queued VRAM upload; `ready` is resident in VRAM.
-     */
-    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
-    /** Returns structured load diagnostics, or undefined when no load failed. */
-    error(): ImageLoadError | undefined;
-    /** Queues a textured sprite at `(x, y)` for the current frame. */
-    draw(x: number, y: number, options?: ImageDrawOptions): void;
-    /**
-     * Queues many sprites of this image at once: the texture state is sent
-     * once per 128 sprites instead of once per sprite, which makes it several
-     * times cheaper than as many `draw()` calls. `sprites` uses the record
-     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
-     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
-     * buffer serves both; the TileMap module is not required. Records with a
-     * zero width or height are skipped, and so are, under a Camera2D camera,
-     * records outside its viewport.
-     *
-     * @example
-     * ```js
-     * const sprites = new Float32Array(16 * count);        // 64-byte records
-     * const colors = new Uint32Array(sprites.buffer);
-     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
-     * //           colors[16*i + 8..11] = r, g, b, a
-     * image.drawList(sprites, { x: cameraX, y: cameraY });
-     * ```
-     */
-    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
-    /** Uploads the image synchronously and pins its VRAM allocation. */
-    lock(): boolean;
-    /** Allows the texture manager to evict the image from VRAM. */
-    unlock(): boolean;
-    /** Returns whether the image is currently pinned in VRAM. */
-    locked(): boolean;
-    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
-    optimize(): boolean;
-    /** Releases the native image and its CPU/VRAM resources. */
-    free(): void;
-
-    /** Copies a rectangular VRAM region between two resident images. */
-    static copyVRAMBlock(
-        source: Image,
-        sourceX: number,
-        sourceY: number,
-        destination: Image,
-        destinationX: number,
-        destinationY: number
-    ): void;
-}
-
-/** Structured diagnostics for a failed image load. */
-interface ImageLoadError {
-    /** Path as it was requested. */
-    path: string;
-    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
-    /** `upload` is reported only for ImageList requests with an `upload` option. */
-    stage: "open" | "decode" | "surface" | "upload";
-    /** Human-readable description. */
-    message: string;
+ * const hero = GLTF3D.load("models/hero.glb");
+ * scene.root.add(hero.root);
+ * const walk = new Animation3D.Player(hero.clips.walk, hero.nodes);
+ * walk.loop = true; walk.play();
+ * ``` */
+declare namespace GLTF3D {
+    interface Asset {
+        /** Group holding the default scene's root nodes. */
+        root: Scene3D.Node;
+        /** Every node in file order: the clips' target indices. */
+        nodes: Scene3D.Node[];
+        /** Node names, "" when unnamed. */
+        names: string[];
+        /** Clips by animation name (the index for unnamed ones). */
+        clips: { [name: string]: Animation3D.Clip };
+    }
+    /** material, as in Model3D.load(), replaces every primitive's material. */
+    function load(path: string, material?: Model3D.Material): Asset;
 }
 
 
@@ -4214,26 +4800,6 @@ declare namespace IOP {
     function reset(): void;
     /** Returns free and used IOP RAM in bytes. */
     function getMemoryStats(): MemoryStats;
-}
-
-
-/* === Module: Lights (lights) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=lights,... */
-/** Independent linear RGB lights. World directions point toward the source. */
-declare namespace Lights {
-    const MAX_DIRECTIONAL: 4;
-    class Set {
-        /** Starts with black ambient and all four directional slots disabled. */
-        constructor();
-        /** Changes only when effective state changes; invalid setters are atomic. */
-        readonly revision: number;
-        setAmbient(r: number, g: number, b: number): this;
-        /** Slots 0..3; nonzero direction normalized in native code. RGB in [0,1]. */
-        setDirectional(slot: number, x: number, y: number, z: number, r: number, g: number, b: number): this;
-        disable(slot: number): this;
-        clear(): this;
-        dispose(): void;
-    }
 }
 
 
@@ -4571,88 +5137,6 @@ declare namespace MemoryCard {
 }
 
 
-/* === Module: Quaternion (quaternion) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=quaternion,... */
-/** Right-handed, normalized xyzw rotation. Angles are radians.
- * Mutating methods return this; operands are unchanged; dispose is idempotent. */
-declare namespace Quaternion {
-    class Quaternion {
-        constructor();
-        constructor(x: number, y: number, z: number, w: number);
-        setAxisAngle(x: number, y: number, z: number, radians: number): this;
-        /** Sets this = this * other. */
-        multiply(other: Quaternion): this;
-        /** Shortest path toward other, t in [0,1]. */
-        slerp(other: Quaternion, t: number): this;
-        /** Independent snapshot. */
-        toArray(): [number, number, number, number];
-        dispose(): void;
-    }
-}
-
-
-/* === Module: Model3D (model3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=model3d,... */
-/** Immutable static meshes. Geometry and material descriptors are copied;
- * instances/batches retain native resources, including textures. */
-declare namespace Model3D {
-    const MAX_VERTICES: number;
-    const UNLIT: 0; const DIFFUSE: 1;
-    class Texture {
-        private constructor();
-        static readonly NEAREST: 0; static readonly LINEAR: 1;
-        /** Copies 0xAABBGGRR pixels, alpha ignored. Power-of-two sizes 1..512;
-         * clamp-to-edge, no mipmaps. Honors subarray(); main thread only. */
-        static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1}): Texture;
-        /** Synchronous RGB/RGBA image decoding. Palette images unsupported. */
-        static load(path: string, filter?: 0 | 1): Texture;
-        readonly width: number; readonly height: number;
-        /** Existing meshes retain the texture. Final native release waits GS. */
-        dispose(): void;
-    }
-    interface Material {
-        /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
-        shading?: 0 | 1;
-        /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
-         * and stored as RGBA8. Defaults to white. Alpha is opaque in this pass. */
-        baseColor?: Float32Array;
-        texture?: Texture;
-    }
-    interface Geometry {
-        positions: Float32Array; colors?: Float32Array; indices?: Uint32Array;
-        /** One nonzero xyz normal per source vertex; normalized during copy.
-         * Missing DIFFUSE normals are generated per face, before expansion. */
-        normals?: Float32Array;
-        /** One finite uv pair in [0,1] per source vertex. Origin top-left. */
-        texcoords?: Float32Array;
-        material?: Material;
-    }
-    class Mesh {
-        private constructor();
-        /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
-        static fromGeometry(geometry: Geometry): Mesh;
-        /** Expanded triangle vertex count, at most MAX_VERTICES. */
-        readonly vertexCount: number;
-        createInstance(): Instance;
-        /** Drops this handle; existing instances retain the native mesh. */
-        dispose(): void;
-    }
-    class Instance {
-        private constructor();
-        setPosition(x: number, y: number, z: number): this;
-        setScale(x: number, y: number, z: number): this;
-        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
-        setRotationEuler(x: number, y: number, z: number): this;
-        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
-        /** Owned snapshot, or fills and returns out; never a borrowed matrix. */
-        getTransform(out?: Matrix4): Matrix4;
-        dispose(): void;
-    }
-    /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset. */
-    function load(path: string, material?: Material): Mesh;
-}
-
-
 /* === Module: Random (random) === */
 /**
  * Seedable pseudo-random numbers (xoshiro128**, computed in C).
@@ -4964,39 +5448,276 @@ declare namespace Noise {
 }
 
 
-/* === Module: Render3D (render3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=render3d,... */
-/** Native opaque unlit/diffuse and textured triangles with homogeneous clipping in C for
- * crossing objects; VU1 transforms and lights fully contained objects.
- * Draw never advances animation/physics. Enable Screen zbuffering. */
-declare namespace Render3D {
-    const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
-    type CullMode = 0 | 1 | -1;
-    interface Stats {
-        submittedObjects: number; culledObjects: number; drawPasses: number;
-        /** Triangle list sent to VU1 after native clipping; not rasterized count. */
-        triangles: number; vuBatches: number;
-        /** Source triangles of objects retained by AABB culling. */
-        sourceTriangles: number;
-        /** Source triangles partially clipped and producing visible polygons. */
-        clippedTriangles: number;
-        /** Source triangles rejected by precise clipping. */
-        rejectedTriangles: number;
-        /** Copied position/color/normal/UV DMA payload, including chunk padding.
-         * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
-        geometryBytes: number;
+/* === Module: Particles2D (particles2d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=particles2d,... */
+/** Native 2D particles: emission, integration and drawing in C. The script
+ * configures an emitter, moves it and calls draw() once per frame; nothing per
+ * particle runs in JavaScript. World units through the 2D view (Camera2D),
+ * +Y down. Emitters advance in one Loop system (attachLoop(), POST_UPDATE, so
+ * they spawn where the game left them) or with update(dt). */
+declare namespace Particles2D {
+    const MAX_PARTICLES: number;
+    const LOOP_PRIORITY: number;
+    /** A number, or [min, max] picked per particle ([start, end] for size). */
+    type Range = number | [number, number];
+    interface Options {
+        /** Pool size, 1..MAX_PARTICLES; default 256. */
+        capacity?: number;
+        /** Particles per second while active; default 0 (bursts only). */
+        rate?: number;
+        /** Seconds; default 1. */
+        life?: Range;
+        speed?: Range;
+        /** Direction in radians (0 = +X, PI/2 = down) and total spread. */
+        angle?: number;
+        spread?: number;
+        /** [x, y] in units per second squared. */
+        gravity?: [number, number];
+        /** velocity *= 1 / (1 + drag * dt). */
+        drag?: number;
+        /** [start, end] over life, square side in units; default 8. */
+        size?: Range;
+        /** Color.new() value or [start, end]; alpha 0..128. Default white. */
+        color?: number | [number, number];
+        /** Initial angle and angular speed, radians. Any non-zero value draws
+         * rotated quads (two triangles) instead of GS sprites. */
+        rotation?: Range;
+        spin?: Range;
+        /** [width, height] of the spawn rectangle around the position. */
+        area?: [number, number];
+        /** [u1, v1, u2, v2] in texels; default the whole image. */
+        rect?: [number, number, number, number];
+        /** Random seed; same seed, same particles. */
+        seed?: number;
     }
-    /** Lights are borrowed for this call. Omitted lights mean black ambient and
-     * no directional lights. UNLIT materials ignore lights. Singular DIFFUSE
-     * normal transforms throw; drawing does not update lights or transforms. */
-    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set): Stats;
-    class Batch {
-        constructor();
-        readonly size: number;
-        /** Retains the native instance, independently of its JS handle. */
-        add(instance: Model3D.Instance): this;
+    class Emitter {
+        /** The image is held by the emitter; a freed image draws nothing. */
+        constructor(image: Image, options?: Options);
+        /** Partial changes; live particles keep their state. */
+        configure(options: Options): this;
+        setPosition(x: number, y: number): this;
+        /** Spawns up to count particles now; returns how many fit. */
+        emit(count: number): number;
         clear(): this;
-        draw(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set): Stats;
+        update(dt: number): this;
+        /** One batch per call, oldest particles first. */
+        draw(): this;
+        readonly count: number;
+        /** Rate emission on or off; live particles continue. */
+        active: boolean;
+        dispose(): void;
+    }
+    function update(dt: number): void;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Particles3D (particles3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=particles3d,... */
+/** Native 3D particles drawn as camera-facing quads (billboards) by VU1:
+ * emission and integration in C, depth tested against the 3D scene without
+ * writing depth, so transparent particles do not hide each other. Draw after
+ * the opaque scene. Screen zbuffering is required. Emitters advance in one
+ * Loop system (attachLoop(), POST_UPDATE) or with update(dt). */
+declare namespace Particles3D {
+    const MAX_PARTICLES: number;
+    const LOOP_PRIORITY: number;
+    /** A number, or [min, max] picked per particle ([start, end] for size). */
+    type Range = number | [number, number];
+    type Vector3 = [number, number, number];
+    interface Options {
+        /** Pool size, 1..MAX_PARTICLES; default 256. */
+        capacity?: number;
+        /** Particles per second while active; default 0 (bursts only). */
+        rate?: number;
+        /** Seconds; default 1. */
+        life?: Range;
+        speed?: Range;
+        /** Cone axis (normalized); default [0, 1, 0]. */
+        direction?: Vector3;
+        /** Cone half angle in radians, 0..PI; default 0. */
+        spread?: number;
+        gravity?: Vector3;
+        /** velocity *= 1 / (1 + drag * dt). */
+        drag?: number;
+        /** Quad side in world units, [start, end] over life; default 0.5. */
+        size?: Range;
+        /** Color.new() value or [start, end]; alpha 0..128. */
+        color?: number | [number, number];
+        /** Spawn box around the position. */
+        area?: Vector3;
+        /** [u1, v1, u2, v2] in texels; default the whole image. */
+        rect?: [number, number, number, number];
+        seed?: number;
+    }
+    class Emitter {
+        constructor(image: Image, options?: Options);
+        configure(options: Options): this;
+        setPosition(x: number, y: number, z: number): this;
+        emit(count: number): number;
+        clear(): this;
+        update(dt: number): this;
+        /** Draws what camera sees (near/far tested on the EE) and returns how
+         * many particles were sent. Throws without a z-buffer. */
+        draw(camera: Camera3D.Camera): number;
+        readonly count: number;
+        active: boolean;
+        dispose(): void;
+    }
+    function update(dt: number): void;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Physics3D (physics3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=physics3d,... */
+/** Rigid bodies in C: spheres, boxes and capsules that fall, bounce, slide, roll and
+ * stack, against each other and against the static triangles of a
+ * Collision3D world (the level). Sequential impulses with friction,
+ * restitution and warm starting; bodies resting together fall asleep as one
+ * island and wake when something touches them. Fixed 1/60 s substeps (at
+ * most 4 per step; a slower frame rate drops the backlog). Up is wherever
+ * gravity points against.
+ *
+ * ```js
+ * const level = new Collision3D.World(); level.addNode(levelNode);
+ * const physics = new Physics3D.World(level).attachLoop();
+ * const crate = physics.addBox({ halfExtents: [.5, .5, .5], mass: 2, position: [0, 5, 0] });
+ * crate.bind(crateNode);                       // position and rotation follow
+ * crate.applyImpulse(0, 4, 2);
+ * ```
+ */
+declare namespace Physics3D {
+    /** Default attachLoop() priority: before Collision3D characters (-50) and Scene3D (0). */
+    const LOOP_PRIORITY: number;
+    const MAX_BODIES: number;
+    const MAX_JOINTS: number;
+    type Vec3 = [number, number, number] | Float32Array;
+    interface WorldOptions {
+        /** Default [0, -9.81, 0]. */
+        gravity?: Vec3;
+        /** Velocity iterations per substep, 1..64. Default 8. */
+        iterations?: number;
+        /** Layers of the level's triangles that bodies hit. Default -1. */
+        staticMask?: number;
+    }
+    interface BodyOptions {
+        /** Default "dynamic". Kinematic bodies move by their velocity and
+         * push dynamic ones; static ones do not move. */
+        type?: "dynamic" | "kinematic" | "static";
+        /** Spheres and capsules. Default 0.5. */
+        radius?: number;
+        /** Capsules: half the length of the segment along the local y axis,
+         * caps excluded (total height 2 * (halfHeight + radius)). Default 0.5. */
+        halfHeight?: number;
+        /** Boxes. Default [0.5, 0.5, 0.5]. */
+        halfExtents?: Vec3;
+        /** Dynamic bodies. Default 1. */
+        mass?: number;
+        position?: Vec3;
+        /** Quaternion x, y, z, w. Default identity. */
+        rotation?: [number, number, number, number] | Float32Array;
+        velocity?: Vec3;
+        angularVelocity?: Vec3;
+        /** Default 0.5; pairs use the geometric mean. */
+        friction?: number;
+        /** 0..1, default 0; pairs use the larger. */
+        restitution?: number;
+        /** Spheres and capsules: rolling resistance (times the radius), so
+         * they stop rolling. Default 0.02. */
+        rollingFriction?: number;
+        /** In 1/s. Defaults 0.05 and 0.1. */
+        linearDamping?: number;
+        angularDamping?: number;
+        /** Bodies collide when each mask has the other's layer. Default 1 and -1. */
+        layer?: number;
+        mask?: number;
+    }
+    class World {
+        /** statics: the level, or null. */
+        constructor(statics?: Collision3D.World | null, options?: WorldOptions);
+        addSphere(options?: BodyOptions): Body;
+        addBox(options?: BodyOptions): Body;
+        /** An upright capsule (local y axis); rotate it with `rotation`. */
+        addCapsule(options?: BodyOptions): Body;
+        /** Advances by dt; returns the substeps run. */
+        step(dt: number): number;
+        setGravity(x: number, y: number, z: number): this;
+        readonly bodyCount: number;
+        /** Contacts solved in the last substep. */
+        readonly contactCount: number;
+        readonly jointCount: number;
+        /** Microseconds spent in the last step(), by phase. */
+        readonly profile: { collide: number; prepare: number; solve: number; integrate: number; substeps: number };
+        /** The anchor points of a and b stay together (b null: the world).
+         * Points and axes are in world space at creation. */
+        addBallJoint(a: Body, b: Body | null, anchor: Vec3): Joint;
+        /** A ball joint that only turns about axis; limits in radians from
+         * the creation pose, a motor driving the relative angular speed. */
+        addHingeJoint(a: Body, b: Body | null, anchor: Vec3, axis: Vec3, options?: {
+            lower?: number; upper?: number; motorSpeed?: number; maxMotorTorque?: number }): Joint;
+        /** Keeps anchorA (on a) and anchorB (on b) at length (default: the
+         * current distance); a rope only stops them from moving apart. */
+        addDistanceJoint(a: Body, b: Body | null, anchorA: Vec3, anchorB: Vec3, options?: {
+            length?: number; rope?: boolean }): Joint;
+        /** Keeps the relative position and rotation of the creation pose. */
+        addWeldJoint(a: Body, b: Body | null, anchor: Vec3): Joint;
+        /** One native POST_UPDATE system stepping this world; idempotent. */
+        attachLoop(priority?: number): this;
+        detachLoop(): boolean;
+        readonly attached: boolean;
+        /** Detaches it; its bodies are removed when no handle keeps the world. */
+        dispose(): void;
+    }
+    /** Removed with either of its bodies. At least one body is dynamic.
+     * Bodies joined by a joint do not collide with each other. */
+    class Joint {
+        private constructor();
+        readonly type: "ball" | "hinge" | "distance" | "weld";
+        readonly alive: boolean;
+        /** Hinges: the angle of a relative to b about the axis (last step). */
+        readonly angle: number;
+        /** Hinges: lower <= upper, radians. */
+        setLimits(lower: number, upper: number): this;
+        disableLimits(): this;
+        /** Hinges: target relative angular speed (rad/s) with at most
+         * maxTorque; maxTorque 0 turns the motor off. */
+        setMotor(speed: number, maxTorque: number): this;
+        remove(): void;
+        dispose(): void;
+    }
+    class Body {
+        private constructor();
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+        vx: number; vy: number; vz: number;
+        /** Angular velocity, rad/s. */
+        wx: number; wy: number; wz: number;
+        readonly type: "dynamic" | "kinematic" | "static";
+        readonly sleeping: boolean;
+        /** False once removed from its world. */
+        readonly alive: boolean;
+        /** Quaternion [x, y, z, w]; fills out when given. */
+        getRotation(out?: number[] | Float32Array): number[];
+        setPosition(x: number, y: number, z: number): this;
+        setRotation(x: number, y: number, z: number, w: number): this;
+        setVelocity(x: number, y: number, z: number): this;
+        setAngularVelocity(x: number, y: number, z: number): this;
+        /** Mass * velocity, at a world point (default the centre). */
+        applyImpulse(x: number, y: number, z: number, px?: number, py?: number, pz?: number): this;
+        /** For the next step only. */
+        applyForce(x: number, y: number, z: number): this;
+        wake(): this;
+        /** A node whose position and rotation follow the body; null unbinds. */
+        bind(node: Scene3D.Node | null): this;
+        /** Takes the body out of its world. */
+        remove(): void;
+        /** remove(), and drops this handle. */
         dispose(): void;
     }
 }
@@ -5378,78 +6099,6 @@ declare namespace Scene {
          * seconds long, for games without `Loop.run()`.
          */
         function update(dt?: number): void;
-    }
-}
-
-
-/* === Module: Scene3D (scene3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=scene3d,... */
-/** Native transform hierarchy. A Node is the scene-graph instance of a mesh;
- * world = parent world * local TRS. Setters only mark dirty flags: call
- * scene.update() (or attachLoop()) before draw and world queries, which throw
- * while the scene is stale instead of returning outdated data. */
-declare namespace Scene3D {
-    /** Levels from the root, root included. Deeper hierarchies are rejected. */
-    const MAX_DEPTH: number;
-    interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
-    interface DrawStats extends Render3D.Stats {
-        /** Subtrees rejected by their world bounds; their meshes count as culled. */
-        culledSubtrees: number;
-        /** Meshes sent to Render3D, sorted by pipeline in traversal order. */
-        queuedObjects: number;
-    }
-    interface Bounds { min: [number, number, number]; max: [number, number, number]; }
-    class Node {
-        /** Retains the optional mesh natively, independently of its handle. */
-        constructor(mesh?: Model3D.Mesh);
-        /** Replaces the retained mesh; null removes it. */
-        setMesh(mesh: Model3D.Mesh | null): this;
-        readonly hasMesh: boolean;
-        setPosition(x: number, y: number, z: number): this;
-        setScale(x: number, y: number, z: number): this;
-        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
-        setRotationEuler(x: number, y: number, z: number): this;
-        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
-        /** Hidden nodes and descendants are not drawn nor included in bounds. */
-        visible: boolean;
-        /** Reparents child, keeping its local transform; the parent retains it.
-         * Throws RangeError for cycles, scene roots and MAX_DEPTH overflow. */
-        add(child: Node): this;
-        /** Removes this node from its parent; harmless without one. */
-        detach(): this;
-        /** New handle for the parent, or null. Handles are not identical objects. */
-        getParent(): Node | null;
-        readonly childCount: number;
-        /** New handle for the child at index. */
-        getChild(index: number): Node;
-        /** Always current. Owned snapshot, or fills and returns out. */
-        getLocalTransform(out?: Matrix4): Matrix4;
-        /** Transform of the last update. Throws while stale or outside a scene. */
-        getWorldTransform(out?: Matrix4): Matrix4;
-        /** World AABB of visible meshes in the subtree, or null when empty.
-         * Throws while stale or outside a scene. */
-        getWorldBounds(): Bounds | null;
-        /** Drops this handle; parents and other handles keep the node alive. */
-        dispose(): void;
-    }
-    class Scene {
-        constructor();
-        /** New handle for the root node owned by the scene. */
-        readonly root: Node;
-        /** True when a node changed after the last update. */
-        readonly stale: boolean;
-        /** True while a Loop POST_UPDATE system updates this scene. */
-        readonly attached: boolean;
-        /** Recomputes dirty world transforms and subtree bounds. */
-        update(): UpdateStats;
-        /** Culls subtrees, queues meshes and draws them through Render3D.
-         * Never updates the scene; throws while stale. Lights are borrowed. */
-        draw(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set): DrawStats;
-        /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
-        attachLoop(priority?: number): this;
-        detachLoop(): this;
-        /** Also detaches from the Loop; existing node handles stay valid. */
-        dispose(): void;
     }
 }
 
@@ -6507,8 +7156,17 @@ declare namespace Sprite {
      * `positions[2 * i + 1]` place instance i (and become its x and y);
      * without positions each draws at its own x and y. Rotated instances are
      * drawn one by one, keeping the order.
+     *
+     * With `{ stride: 3 }` the values are x, y and rotation per instance: the
+     * layout of Box2D's `world.readTransforms()`, so physics sprites need no
+     * loop in JavaScript:
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Sprite.drawAll(crates, transforms, { stride: 3 });
+     * ```
      */
-    function drawAll(instances: Instance[], positions?: Float32Array | number[]): void;
+    function drawAll(instances: Instance[], positions?: Float32Array | number[],
+        options?: { stride?: 2 | 3 }): void;
 
     /**
      * Draws the outline, origin and slices of every instance drawn from
@@ -6682,6 +7340,63 @@ declare namespace Tween {
      * advance them twice.
      */
     function update(dt: number, realDt?: number): void;
+}
+
+
+/* === Module: Tween3D (tween3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=tween3d,... */
+/** Tweens of native 3D objects advanced in C, with the semantics of Tween:
+ * start values are read when the tween starts (after its delay), the last
+ * frame sets the exact end values, repeat adds cycles and yoyo runs every
+ * other cycle backwards. No JavaScript runs per frame: tweens advance in one
+ * native Loop system (attachLoop(), PRE_UPDATE like Tween) or with advance(dt).
+ * For plain JavaScript objects keep using Tween. */
+declare namespace Tween3D {
+    const LOOP_PRIORITY: number;
+    type Vector3 = ArrayLike<number>;
+    interface Props {
+        /** Node / Instance local position, Camera eye. */
+        position?: Vector3;
+        /** Node / Instance only. */
+        scale?: Vector3;
+        /** Node / Instance only: Euler goal in radians (Rz·Ry·Rx), reached by
+         * slerp on the short arc; overshooting curves extrapolate the arc. */
+        rotation?: Vector3;
+        /** Camera only: look target. */
+        target?: Vector3;
+    }
+    interface Options {
+        /** Curve name, short or long (`"outBack"`, `"easeOutBack"`); default `"outQuad"`. */
+        ease?: string;
+        delay?: number;
+        /** Extra cycles: an integer or Infinity. */
+        repeat?: number;
+        yoyo?: boolean;
+        /** Kills the other tweens of the same target when this one starts. */
+        overwrite?: boolean;
+    }
+    /** Awaitable: resolves with true when the tween completes, false when killed. */
+    interface Handle extends PromiseLike<boolean> {
+        readonly active: boolean;
+        readonly paused: boolean;
+        /** Progress of the current cycle, 0..1. */
+        readonly progress: number;
+        readonly finished: Promise<boolean>;
+        pause(): this;
+        resume(): this;
+        /** Stops it; with complete, sets the end values first. */
+        kill(complete?: boolean): void;
+    }
+    type Target = Scene3D.Node | Model3D.Instance | Camera3D.Camera;
+    /** The tween retains its target (cameras too, after dispose). */
+    function to(target: Target, props: Props, duration: number, options?: Options): Handle;
+    function killTweensOf(target: Target, complete?: boolean): number;
+    function isTweening(target: Target): boolean;
+    /** Advances every tween; returns how many ended. */
+    function advance(dt: number): number;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 

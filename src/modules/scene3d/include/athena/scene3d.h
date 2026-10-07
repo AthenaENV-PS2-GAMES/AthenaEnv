@@ -32,6 +32,34 @@ int athena_node3d_set_scale(AthenaNode3D *node,float x,float y,float z);
 int athena_node3d_set_rotation(AthenaNode3D *node,float x,float y,float z,float w);
 /* Radians, local XYZ rotations, composed Rz * Ry * Rx as Model3D.Instance. */
 int athena_node3d_set_euler(AthenaNode3D *node,float x,float y,float z);
+/* Native motion, integrated by athena_scene3d_advance() (and by the Loop
+ * system) instead of a setter call per node per frame. Velocity is in
+ * units/s in the parent space; spin is an angular velocity in rad/s about
+ * the node's local axes (direction = axis, length = speed). Zero stops it. */
+int athena_node3d_set_velocity(AthenaNode3D *node,float x,float y,float z);
+int athena_node3d_set_spin(AthenaNode3D *node,float x,float y,float z);
+/* Skins: the joint nodes (retained) and their inverse bind matrices (copied;
+ * NULL means identity). A node with a skinned mesh (Model3D joints and
+ * weights) and a skin is drawn with its vertices deformed by
+ * world(joint) * inverse_bind each frame, in world space: the node's own
+ * transform does not move it, as in glTF. Joints must be in the same scene.
+ * Subtrees holding skinned meshes are never culled by their bounds. */
+typedef struct AthenaSkin3D AthenaSkin3D;
+AthenaSkin3D *athena_skin3d_create(AthenaNode3D *const *joints,uint32_t count,const AthenaMatrix4 *inverse_bind);
+void athena_skin3d_retain(AthenaSkin3D *skin);
+void athena_skin3d_release(AthenaSkin3D *skin);
+uint32_t athena_skin3d_joint_count(const AthenaSkin3D *skin);
+/* Retains skin; NULL removes it. */
+int athena_node3d_set_skin(AthenaNode3D *node,AthenaSkin3D *skin);
+/* Morph target weights (glTF "weights"): count <= ATHENA_MODEL3D_MAX_TARGETS
+ * finite values, the rest become 0. A mesh with morph targets and a nonzero
+ * weight is blended on the EE at draw (base + sum(weight * delta)), before
+ * skinning; the node bounds grow by the weighted delta ranges. */
+int athena_node3d_set_weights(AthenaNode3D *node,const float *weights,uint32_t count);
+/* Copies the ATHENA_MODEL3D_MAX_TARGETS weights. */
+void athena_node3d_get_weights(const AthenaNode3D *node,float weights[ATHENA_MODEL3D_MAX_TARGETS]);
+/* Local TRS as set (rotation unit length). */
+void athena_node3d_get_trs(const AthenaNode3D *node,float position[3],AthenaQuaternion *rotation,float scale[3]);
 /* Hidden nodes and their descendants are skipped by draw and bounds. */
 int athena_node3d_set_visible(AthenaNode3D *node,int visible);
 int athena_node3d_visible(const AthenaNode3D *node);
@@ -67,6 +95,10 @@ void athena_scene3d_release(AthenaScene3D *scene);
 /* Borrowed root owned by the scene; it cannot become another node's child. */
 AthenaNode3D *athena_scene3d_root(const AthenaScene3D *scene);
 int athena_scene3d_stale(const AthenaScene3D *scene);
+/* Integrates node motion for dt seconds (>= 0), descending only into
+ * branches with moving nodes, and marks them dirty. Returns the number of
+ * moved nodes; EINVAL for a bad dt or an overflowing position or rotation. */
+int athena_scene3d_advance(AthenaScene3D *scene,float dt);
 /* Recomputes dirty world transforms and subtree bounds; stats may be NULL.
  * Overflowing transforms return EINVAL and leave the scene stale. */
 int athena_scene3d_update(AthenaScene3D *scene,AthenaScene3DUpdateStats *stats);
@@ -77,7 +109,7 @@ int athena_scene3d_update(AthenaScene3D *scene,AthenaScene3DUpdateStats *stats);
  * transform, -2 packet/program memory, -3 no zbuffer) in *render_error. */
 int athena_scene3d_draw(AthenaScene3D *scene,AthenaCamera3D *camera,const AthenaLights *lights,
     AthenaRender3DCull cull,AthenaScene3DDrawStats *stats,int *render_error);
-/* Registers a native Loop POST_UPDATE system that updates the scene and
+/* Registers a native Loop POST_UPDATE system that advances (dt) and updates the scene and
  * retains it until detach (or Loop system removal). Returns the system id,
  * or a negative Loop/Scene3D code; a scene is attached at most once (EINVAL).
  * owner tags the attachment so a runtime can detach everything it attached. */

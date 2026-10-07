@@ -41,6 +41,16 @@ int athena_quaternion_axis_angle(AthenaQuaternion *out, float x, float y, float 
     return 1;
 }
 
+/* Closed form of Rz * Ry * Rx: six sinf/cosf and one normalization, instead
+ * of three axis-angle quaternions and two multiplications. */
+int athena_quaternion_euler(AthenaQuaternion *out, float x, float y, float z) {
+    if(!athena_float_isfinite(x)||!athena_float_isfinite(y)||!athena_float_isfinite(z)) return 0;
+    float sx=sinf(x/2), cx=cosf(x/2), sy=sinf(y/2), cy=cosf(y/2), sz=sinf(z/2), cz=cosf(z/2);
+    AthenaQuaternion q={cz*cy*sx - sz*sy*cx, cz*sy*cx + sz*cy*sx,
+        sz*cy*cx - cz*sy*sx, cz*cy*cx + sz*sy*sx};
+    return athena_quaternion_normalize(out, &q);
+}
+
 int athena_quaternion_multiply(AthenaQuaternion *out, const AthenaQuaternion *a, const AthenaQuaternion *b) {
     AthenaQuaternion p, q, r;
     if (!athena_quaternion_normalize(&p, a) || !athena_quaternion_normalize(&q, b)) return 0;
@@ -56,13 +66,15 @@ int athena_quaternion_slerp(AthenaQuaternion *out, const AthenaQuaternion *a, co
     AthenaQuaternion p, q, r;
     if (!athena_float_isfinite(t) || t < 0 || t > 1 || !athena_quaternion_normalize(&p, a) ||
         !athena_quaternion_normalize(&q, b)) return 0;
-    double dot = (double)p.x*q.x + (double)p.y*q.y + (double)p.z*q.z + (double)p.w*q.w;
+    /* Float: unit operands keep dot in [-1,1]; the nlerp branch avoids
+     * dividing by a tiny sinf(angle). */
+    float dot = p.x*q.x + p.y*q.y + p.z*q.z + p.w*q.w;
     if (dot < 0) { q.x=-q.x; q.y=-q.y; q.z=-q.z; q.w=-q.w; dot=-dot; }
     if (dot > 1) dot=1;
-    double s=1-t, u=t;
-    if (dot < 0.9995) {
-        double angle=acos(dot), denominator=sin(angle);
-        s=sin((1-t)*angle)/denominator; u=sin(t*angle)/denominator;
+    float s=1-t, u=t;
+    if (dot < 0.9995f) {
+        float angle=acosf(dot), denominator=sinf(angle);
+        s=sinf((1-t)*angle)/denominator; u=sinf(t*angle)/denominator;
     }
     r=(AthenaQuaternion){p.x*s+q.x*u, p.y*s+q.y*u, p.z*s+q.z*u, p.w*s+q.w*u};
     return athena_quaternion_normalize(out, &r);

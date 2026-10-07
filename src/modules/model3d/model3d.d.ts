@@ -55,4 +55,10 @@ declare namespace Model3D {
     }
     /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset. */
     function load(path: string, material?: Material): Mesh;
+    /** Bulk setters, one call per frame instead of one per instance: values holds
+     * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any instance changes. Returns the count. */
+    function setPositions(instances: Instance[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Instance.setRotationEuler(). */
+    function setRotationsEuler(instances: Instance[], values: Float32Array): number;
 }

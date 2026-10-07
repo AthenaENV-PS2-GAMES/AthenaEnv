@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-06",
+  "target": "PCSX2",
+  "script": "bin/physics3d_example.js (--cfg=physics3d_example.ini)",
+  "change": "Physics3D 1.0: esferas e caixas dinâmicas/cinemáticas/estáticas, impulsos sequenciais com atrito, restituição, resistência ao rolamento, warm starting, contatos especulativos e sono por ilhas, contra os triângulos do Collision3D (BVH) e entre si (sort-and-sweep). Substeps fixos de 1/60 s. Medido entre 2 e 4 s após soltar os corpos (pilha ainda ativa).",
+  "findings": [
+    "Pilha de 3 caixas: sem warm starting e com sono por corpo, desabava (corpo dormindo tratado como imóvel sobre um acordado). Com ilhas, contatos especulativos e warm starting fica parada e dorme inteira.",
+    "32 corpos: 2346.9 -> 1089.7 us por quadro (linhas do solver pré-calculadas, cantos da caixa uma vez por consulta, um contato por canto entre triângulos vizinhos).",
+    "128 corpos: 14489.7 -> 10161.1 us; 256 corpos: 37010.3 -> 25264 us. Pilhas grandes ativas são caras; dormindo, os corpos saem do custo.",
+    "Resistência ao rolamento: bolas rolando no chão plano antes só paravam pelo amortecimento angular e mantinham ilhas acordadas; no host, corpos dormindo aos 7 s: 22 -> 77 de 128.",
+    "Imagem conferida: caixas e bolas caem, quicam, rolam pela rampa e empilham no fosso.",
+    "Próximo passo possível: linhas do solver no VU0 (macro mode) para pilhas com centenas de contatos."
+  ],
+  "stages": [
+    {"stage": "bodies-32", "samples": 120, "stepTicksMean": 1089.7, "drawTicksMean": 1085.3, "contactsMean": 28.3, "sleepingAtEnd": 25},
+    {"stage": "bodies-128", "samples": 120, "stepTicksMean": 10161.1, "drawTicksMean": 4136.8, "contactsMean": 246.4, "sleepingAtEnd": 29},
+    {"stage": "bodies-256", "samples": 120, "stepTicksMean": 25264, "drawTicksMean": 8591, "contactsMean": 556.5, "sleepingAtEnd": 10}
+  ]
+}

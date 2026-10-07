@@ -87,3 +87,12 @@ typedef struct {
 
 	Color rgba;
 } prim_tex_sprite;
+
+typedef struct {
+	float x, y, u, v;
+	Color rgba;
+	float x2, y2, u2, v2;
+	Color rgba2;
+	float x3, y3, u3, v3;
+	Color rgba3;
+} prim_tex_gouraud_triangle;

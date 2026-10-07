@@ -584,6 +584,8 @@ declare namespace Box2D {
          * the fastest way to sync sprites every frame.
          */
         readTransforms(bodies: Body[], out: Float32Array): number;
+        // `out` goes as it is to Sprite.drawAll(sprites, out, { stride: 3 })
+        // and Scene3D.setTransforms2D(nodes, out).
         /** Milliseconds spent in each phase of the last step (EE cycle counter). */
         getProfile(): {
             step: number; pairs: number; collide: number; solve: number; solverSetup: number;
