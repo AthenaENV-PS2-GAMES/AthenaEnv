@@ -1,8 +1,0 @@
-athena_dma.elf SHA256 e0687fa7542d8f3eba3bc56a8eea8d37e0260f9acff64b52e7d1e65583f77a23
-athena_dma_release.elf SHA256 92aef7bd34c90d1a33ca7f4d84e34fe5ffa69877aa2f2d27661678266d89d3cd
-dma-writers.log
-[    4.3484] DMA_WRITERS_VISUAL: PASS after 120 frames; 2400 sprites, outlined font and page clear
-dma-writers-release.log
-[    4.3202] DMA_WRITERS_VISUAL: PASS after 120 frames; 2400 sprites, outlined font and page clear
-page-clear-hd.log
-[    3.5284] PAGE_CLEAR_HD_VISUAL: PASS after 120 frames; 1920x1080 CT16; 1020 pages in ring 2048

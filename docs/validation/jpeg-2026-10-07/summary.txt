@@ -1,6 +1,0 @@
-athena_jpeg.elf SHA256 53312778c710b3b99ec19d4b04131285b3fe81f9522bfd9ca34ed9c424ecfd7a
-[    1.6617] JPEG_SAFETY_VISUAL: loaded 6 images; invalid JPEG inputs rejected; 1275 bitmap glyphs
-[    3.6614] JPEG_SAFETY_VISUAL: PASS after 120 rendered frames
-athena_jpeg_release.elf SHA256 c5ae604b11b90e3520ec605c15d673b21f9388951ff06e932e55347a5aeff9a6
-[    1.8423] JPEG_SAFETY_VISUAL: loaded 6 images; invalid JPEG inputs rejected; 1275 bitmap glyphs
-[    3.8411] JPEG_SAFETY_VISUAL: PASS after 120 rendered frames

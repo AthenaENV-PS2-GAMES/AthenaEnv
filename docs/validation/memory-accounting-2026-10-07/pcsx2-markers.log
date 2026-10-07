@@ -1,3 +1,0 @@
-[    1.4131] MEMORY_ACCOUNTING_EE: starting 4 native workers
-[    2.9183] MEMORY_ACCOUNTING_EE: PASS baseline=420 final=420; 4 workers x 10000 rounds
-[    6.2399] DRAW_LISTS_REGRESSION_VISUAL: PASS after 120 frames; 1920 sprites; 1344 glyphs; rotated outline

@@ -1,1 +1,0 @@
-memory_accounting: 8 workers x 20000 rounds, exact held/live totals, realloc/OOM/disabled interrupts passed
