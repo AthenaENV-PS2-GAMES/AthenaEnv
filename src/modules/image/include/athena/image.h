@@ -59,6 +59,10 @@ typedef struct AthenaImageBuffer {
 
 /* Thread-safe: decodes `path` into CPU memory owned by `buffer`. */
 int athena_image_decode(const char *path, AthenaImageBuffer *buffer);
+/* Thread-safe: decodes PNG/JPEG/BMP bytes (borrowed for the call, e.g. an
+ * image embedded in a .glb) like athena_image_decode(). */
+int athena_image_decode_memory(const void *data, size_t size,
+	AthenaImageBuffer *buffer);
 /* Thread-safe: frees CPU memory still owned by `buffer`. */
 void athena_image_buffer_release(AthenaImageBuffer *buffer);
 /*

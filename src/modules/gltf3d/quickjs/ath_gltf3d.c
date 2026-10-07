@@ -21,7 +21,8 @@ static JSValue load(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv
     athena_texture3d_release(material.texture);
     if(code<0) {
         JSValue error=code==ATHENA_MODEL3D_ENOMEM?JS_ThrowOutOfMemory(ctx):
-            JS_ThrowTypeError(ctx,"GLTF3D.load(%s): %s",path,athena_model3d_error(code));
+            JS_ThrowTypeError(ctx,"GLTF3D.load(%s): %s%s%s",path,athena_model3d_error(code),
+                athena_model3d_detail()[0]?": ":"",athena_model3d_detail());
         JS_FreeCString(ctx,path); return error;
     }
     JS_FreeCString(ctx,path);

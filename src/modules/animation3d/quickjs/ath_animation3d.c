@@ -39,10 +39,21 @@ static int string_choice(JSContext *ctx,JSValueConst options,const char *key,con
     if(text) JS_FreeCString(ctx,text);
     JS_ThrowTypeError(ctx,"track.%s is not a valid name",key); return 0;
 }
+/* A cubic track's tangents: a Float32Array as long as values, copied. */
+static int read_tangents(JSContext *ctx,JSValueConst track,const char *key,uint32_t count,float **out) {
+    JSValue value=JS_GetPropertyStr(ctx,track,key); if(JS_IsException(value)) return 0;
+    AthenaJSArray a; int ok=0;
+    if(athena_js_array(ctx,value,JS_TYPED_ARRAY_FLOAT32,&a,key)) {
+        if(a.count!=count) JS_ThrowRangeError(ctx,"track.%s needs as many floats as track.values",key);
+        else if((*out=js_malloc(ctx,count*sizeof(float)))) { memcpy(*out,a.data,count*sizeof(float)); ok=1; }
+        JS_FreeValue(ctx,a.backing);
+    }
+    JS_FreeValue(ctx,value); return ok;
+}
 /* Reads one track and copies its arrays at once: later getters may detach
  * the buffers of tracks already read. */
 static int read_track(JSContext *ctx,JSValueConst track,AthenaTrack3DDesc *out) {
-    static const char *const paths[]={"position","rotation","scale","weights"},*const modes[]={"linear","step"};
+    static const char *const paths[]={"position","rotation","scale","weights"},*const modes[]={"linear","step","cubic"};
     if(!JS_IsObject(track)) { JS_ThrowTypeError(ctx,"Each track must be an object"); return 0; }
     int path,mode; float target=0;
     JSValue value=JS_GetPropertyStr(ctx,track,"target"); if(JS_IsException(value)) return 0;
@@ -52,7 +63,7 @@ static int read_track(JSContext *ctx,JSValueConst track,AthenaTrack3DDesc *out) 
     if(target<0||target>=ATHENA_ANIM3D_MAX_TRACKS||target!=(float)(uint32_t)target) {
         JS_ThrowRangeError(ctx,"track.target must be an integer below %u",(unsigned)ATHENA_ANIM3D_MAX_TRACKS); return 0;
     }
-    if(!string_choice(ctx,track,"path",paths,4,-1,&path)||!string_choice(ctx,track,"interpolation",modes,2,0,&mode)) return 0;
+    if(!string_choice(ctx,track,"path",paths,4,-1,&path)||!string_choice(ctx,track,"interpolation",modes,3,0,&mode)) return 0;
     JSValue times=JS_GetPropertyStr(ctx,track,"times"); if(JS_IsException(times)) return 0;
     JSValue values=JS_GetPropertyStr(ctx,track,"values");
     if(JS_IsException(values)) { JS_FreeValue(ctx,times); return 0; }
@@ -68,11 +79,15 @@ static int read_track(JSContext *ctx,JSValueConst track,AthenaTrack3DDesc *out) 
             else if(v.count!=t.count*width) JS_ThrowRangeError(ctx,"track.values needs %u floats per key",(unsigned)width);
             else {
                 float *ct=js_malloc(ctx,t.count*sizeof(float)),*cv=js_malloc(ctx,v.count*sizeof(float));
+                float *ci=NULL,*co=NULL;
                 if(ct&&cv) {
                     memcpy(ct,t.data,t.count*sizeof(float)); memcpy(cv,v.data,v.count*sizeof(float));
-                    *out=(AthenaTrack3DDesc){(uint32_t)target,path,mode,ct,cv,(uint32_t)t.count,
-                        path==ATHENA_ANIM3D_WEIGHTS?width:0}; ok=1;
-                } else { js_free(ctx,ct); js_free(ctx,cv); }
+                    ok=mode!=ATHENA_ANIM3D_CUBIC||(read_tangents(ctx,track,"inTangents",v.count,&ci)&&
+                        read_tangents(ctx,track,"outTangents",v.count,&co));
+                    if(ok) *out=(AthenaTrack3DDesc){(uint32_t)target,path,mode,ct,cv,(uint32_t)t.count,
+                        path==ATHENA_ANIM3D_WEIGHTS?width:0,ci,co};
+                }
+                if(!ok) { js_free(ctx,ct); js_free(ctx,cv); js_free(ctx,ci); js_free(ctx,co); }
             }
             JS_FreeValue(ctx,v.backing);
         }
@@ -99,10 +114,13 @@ static JSValue clip_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueCons
     if(!JS_IsException(result)) {
         AthenaClip3D *clip=NULL; int code=athena_clip3d_create(tracks,read,&clip);
         if(code==ATHENA_ANIM3D_ENOMEM) result=JS_ThrowOutOfMemory(ctx);
-        else if(code<0) result=JS_ThrowRangeError(ctx,"Invalid track: times must be >= 0 and increasing, values finite, rotations nonzero");
+        else if(code<0) result=JS_ThrowRangeError(ctx,"Invalid track: times must be >= 0 and increasing, values and tangents finite, rotations nonzero");
         else result=new_instance(ctx,target,clip_id,clip,release_clip);
     }
-    for(uint32_t i=0;i<read;i++) { js_free(ctx,(void *)tracks[i].times); js_free(ctx,(void *)tracks[i].values); }
+    for(uint32_t i=0;i<read;i++) {
+        js_free(ctx,(void *)tracks[i].times); js_free(ctx,(void *)tracks[i].values);
+        js_free(ctx,(void *)tracks[i].in_tangents); js_free(ctx,(void *)tracks[i].out_tangents);
+    }
     js_free(ctx,tracks); return result;
 }
 JSValue athena_clip3d_to_value(JSContext *ctx,AthenaClip3D *clip) {

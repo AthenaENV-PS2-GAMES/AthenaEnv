@@ -35,14 +35,35 @@ struct AthenaNode3D {
     float weights[ATHENA_MODEL3D_MAX_TARGETS];
     uint8_t morphed;
     uint8_t flags,local_valid,visible,has_bounds,scene_root;
+    /* Skins naming this node as a joint. They do not retain it (a joint is
+     * often an ancestor of the skinned node: a strong reference would be a
+     * cycle); the node clears their entries when it is freed. */
+    AthenaSkin3D **skins; uint32_t skin_count,skin_capacity;
+    /* Draw order key, cached by set_mesh: pipeline (unlit, diffuse,
+     * textured) and texture, so passes sharing them stay consecutive. */
+    uint32_t pipeline; const AthenaTexture3D *texture;
+    /* Follows its parent's morph weights (extra glTF primitives of a mesh). */
+    uint8_t morph_follower;
 };
-typedef struct { AthenaNode3D *node; uint32_t pipeline,contained; } QueueItem;
+typedef struct { AthenaNode3D *node; uint32_t pipeline,contained,order; } QueueItem;
 struct AthenaSkin3D {
     uint64_t refs;
     uint32_t count;
-    AthenaNode3D **joints;
+    AthenaNode3D **joints; /* weak: NULL once that node is freed */
     AthenaMatrix4 *inverse_bind;
 };
+static void unwatch(AthenaNode3D *n,const AthenaSkin3D *k) {
+    for(uint32_t i=0;i<n->skin_count;i++) if(n->skins[i]==k) { n->skins[i]=n->skins[--n->skin_count]; return; }
+}
+static int watch(AthenaNode3D *n,AthenaSkin3D *k) {
+    for(uint32_t i=0;i<n->skin_count;i++) if(n->skins[i]==k) return 1; /* a joint listed twice */
+    if(n->skin_count==n->skin_capacity) {
+        uint32_t next=n->skin_capacity?n->skin_capacity*2:2;
+        AthenaSkin3D **skins=realloc(n->skins,next*sizeof(*skins)); if(!skins) return 0;
+        n->skins=skins; n->skin_capacity=next;
+    }
+    n->skins[n->skin_count++]=k; return 1;
+}
 /* One per Loop registration: the Loop may release it after a later attach. */
 typedef struct Attachment {
     AthenaScene3D *scene;
@@ -89,7 +110,11 @@ void athena_node3d_release(AthenaNode3D *n) {
         AthenaNode3D *c=n->children[i];
         c->parent=NULL; mark(c,NODE_WORLD); athena_node3d_release(c);
     }
-    free(n->children); athena_mesh3d_release(n->mesh); athena_skin3d_release(n->skin); free(n);
+    for(uint32_t i=0;i<n->skin_count;i++) {
+        AthenaSkin3D *k=n->skins[i];
+        for(uint32_t j=0;j<k->count;j++) if(k->joints[j]==n) k->joints[j]=NULL;
+    }
+    free(n->skins); free(n->children); athena_mesh3d_release(n->mesh); athena_skin3d_release(n->skin); free(n);
 }
 AthenaSkin3D *athena_skin3d_create(AthenaNode3D *const *joints,uint32_t count,const AthenaMatrix4 *inverse_bind) {
     if(!joints||!count||count>ATHENA_MODEL3D_MAX_JOINTS) return NULL;
@@ -97,18 +122,20 @@ AthenaSkin3D *athena_skin3d_create(AthenaNode3D *const *joints,uint32_t count,co
     if(inverse_bind) for(uint32_t i=0;i<count;i++) for(int k=0;k<16;k++)
         if(!athena_float_isfinite(inverse_bind[i].value[k])) return NULL;
     AthenaSkin3D *k=calloc(1,sizeof(*k)); if(!k) return NULL;
-    k->joints=malloc(count*sizeof(*k->joints)); k->inverse_bind=memalign(16,count*sizeof(*k->inverse_bind));
+    k->joints=calloc(count,sizeof(*k->joints)); k->inverse_bind=memalign(16,count*sizeof(*k->inverse_bind));
     if(!k->joints||!k->inverse_bind) { free(k->joints); free(k->inverse_bind); free(k); return NULL; }
+    k->refs=1; k->count=count;
     for(uint32_t i=0;i<count;i++) {
-        k->joints[i]=joints[i]; athena_node3d_retain(joints[i]);
+        if(!watch(joints[i],k)) { athena_skin3d_release(k); return NULL; }
+        k->joints[i]=joints[i];
         if(inverse_bind) k->inverse_bind[i]=inverse_bind[i]; else ath_matrix4_identity(&k->inverse_bind[i]);
     }
-    k->refs=1; k->count=count; return k;
+    return k;
 }
 void athena_skin3d_retain(AthenaSkin3D *k) { if(k) k->refs++; }
 void athena_skin3d_release(AthenaSkin3D *k) {
     if(!k||--k->refs) return;
-    for(uint32_t i=0;i<k->count;i++) athena_node3d_release(k->joints[i]);
+    for(uint32_t i=0;i<k->count;i++) if(k->joints[i]) unwatch(k->joints[i],k);
     free(k->joints); free(k->inverse_bind); free(k);
 }
 uint32_t athena_skin3d_joint_count(const AthenaSkin3D *k) { return k?k->count:0; }
@@ -134,6 +161,8 @@ static void morph_box(const AthenaMesh3DView *v,const float weights[],float lo[3
 static void cache_mesh_box(AthenaNode3D *n) {
     if(!n->mesh) return;
     AthenaMesh3DView v; athena_mesh3d_view(n->mesh,&v);
+    n->texture=v.material.texture;
+    n->pipeline=v.material.texture?2:v.material.shading==ATHENA_MATERIAL3D_DIFFUSE?1:0;
     float lo[3],hi[3]; morph_box(&v,n->weights,lo,hi);
     for(int c=0;c<3;c++) { n->mesh_mid[c]=lo[c]*.5f+hi[c]*.5f; n->mesh_half[c]=hi[c]*.5f-lo[c]*.5f; }
 }
@@ -154,8 +183,14 @@ int athena_node3d_set_weights(AthenaNode3D *n,const float *weights,uint32_t coun
         n->weights[t]=w; if(w!=0) morphed=1;
     }
     n->morphed=morphed;
+    for(uint32_t i=0;i<n->child_count;i++) if(n->children[i]->morph_follower)
+        athena_node3d_set_weights(n->children[i],weights,count);
     if(same) return 0; /* animation players set every frame: skip unchanged */
     cache_mesh_box(n); mark(n,0); return 0;
+}
+int athena_node3d_set_morph_follower(AthenaNode3D *n,int follow) {
+    if(!n) return ATHENA_SCENE3D_EINVAL;
+    n->morph_follower=!!follow; return 0;
 }
 void athena_node3d_get_weights(const AthenaNode3D *n,float weights[ATHENA_MODEL3D_MAX_TARGETS]) {
     for(uint32_t t=0;t<ATHENA_MODEL3D_MAX_TARGETS;t++) weights[t]=n?n->weights[t]:0;
@@ -411,10 +446,6 @@ int athena_scene3d_update(AthenaScene3D *s,AthenaScene3DUpdateStats *stats) {
     if(!(s->root->flags&NODE_SUBTREE)) return 0;
     return update_node(s->root,NULL,0,stats);
 }
-static uint32_t pipeline_of(const AthenaMesh3D *mesh) {
-    AthenaMesh3DView v; athena_mesh3d_view(mesh,&v);
-    return v.material.texture?2:v.material.shading==ATHENA_MATERIAL3D_DIFFUSE?1:0;
-}
 typedef struct { AthenaScene3D *scene; AthenaCamera3D *camera; AthenaScene3DDrawStats *stats; uint32_t count; } Collect;
 /* A subtree whose bounds are INSIDE needs no further frustum tests: every
  * descendant and mesh lies within those bounds, and the frustum is convex. */
@@ -439,8 +470,9 @@ static int collect(const AthenaNode3D *n,Collect *c,int inside) {
             QueueItem *sorted=realloc(c->scene->sorted,next*sizeof(*sorted)); if(!sorted) return ATHENA_SCENE3D_ENOMEM;
             c->scene->sorted=sorted; c->scene->queue_capacity=next;
         }
-        c->scene->queue[c->count++]=(QueueItem){(AthenaNode3D *)n,pipeline_of(n->mesh),
-            relation==ATHENA_FRUSTUM3D_INSIDE&&!n->skin};
+        c->scene->queue[c->count]=(QueueItem){(AthenaNode3D *)n,n->pipeline,
+            relation==ATHENA_FRUSTUM3D_INSIDE&&!n->skin,c->count};
+        c->count++;
     }
     for(uint32_t i=0;i<n->child_count;i++) {
         int code=collect(n->children[i],c,relation==ATHENA_FRUSTUM3D_INSIDE);
@@ -471,14 +503,20 @@ static int scratch(AthenaPosition3D **positions,AthenaPosition3D **normals,uint3
  * face normals of the morphed triangles; otherwise the base normals stay.
  * Bounds: the conservative morph box, not a per-vertex min/max. */
 static int morph_view(const AthenaNode3D *n,AthenaMesh3DView *v) {
-    if(!scratch(&morph_positions,&morph_normals,&morph_capacity,v->vertex_count)) return ATHENA_SCENE3D_ENOMEM;
+    if(!scratch(&morph_positions,&morph_normals,&morph_capacity,athena_mesh3d_stream_count(v))) return ATHENA_SCENE3D_ENOMEM;
     uint32_t active[ATHENA_MODEL3D_MAX_TARGETS],count=0;
     for(uint32_t t=0;t<v->target_count;t++) if(n->weights[t]!=0) active[count++]=t;
-    for(uint32_t i=0;i<v->vertex_count;i++) {
+    for(uint32_t i=0;i<athena_mesh3d_stream_count(v);i++) {
+        uint32_t first=v->deform_reuse?v->deform_reuse[i]:i;
+        if(first<i) {
+            morph_positions[i]=morph_positions[first];
+            if(v->normals&&v->target_normals) morph_normals[i]=morph_normals[first];
+            continue;
+        }
         AthenaPosition3D p=v->positions[i];
         for(uint32_t a=0;a<count;a++) {
             uint32_t t=active[a]; float w=n->weights[t];
-            const AthenaPosition3D *d=&v->target_positions[t*v->vertex_count+i];
+            const AthenaPosition3D *d=&v->target_positions[t*athena_mesh3d_stream_count(v)+i];
             p.x+=w*d->x; p.y+=w*d->y; p.z+=w*d->z;
         }
         morph_positions[i]=p;
@@ -486,14 +524,14 @@ static int morph_view(const AthenaNode3D *n,AthenaMesh3DView *v) {
             AthenaPosition3D q=v->normals[i];
             for(uint32_t a=0;a<count;a++) {
                 uint32_t t=active[a]; float w=n->weights[t];
-                const AthenaPosition3D *d=&v->target_normals[t*v->vertex_count+i];
+                const AthenaPosition3D *d=&v->target_normals[t*athena_mesh3d_stream_count(v)+i];
                 q.x+=w*d->x; q.y+=w*d->y; q.z+=w*d->z;
             }
             float length=sqrtf(q.x*q.x+q.y*q.y+q.z*q.z),inverse=length>1e-12f?1/length:0;
             morph_normals[i]=inverse?(AthenaPosition3D){q.x*inverse,q.y*inverse,q.z*inverse}:v->normals[i];
         }
     }
-    if(v->normals&&!v->target_normals&&v->flat_normals) for(uint32_t i=0;i<v->vertex_count;i+=3) {
+    if(v->normals&&!v->target_normals&&v->flat_normals) for(uint32_t i=0;i<athena_mesh3d_stream_count(v);i+=3) {
         AthenaPosition3D a=morph_positions[i],b=morph_positions[i+1],c=morph_positions[i+2];
         float ux=b.x-a.x,uy=b.y-a.y,uz=b.z-a.z,vx=c.x-a.x,vy=c.y-a.y,vz=c.z-a.z;
         float nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx,length=sqrtf(nx*nx+ny*ny+nz*nz);
@@ -514,14 +552,14 @@ static int skin_draw(const AthenaNode3D *n,AthenaMesh3DView v,AthenaCamera3D *ca
     static AthenaMatrix4 palette[ATHENA_MODEL3D_MAX_JOINTS] __attribute__((aligned(16))); /* 16 KB: off the stack */
     for(uint32_t j=0;j<v.joint_count;j++) {
         AthenaMatrix4 world;
-        if(athena_node3d_world(k->joints[j],&world)<0) return ATHENA_SCENE3D_ESTALE;
+        if(!k->joints[j]||athena_node3d_world(k->joints[j],&world)<0) return ATHENA_SCENE3D_ESTALE;
         ath_matrix4_multiply(&palette[j],&world,&k->inverse_bind[j]);
     }
     /* Conservative world bounds: every deformed vertex is a convex blend of
      * its bind position under its joints, so it lies within the union of the
      * bind-pose box transformed by every joint. Contained meshes deform on
      * VU1; the others here on the EE, then clip in C. */
-    if(v.joint_count<=ATHENA_RENDER3D_SKIN_JOINTS&&v.normals&&v.weights8&&!v.material.texture) {
+    if(v.joint_count<=ATHENA_RENDER3D_SKIN_JOINTS&&v.normals&&v.weights8) {
         float lo[3],hi[3];
         for(uint32_t j=0;j<v.joint_count;j++) for(int corner=0;corner<8;corner++) {
             float p[3]={corner&1?v.maximum[0]:v.minimum[0],corner&2?v.maximum[1]:v.minimum[1],corner&4?v.maximum[2]:v.minimum[2]};
@@ -546,8 +584,15 @@ static int skin_draw(const AthenaNode3D *n,AthenaMesh3DView v,AthenaCamera3D *ca
             return 0;
         }
     }
-    if(!scratch(&skin_positions,&skin_normals,&skin_capacity,v.vertex_count)) return ATHENA_SCENE3D_ENOMEM;
-    for(uint32_t i=0;i<v.vertex_count;i++) {
+    if(!scratch(&skin_positions,&skin_normals,&skin_capacity,athena_mesh3d_stream_count(&v))) return ATHENA_SCENE3D_ENOMEM;
+    for(uint32_t i=0;i<athena_mesh3d_stream_count(&v);i++) {
+        uint32_t first=v.deform_reuse?v.deform_reuse[i]:i;
+        if(first<i) {
+            skin_positions[i]=skin_positions[first];
+            if(v.normals) skin_normals[i]=skin_normals[first];
+            /* This point already contributed to bounds on its first occurrence. */
+            continue;
+        }
         /* Blend the four joint matrices, then transform once. */
         float m[12]={0};
         const uint8_t *joint=&v.joints[i*4]; const float *weight=&v.weights[i*4];
@@ -580,6 +625,12 @@ static int skin_draw(const AthenaNode3D *n,AthenaMesh3DView v,AthenaCamera3D *ca
     if(code<0) { if(render_error) *render_error=code; return ATHENA_SCENE3D_ERENDER; }
     return 0;
 }
+static int by_texture(const void *a,const void *b) {
+    const QueueItem *x=a,*y=b;
+    uintptr_t tx=(uintptr_t)x->node->texture,ty=(uintptr_t)y->node->texture;
+    if(tx!=ty) return tx<ty?-1:1;
+    return x->order<y->order?-1:x->order>y->order;
+}
 int athena_scene3d_draw(AthenaScene3D *s,AthenaCamera3D *camera,const AthenaLights *lights,
     AthenaRender3DCull cull,AthenaScene3DDrawStats *stats,int *render_error) {
     if(render_error) *render_error=0;
@@ -594,7 +645,11 @@ int athena_scene3d_draw(AthenaScene3D *s,AthenaCamera3D *camera,const AthenaLigh
     uint32_t start[4]={0};
     for(uint32_t i=0;i<c.count;i++) start[s->queue[i].pipeline+1]++;
     for(int p=1;p<4;p++) start[p]+=start[p-1];
+    uint32_t textured=start[2];
     for(uint32_t i=0;i<c.count;i++) s->sorted[start[s->queue[i].pipeline]++]=s->queue[i];
+    /* Textured meshes grouped by texture (traversal order breaks ties): a
+     * texture change closes the pass, rebinding TEX0/TEX1/CLAMP. */
+    if(c.count-textured>1) qsort(&s->sorted[textured],c.count-textured,sizeof(*s->sorted),by_texture);
     stats->queued_objects=c.count;
     /* The pipeline order lets consecutive meshes share one render pass. */
     int owned=athena_render3d_group_begin()==0;

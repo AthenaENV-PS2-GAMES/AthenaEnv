@@ -68,6 +68,21 @@ typedef struct {
 
 void owl_init(void *ptr, size_t size);
 
+#ifndef ATHENA_OWL_DIAGNOSTICS
+#define ATHENA_OWL_DIAGNOSTICS 0
+#endif
+/* Optional transport diagnostics, enabled at build time. Pending waits count
+ * tickets awaiting software confirmation, not measured DMA stall time.
+ * Main-thread snapshots; reset preserves transport/tickets and initializes
+ * the peak from the currently authored packet. Disabled builds return zeros. */
+typedef struct {
+    uint64_t queries,flushes,capacity_flushes,channel_flushes;
+    uint64_t submit_waits,reuse_waits,fence_waits,submitted_qwords;
+    size_t peak_half_qwords;
+} owl_packet_stats;
+void owl_packet_stats_reset(void);
+void owl_packet_stats_read(owl_packet_stats *out);
+
 #define owl_packet_size(size) (sizeof(owl_packet) + size)
 
 owl_packet *owl_create_packet(owl_channel channel, size_t size, void* buf);

@@ -8,6 +8,36 @@
 #include <athena/js/scene3d.h>
 #include "ath_scene3d.h"
 static JSClassID scene_id,node_id;
+/* Weak entries: value is borrowed, never duplicated or marked for GC. Each
+ * live wrapper owns one native reference. Its finalizer/dispose removes the
+ * entry BEFORE releasing that reference, including during cycle collection.
+ * Runtime keys keep separate JS heaps from sharing objects. */
+#define NODE_WRAPPER_BUCKETS 128u
+typedef struct NodeWrapper {
+    JSRuntime *runtime; AthenaNode3D *node; JSValue value;
+    struct NodeWrapper *next;
+} NodeWrapper;
+static NodeWrapper *node_wrappers[NODE_WRAPPER_BUCKETS];
+static NodeWrapper **node_wrapper_bucket(JSRuntime *rt,AthenaNode3D *node) {
+    uintptr_t key=((uintptr_t)node>>4)^((uintptr_t)rt>>4);
+    return &node_wrappers[key&(NODE_WRAPPER_BUCKETS-1)];
+}
+static int node_wrapper_add(JSContext *ctx,AthenaNode3D *node,JSValueConst value) {
+    NodeWrapper *entry=js_malloc(ctx,sizeof(*entry)); if(!entry) return 0;
+    NodeWrapper **bucket=node_wrapper_bucket(JS_GetRuntime(ctx),node);
+    *entry=(NodeWrapper){JS_GetRuntime(ctx),node,value,*bucket}; *bucket=entry; return 1;
+}
+static void node_wrapper_remove(JSRuntime *rt,AthenaNode3D *node,JSValueConst value) {
+    if(!node) return;
+    NodeWrapper **link=node_wrapper_bucket(rt,node);
+    while(*link) {
+        NodeWrapper *entry=*link;
+        if(entry->runtime==rt&&entry->node==node&&JS_VALUE_GET_PTR(entry->value)==JS_VALUE_GET_PTR(value)) {
+            *link=entry->next; js_free_rt(rt,entry); return;
+        }
+        link=&entry->next;
+    }
+}
 static AthenaScene3D *get_scene(JSContext *ctx,JSValueConst v) {
     AthenaScene3D *s=JS_GetOpaque2(ctx,v,scene_id);
     if(!s) JS_ThrowTypeError(ctx,"Expected a live Scene3D.Scene");
@@ -29,13 +59,22 @@ static void scene_finalizer(JSRuntime *rt,JSValue v) {
     /* Nobody can draw an unreachable scene: stop updating it as well. */
     athena_scene3d_detach_loop(s); athena_scene3d_release(s);
 }
-static void node_finalizer(JSRuntime *rt,JSValue v) { (void)rt; athena_node3d_release(JS_GetOpaque(v,node_id)); }
-/* Each wrapper owns one native reference; wrappers of the same node are
- * distinct JS objects. */
+static void node_finalizer(JSRuntime *rt,JSValue v) {
+    AthenaNode3D *n=JS_GetOpaque(v,node_id);
+    node_wrapper_remove(rt,n,v); athena_node3d_release(n);
+}
 static JSValue wrap_node(JSContext *ctx,AthenaNode3D *n) {
     if(!n) return JS_NULL;
-    JSValue obj=JS_NewObjectClass(ctx,node_id); if(JS_IsException(obj)) return obj;
-    athena_node3d_retain(n); JS_SetOpaque(obj,n); return obj;
+    JSRuntime *rt=JS_GetRuntime(ctx);
+    for(NodeWrapper *entry=*node_wrapper_bucket(rt,n);entry;entry=entry->next)
+        if(entry->runtime==rt&&entry->node==n) return JS_DupValue(ctx,entry->value);
+    /* Pin the borrowed node before allocating a JS object, which may GC. */
+    athena_node3d_retain(n);
+    JSValue obj=JS_NewObjectClass(ctx,node_id);
+    if(JS_IsException(obj)) { athena_node3d_release(n); return obj; }
+    JS_SetOpaque(obj,n);
+    if(!node_wrapper_add(ctx,n,obj)) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
+    return obj;
 }
 JSValue athena_node3d_to_value(JSContext *ctx,AthenaNode3D *n) {
     if(!node_id) return JS_ThrowInternalError(ctx,"Scene3D is not initialized");
@@ -55,12 +94,18 @@ static JSValue scene_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueCon
 }
 static JSValue node_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,0,1,"Scene3D.Node")) return JS_EXCEPTION;
-    AthenaMesh3D *mesh=NULL;
-    if(argc==1&&!JS_IsUndefined(argv[0])&&!(mesh=athena_mesh3d_from_value(ctx,argv[0]))) return JS_EXCEPTION;
+    /* Read newTarget.prototype before borrowing a mesh: a proxy getter may
+     * dispose the argument. Revalidate its handle after every such getter. */
     JSValue obj=new_with_proto(ctx,target,node_id); if(JS_IsException(obj)) return obj;
+    AthenaMesh3D *mesh=NULL;
+    if(argc==1&&!JS_IsUndefined(argv[0])&&!(mesh=athena_mesh3d_from_value(ctx,argv[0]))) {
+        JS_FreeValue(ctx,obj); return JS_EXCEPTION;
+    }
     AthenaNode3D *n=athena_node3d_create();
     if(!n) { JS_FreeValue(ctx,obj); return JS_ThrowOutOfMemory(ctx); }
-    athena_node3d_set_mesh(n,mesh); JS_SetOpaque(obj,n); return obj;
+    athena_node3d_set_mesh(n,mesh); JS_SetOpaque(obj,n);
+    if(!node_wrapper_add(ctx,n,obj)) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
+    return obj;
 }
 static JSValue scene_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argv;
@@ -71,7 +116,9 @@ static JSValue scene_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueCo
 static JSValue node_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argv;
     if(!athena_js_argc(ctx,argc,0,0,"Node.dispose")||!athena_js_class(ctx,self,node_id)) return JS_EXCEPTION;
-    AthenaNode3D *n=JS_GetOpaque(self,node_id); JS_SetOpaque(self,NULL); athena_node3d_release(n); return JS_UNDEFINED;
+    AthenaNode3D *n=JS_GetOpaque(self,node_id);
+    node_wrapper_remove(JS_GetRuntime(ctx),n,self);
+    JS_SetOpaque(self,NULL); athena_node3d_release(n); return JS_UNDEFINED;
 }
 static JSValue scene_root(JSContext *ctx,JSValueConst self) {
     AthenaScene3D *s=get_scene(ctx,self); return s?wrap_node(ctx,athena_scene3d_root(s)):JS_EXCEPTION;
@@ -130,12 +177,9 @@ static JSValue scene_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     AthenaLights *lights=NULL;
     if(argc>=3&&!JS_IsUndefined(argv[2])&&!(lights=athena_lights_from_value(ctx,argv[2]))) return JS_EXCEPTION;
     AthenaScene3DDrawStats stats; int render=0;
+    athena_render3d_set_error_detail(NULL);
     int code=athena_scene3d_draw(s,camera,lights,cull,&stats,&render);
-    if(code==ATHENA_SCENE3D_ERENDER) {
-        if(render==-2) return JS_ThrowOutOfMemory(ctx);
-        if(render==-3) return JS_ThrowInternalError(ctx,"Render3D requires a screen mode with zbuffering enabled");
-        return JS_ThrowRangeError(ctx,"Invalid or overflowing 3D transform");
-    }
+    if(code==ATHENA_SCENE3D_ERENDER) return athena_render3d_js_throw(ctx,render);
     if(code<0) return throw_code(ctx,code);
     JSValue obj; int define;
     if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;

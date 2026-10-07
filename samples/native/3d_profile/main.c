@@ -19,6 +19,18 @@
 #include <athena/animation3d.h>
 #include <athena/render3d.h>
 #include <athena/draw.h>
+#include <athena/graphics/owl_packet.h>
+#include <athena/graphics/sync.h>
+
+#if ATHENA_OWL_DIAGNOSTICS
+static void dma_add(owl_packet_stats *total,const owl_packet_stats *frame) {
+    total->queries+=frame->queries; total->flushes+=frame->flushes;
+    total->capacity_flushes+=frame->capacity_flushes; total->channel_flushes+=frame->channel_flushes;
+    total->submit_waits+=frame->submit_waits; total->reuse_waits+=frame->reuse_waits;
+    total->fence_waits+=frame->fence_waits; total->submitted_qwords+=frame->submitted_qwords;
+    if(frame->peak_half_qwords>total->peak_half_qwords) total->peak_half_qwords=frame->peak_half_qwords;
+}
+#endif
 
 #define GRID 8
 #define COUNT (GRID*GRID)
@@ -190,9 +202,16 @@ int athena_main(int argc,char **argv) {
         if((code=create(&grid,stage,unlit,lit))<0) { printf("3D profile create error %d\n",code); goto cleanup; }
         printf("3D profile stage %u: %s\n",stage,names[stage]);
         AthenaRender3DStats totals={0}; uint64_t world_updates=0;
+#if ATHENA_OWL_DIAGNOSTICS
+        owl_packet_stats dma_totals={0};
+        uint64_t draw_idle_ticks=0;
+#endif
         for(unsigned local=0;local<FRAMES;local++) {
             if(athena_modules_stop_requested()) { result=0; goto cleanup; }
             AthenaScene3DUpdateStats us={0};
+#if ATHENA_OWL_DIAGNOSTICS
+            owl_packet_stats_reset();
+#endif
             clock_t start=clock();
             code=animate(&grid,stage,local);
             if(code==0&&grid.scene) code=athena_scene3d_update(grid.scene,&us);
@@ -207,6 +226,14 @@ int athena_main(int argc,char **argv) {
             }
             clock_t end=clock();
             if(code<0) { printf("3D profile draw error %d (render %d)\n",code,render); goto cleanup; }
+#if ATHENA_OWL_DIAGNOSTICS
+            /* A larger ring can defer submission until flip. Also measure
+             * draw through GS FINISH so that deferred work is accounted for.
+             * This explicit serialization is diagnostic-only. */
+            graphics_wait_idle();
+            clock_t idle_end=clock();
+            if(local>=WARMUP) draw_idle_ticks+=idle_end-middle;
+#endif
             if(local>=WARMUP) {
                 update_samples[local-WARMUP]=middle-start; draw_samples[local-WARMUP]=end-middle;
                 totals.triangles+=stats.triangles; totals.clipped_triangles+=stats.clipped_triangles;
@@ -217,6 +244,12 @@ int athena_main(int argc,char **argv) {
                 draw_sprite(12+i*20,12,14,14,athena_color_new(i==stage?255:64,i==stage?128:64,i==stage?0:64,128));
             draw_sprite(12,height-20,(mode.width-24)*(local+1)/FRAMES,8,athena_color_new(255,255,255,128));
             flipScreen();
+#if ATHENA_OWL_DIAGNOSTICS
+            if(local>=WARMUP) {
+                owl_packet_stats frame_dma; owl_packet_stats_read(&frame_dma);
+                dma_add(&dma_totals,&frame_dma);
+            }
+#endif
         }
         const unsigned n=FRAMES-WARMUP; double update_mean=0,draw_mean=0;
         for(unsigned i=0;i<n;i++) { update_mean+=update_samples[i]; draw_mean+=draw_samples[i]; }
@@ -231,6 +264,19 @@ int athena_main(int argc,char **argv) {
             totals.draw_passes?draw_mean*tick_us*n/totals.draw_passes:0,world_updates/(double)n,
             totals.draw_passes/(double)n,totals.pipeline_passes/(double)n,totals.triangles/(double)n,totals.clipped_triangles/(double)n,
             totals.vu_batches/(double)n,totals.geometry_bytes/(double)n);
+#if ATHENA_OWL_DIAGNOSTICS
+        /* Transport includes clear/HUD/flip; draw timer above excludes HUD/flip.
+         * Pending waits are software tickets, not proof of a hardware stall. */
+        printf("3D_PROFILE_DMA {\"stage\":\"%s\",\"ringQwords\":%u,\"queriesPerFrame\":%.2f,"
+            "\"flushesPerFrame\":%.2f,\"capacityFlushesPerFrame\":%.2f,\"channelFlushesPerFrame\":%.2f,"
+            "\"pendingSubmitWaitsPerFrame\":%.2f,\"reuseWaitsPerFrame\":%.2f,\"fenceWaitsPerFrame\":%.2f,"
+            "\"submittedQwordsPerFrame\":%.2f,\"peakHalfQwords\":%u,\"drawIdleUsMean\":%.1f}\n",
+            names[stage],(unsigned)(owl_get_controller()->size*2),dma_totals.queries/(double)n,
+            dma_totals.flushes/(double)n,dma_totals.capacity_flushes/(double)n,dma_totals.channel_flushes/(double)n,
+            dma_totals.submit_waits/(double)n,dma_totals.reuse_waits/(double)n,dma_totals.fence_waits/(double)n,
+            dma_totals.submitted_qwords/(double)n,(unsigned)dma_totals.peak_half_qwords,
+            draw_idle_ticks*tick_us/n);
+#endif
     }
     puts("3D profile complete; stages 0-5 should show the same 8x8 grid of 64 cubes."); result=0;
 cleanup:

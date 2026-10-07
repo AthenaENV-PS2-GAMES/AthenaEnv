@@ -764,30 +764,12 @@ int athena_load_jpeg(GSSURFACE* tex, FILE* fp, bool scale_down, bool delayed)
 
 }
 
-int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
+/* Decodes from an open stream by magic number; the decoder closes it. */
+static int load_image_stream(GSSURFACE* image, FILE* file, bool delayed,
 	AthenaImageLoadError *error) {
-	FILE* file;
 	uint16_t magic;
 	int result = -1;
 
-	if (error)
-		*error = ATHENA_IMAGE_LOAD_DECODE;
-	if (!image || !path) {
-		if (error)
-			*error = ATHENA_IMAGE_LOAD_SURFACE;
-		return -1;
-	}
-
-	image->Delayed = delayed;
-	image->PageAligned = false;
-	image->Macroblock = false;
-
-	file = fopen(path, "rb");
-	if (!file) {
-		if (error)
-			*error = ATHENA_IMAGE_LOAD_OPEN;
-		return -1;
-	}
 	if (fread(&magic, sizeof(magic), 1, file) != 1) {
 		fclose(file);
 		if (error)
@@ -810,6 +792,63 @@ int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
 	if (result == 0 && error)
 		*error = ATHENA_IMAGE_LOAD_OK;
 	return result;
+}
+
+static int load_image_prepare(GSSURFACE* image, bool delayed,
+	AthenaImageLoadError *error) {
+	if (error)
+		*error = ATHENA_IMAGE_LOAD_DECODE;
+	if (!image) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_SURFACE;
+		return -1;
+	}
+	image->Delayed = delayed;
+	image->PageAligned = false;
+	image->Macroblock = false;
+	return 0;
+}
+
+int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
+	AthenaImageLoadError *error) {
+	FILE* file;
+
+	if (!path) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_SURFACE;
+		return -1;
+	}
+	if (load_image_prepare(image, delayed, error) < 0)
+		return -1;
+	file = fopen(path, "rb");
+	if (!file) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_OPEN;
+		return -1;
+	}
+	return load_image_stream(image, file, delayed, error);
+}
+
+/* Same formats from a borrowed buffer (e.g. an image embedded in a .glb),
+ * read through fmemopen. */
+int load_image_memory_ex(GSSURFACE* image, const void* data, size_t size,
+	bool delayed, AthenaImageLoadError *error) {
+	FILE* file;
+
+	if (!data || size < 2) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_DECODE;
+		return -1;
+	}
+	if (load_image_prepare(image, delayed, error) < 0)
+		return -1;
+	file = fmemopen((void *)data, size, "rb");
+	if (!file) {
+		if (error)
+			*error = ATHENA_IMAGE_LOAD_OPEN;
+		return -1;
+	}
+	return load_image_stream(image, file, delayed, error);
 }
 
 int load_image(GSSURFACE* image, const char* path, bool delayed) {

@@ -12,6 +12,8 @@ typedef struct {
     /* Rotation tracks: per segment k..k+1, the arc angle and 1/sin(angle),
      * so sampling is two sinf and no acos or normalization. */
     float *arcs;
+    /* CUBIC tracks: in and out tangents, laid out like values. */
+    float *in,*out;
 } Track;
 struct AthenaClip3D {
     uint64_t refs;
@@ -36,11 +38,15 @@ static void *loop_owner;
 static uintptr_t loop_generation;
 
 static void clip_free(AthenaClip3D *c) {
-    for(uint32_t i=0;i<c->track_count;i++) { free(c->tracks[i].times); free(c->tracks[i].values); free(c->tracks[i].arcs); }
+    for(uint32_t i=0;i<c->track_count;i++) {
+        free(c->tracks[i].times); free(c->tracks[i].values); free(c->tracks[i].arcs);
+        free(c->tracks[i].in); free(c->tracks[i].out);
+    }
     free(c->tracks); free(c);
 }
 static int copy_track(Track *t,const AthenaTrack3DDesc *d) {
-    if(d->path>ATHENA_ANIM3D_WEIGHTS||d->interpolation>ATHENA_ANIM3D_STEP||!d->times||!d->values||
+    if(d->path>ATHENA_ANIM3D_WEIGHTS||d->interpolation>ATHENA_ANIM3D_CUBIC||!d->times||!d->values||
+        (d->interpolation==ATHENA_ANIM3D_CUBIC&&(!d->in_tangents||!d->out_tangents))||
         !d->key_count||d->key_count>ATHENA_ANIM3D_MAX_KEYS||
         (d->path==ATHENA_ANIM3D_WEIGHTS&&(!d->weight_count||d->weight_count>ATHENA_MODEL3D_MAX_TARGETS)))
         return ATHENA_ANIM3D_EINVAL;
@@ -49,6 +55,9 @@ static int copy_track(Track *t,const AthenaTrack3DDesc *d) {
         float time=d->times[k];
         if(!athena_float_isfinite(time)||time<0||(k&&time<=d->times[k-1])) return ATHENA_ANIM3D_EINVAL;
         for(uint32_t j=0;j<width;j++) if(!athena_float_isfinite(d->values[k*width+j])) return ATHENA_ANIM3D_EINVAL;
+        if(d->interpolation==ATHENA_ANIM3D_CUBIC) for(uint32_t j=0;j<width;j++)
+            if(!athena_float_isfinite(d->in_tangents[k*width+j])||!athena_float_isfinite(d->out_tangents[k*width+j]))
+                return ATHENA_ANIM3D_EINVAL;
     }
     t->times=malloc(d->key_count*sizeof(float)); t->values=malloc(d->key_count*width*sizeof(float));
     if(!t->times||!t->values) return ATHENA_ANIM3D_ENOMEM;
@@ -56,15 +65,24 @@ static int copy_track(Track *t,const AthenaTrack3DDesc *d) {
     memcpy(t->values,d->values,d->key_count*width*sizeof(float));
     t->target=d->target; t->path=d->path; t->interpolation=d->interpolation;
     t->key_count=d->key_count; t->width=width;
+    if(d->interpolation==ATHENA_ANIM3D_CUBIC) {
+        t->in=malloc(d->key_count*width*sizeof(float)); t->out=malloc(d->key_count*width*sizeof(float));
+        if(!t->in||!t->out) return ATHENA_ANIM3D_ENOMEM;
+        memcpy(t->in,d->in_tangents,d->key_count*width*sizeof(float));
+        memcpy(t->out,d->out_tangents,d->key_count*width*sizeof(float));
+    }
+    /* Cubic rotations keep the keys as authored: their tangents assume those
+     * signs, and the result is normalized. */
     if(d->path==ATHENA_ANIM3D_ROTATION) for(uint32_t k=0;k<d->key_count;k++) {
         float *q=&t->values[k*4];
         AthenaQuaternion in={q[0],q[1],q[2],q[3]},n;
         if(!athena_quaternion_normalize(&n,&in)) return ATHENA_ANIM3D_EINVAL;
+        if(d->interpolation==ATHENA_ANIM3D_CUBIC) continue; /* keys must be nonzero only */
         /* Same hemisphere as the previous key: slerp takes the short arc. */
         if(k&&q[-4]*n.x+q[-3]*n.y+q[-2]*n.z+q[-1]*n.w<0) { n.x=-n.x; n.y=-n.y; n.z=-n.z; n.w=-n.w; }
         q[0]=n.x; q[1]=n.y; q[2]=n.z; q[3]=n.w;
     }
-    if(d->path==ATHENA_ANIM3D_ROTATION&&d->key_count>1) {
+    if(d->path==ATHENA_ANIM3D_ROTATION&&d->interpolation!=ATHENA_ANIM3D_CUBIC&&d->key_count>1) {
         t->arcs=malloc((d->key_count-1)*2*sizeof(float)); if(!t->arcs) return ATHENA_ANIM3D_ENOMEM;
         for(uint32_t k=0;k+1<d->key_count;k++) {
             const float *a=&t->values[k*4],*b=a+4;
@@ -152,7 +170,13 @@ static int apply(AthenaPlayer3D *p) {
         uint32_t k=find_key(t,&p->cursors[i],p->time);
         const float *a=&t->values[k*t->width];
         float v[ATHENA_MODEL3D_MAX_TARGETS]; memcpy(v,a,t->width*sizeof(float));
-        if(t->interpolation==ATHENA_ANIM3D_LINEAR&&k+1<t->key_count&&p->time>t->times[k]) {
+        if(t->interpolation==ATHENA_ANIM3D_CUBIC&&k+1<t->key_count&&p->time>t->times[k]) {
+            /* Hermite basis; tangents are per second, scaled by the segment. */
+            const float *b=a+t->width,*m0=&t->out[k*t->width],*m1=&t->in[(k+1)*t->width];
+            float span=t->times[k+1]-t->times[k],u=(p->time-t->times[k])/span,u2=u*u,u3=u2*u;
+            float h00=2*u3-3*u2+1,h10=(u3-2*u2+u)*span,h01=-2*u3+3*u2,h11=(u3-u2)*span;
+            for(uint32_t j=0;j<t->width;j++) v[j]=h00*a[j]+h10*m0[j]+h01*b[j]+h11*m1[j];
+        } else if(t->interpolation==ATHENA_ANIM3D_LINEAR&&k+1<t->key_count&&p->time>t->times[k]) {
             const float *b=a+t->width;
             float u=(p->time-t->times[k])/(t->times[k+1]-t->times[k]);
             if(t->path==ATHENA_ANIM3D_ROTATION) {
@@ -203,13 +227,15 @@ int athena_player3d_advance(AthenaPlayer3D *p,float dt) {
 }
 int athena_animation3d_advance(float dt) {
     if(!athena_float_isfinite(dt)||dt<0) return ATHENA_ANIM3D_EINVAL;
-    int finished=0;
+    /* A failing player (e.g. a target whose transform overflows) is paused
+     * and reported once; the others still advance this frame. */
+    int finished=0,error=0;
     for(AthenaPlayer3D *p=players;p;p=p->next) {
         int code=athena_player3d_advance(p,dt);
-        if(code<0) return code;
+        if(code<0) { p->playing=0; if(!error) error=code; continue; }
         finished+=code;
     }
-    return finished;
+    return error?error:finished;
 }
 static int loop_run(void *opaque,AthenaLoopPhase phase,float value) {
     (void)opaque; (void)phase;

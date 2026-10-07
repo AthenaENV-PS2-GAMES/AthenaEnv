@@ -50,10 +50,11 @@ declare namespace Scene3D {
         add(child: Node): this;
         /** Removes this node from its parent; harmless without one. */
         detach(): this;
-        /** New handle for the parent, or null. Handles are not identical objects. */
+        /** The same live JS object for this native parent, or null. Wrapper
+         * identity (including subclass/properties) is preserved while live. */
         getParent(): Node | null;
         readonly childCount: number;
-        /** New handle for the child at index. */
+        /** The same live JS object for the child at index. */
         getChild(index: number): Node;
         /** Always current. Owned snapshot, or fills and returns out. */
         getLocalTransform(out?: Matrix4): Matrix4;
@@ -67,12 +68,14 @@ declare namespace Scene3D {
         setWeights(weights: ArrayLike<number>): this;
         /** One weight per morph target of the node's mesh (empty without). */
         getWeights(): number[];
-        /** Drops this handle; parents and other handles keep the node alive. */
+        /** Invalidates this shared JS wrapper (all aliases). Parents/scenes
+         * retain the native node; later access can create another wrapper.
+         * The wrapper cache is weak and does not keep JS objects alive. */
         dispose(): void;
     }
     class Scene {
         constructor();
-        /** New handle for the root node owned by the scene. */
+        /** The same live JS object for the root node owned by the scene. */
         readonly root: Node;
         /** True when a node changed after the last update. */
         readonly stale: boolean;

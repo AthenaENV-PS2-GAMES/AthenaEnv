@@ -3,6 +3,10 @@
 #include <athena/camera3d.h>
 #include <athena/float_bits.h>
 
+/* Main-thread camera updates share a revision sequence, including init and
+ * copies changed through setters: an address can never identify GPU state. */
+static uint64_t camera_stamp;
+
 /* Float: the R5900 emulates double in software (~1.4 us per operation) and
  * moving cameras rebuild the view every frame. Scaling by the largest
  * component keeps the sum of squares in [1,3]; lengths at or below 1e-12
@@ -74,7 +78,7 @@ int athena_camera3d_update(AthenaCamera3D *c) {
     AthenaMatrix4 vp;
     ath_matrix4_multiply(&vp,&c->projection,&c->view);
     for(int i=0;i<16;i++) if(!athena_float_isfinite(vp.value[i])) return 0;
-    c->view_projection=vp; c->dirty=false; return 1;
+    c->view_projection=vp; c->stamp=++camera_stamp; c->dirty=false; return 1;
 }
 /* The eight corners of the box in clip space: the min corner transformed,
  * then the other seven by adding the matrix columns scaled by the box size

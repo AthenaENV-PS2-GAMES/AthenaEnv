@@ -8,7 +8,7 @@ typedef struct AthenaClip3D AthenaClip3D;
 typedef struct AthenaPlayer3D AthenaPlayer3D;
 typedef enum { ATHENA_ANIM3D_POSITION=0, ATHENA_ANIM3D_ROTATION=1, ATHENA_ANIM3D_SCALE=2,
     ATHENA_ANIM3D_WEIGHTS=3 } AthenaAnim3DPath;
-typedef enum { ATHENA_ANIM3D_LINEAR=0, ATHENA_ANIM3D_STEP=1 } AthenaAnim3DInterpolation;
+typedef enum { ATHENA_ANIM3D_LINEAR=0, ATHENA_ANIM3D_STEP=1, ATHENA_ANIM3D_CUBIC=2 } AthenaAnim3DInterpolation;
 #define ATHENA_ANIM3D_EINVAL (-1)
 #define ATHENA_ANIM3D_ENOMEM (-2)
 #define ATHENA_ANIM3D_MAX_KEYS 65536u
@@ -20,11 +20,16 @@ typedef enum { ATHENA_ANIM3D_LINEAR=0, ATHENA_ANIM3D_STEP=1 } AthenaAnim3DInterp
  * xyzw, normalized on copy; consecutive keys are made to share a
  * hemisphere so slerp takes the short path) or weight_count (morph target
  * weights, 1..ATHENA_MODEL3D_MAX_TARGETS, applied with
- * athena_node3d_set_weights()). Inputs are copied. */
+ * athena_node3d_set_weights()). Inputs are copied.
+ * CUBIC is glTF's CUBICSPLINE: cubic Hermite between keys with in_tangents
+ * and out_tangents (same layout as values, in value units per second);
+ * rotations are normalized after interpolation. Tangents are ignored by the
+ * other modes and may be NULL there. */
 typedef struct {
     uint32_t target; AthenaAnim3DPath path; AthenaAnim3DInterpolation interpolation;
     const float *times,*values; uint32_t key_count;
     uint32_t weight_count; /* WEIGHTS tracks only */
+    const float *in_tangents,*out_tangents; /* CUBIC only */
 } AthenaTrack3DDesc;
 int athena_clip3d_create(const AthenaTrack3DDesc *tracks,uint32_t count,AthenaClip3D **out);
 void athena_clip3d_retain(AthenaClip3D *clip);
@@ -54,7 +59,8 @@ int athena_player3d_loop(const AthenaPlayer3D *player);
 /* Advances a playing player by dt*speed seconds and applies the pose. A
  * non-looping player stops at the end (returns 1 that step), else 0. */
 int athena_player3d_advance(AthenaPlayer3D *player,float dt);
-/* Advances every live playing player; returns how many finished. */
+/* Advances every live playing player; returns how many finished. A player
+ * that fails is paused and the first error returned, after the others ran. */
 int athena_animation3d_advance(float dt);
 /* One Loop POST_UPDATE system advancing every player (see LOOP_PRIORITY).
  * Returns the system id; attached at most once (EINVAL). owner tags it for

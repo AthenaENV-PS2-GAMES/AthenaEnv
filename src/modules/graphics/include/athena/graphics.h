@@ -2,6 +2,7 @@
 #define GRAPHICS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include <kernel.h>
 
@@ -417,6 +418,9 @@ typedef enum {
 
 int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
 	AthenaImageLoadError *error);
+/* load_image_ex() from memory: PNG, JPEG or BMP bytes, borrowed for the call. */
+int load_image_memory_ex(GSSURFACE* image, const void* data, size_t size,
+	bool delayed, AthenaImageLoadError *error);
 int load_image(GSSURFACE* image, const char* path, bool delayed);
 
 void draw_image(GSSURFACE* source, float x, float y, float width, float height, float startx, float starty, float endx, float endy, Color color);

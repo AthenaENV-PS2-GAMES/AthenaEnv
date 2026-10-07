@@ -59,11 +59,18 @@ int athena_render3d_js_put_stats(JSContext *ctx,JSValueConst obj,int define,cons
     if(athena_js_put(ctx,&stat_table,obj,define,11,JS_NewUint32(ctx,s->near_clip_objects))<0) return -1;
     return athena_js_put(ctx,&stat_table,obj,define,12,JS_NewUint32(ctx,s->vu_morph_objects));
 }
+/* The failure of a draw, with the native reason when one was recorded. */
+JSValue athena_render3d_js_throw(JSContext *ctx,int code) {
+    const char *detail=athena_render3d_error_detail();
+    if(code==-2&&!detail[0]) return JS_ThrowOutOfMemory(ctx);
+    if(code==-3) return JS_ThrowInternalError(ctx,"Render3D requires a screen mode with zbuffering enabled");
+    if(code==-2) return JS_ThrowInternalError(ctx,"Render3D: %s",detail);
+    if(detail[0]) return JS_ThrowRangeError(ctx,"Render3D: %s",detail);
+    return JS_ThrowRangeError(ctx,"Invalid or overflowing 3D transform");
+}
 /* out: optional object to reuse, so a draw per frame allocates nothing. */
 static JSValue stats_value(JSContext *ctx,int code,const AthenaRender3DStats *s,JSValueConst out) {
-    if(code==-2) return JS_ThrowOutOfMemory(ctx);
-    if(code==-3) return JS_ThrowInternalError(ctx,"Render3D requires a screen mode with zbuffering enabled");
-    if(code<0) return JS_ThrowRangeError(ctx,"Invalid or overflowing 3D transform");
+    if(code<0) return athena_render3d_js_throw(ctx,code);
     JSValue obj; int define;
     if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
     if(athena_render3d_js_put_stats(ctx,obj,define,s)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
@@ -89,6 +96,7 @@ static JSValue draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv
     if(argc>=4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
     JSValueConst out=argc==5?argv[4]:JS_UNDEFINED;
     if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    athena_render3d_set_error_detail(NULL);
     AthenaRender3DStats s={0}; int result=athena_render3d_draw_lit(i,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
 }
 static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
@@ -106,13 +114,26 @@ static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     if(argc>=3&&!JS_IsUndefined(argv[2])) { lights=athena_lights_from_value(ctx,argv[2]); if(!lights) return JS_EXCEPTION; }
     JSValueConst out=argc==4?argv[3]:JS_UNDEFINED;
     if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    athena_render3d_set_error_detail(NULL);
     AthenaRender3DStats s={0}; int result=athena_batch3d_draw_lit(b,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
+}
+/* Render3D.group(fn): consecutive draws inside fn that share camera,
+ * program and texture reuse one GS/VU1 pass. The pass closes when fn
+ * returns or throws; fn must not draw 2D, flip or change the camera. */
+static JSValue group(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,1,1,"Render3D.group")) return JS_EXCEPTION;
+    if(!JS_IsFunction(ctx,argv[0])) return JS_ThrowTypeError(ctx,"Render3D.group expects a function");
+    if(athena_render3d_group_begin()<0) return JS_ThrowTypeError(ctx,"Render3D.group cannot be nested");
+    JSValue result=JS_Call(ctx,argv[0],JS_UNDEFINED,0,NULL);
+    athena_render3d_group_end();
+    return result;
 }
 static JSClassDef class_def={"Render3D.Batch",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("add",1,add),JS_CFUNC_DEF("clear",0,clear),JS_CFUNC_DEF("draw",1,batch_draw),
     JS_CFUNC_DEF("dispose",0,dispose),JS_CGETSET_DEF("size",size,NULL)};
-static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("draw",2,draw),
+static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("draw",2,draw),JS_CFUNC_DEF("group",1,group),
     JS_PROP_INT32_DEF("CULL_NONE",0,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("CULL_BACK",1,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("CULL_FRONT",-1,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {

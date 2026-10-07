@@ -70,6 +70,20 @@ assert(Animation3D.detachLoop() === true && !Animation3D.isAttached() && Animati
 assert(typeof Animation3D.LOOP_PRIORITY === "number" && Animation3D.LOOP_PRIORITY < 0, "priority before Scene3D");
 Animation3D.attachLoop(); // left attached: runtime cleanup must detach it
 
+// Cubic (glTF CUBICSPLINE): zero tangents ease in and out.
+{
+    const node = new Scene3D.Node();
+    const cubic = new Animation3D.Clip([{path: "position", interpolation: "cubic", times: new Float32Array([0, 1]),
+        values: new Float32Array([0,0,0, 4,0,0]), inTangents: new Float32Array(6), outTangents: new Float32Array(6)}]);
+    const p = new Animation3D.Player(cubic, [node]);
+    p.time = .25; assert(close(x(node), 4 * (3 * .0625 - 2 * .015625)), "cubic Hermite");
+    throws(() => new Animation3D.Clip([{path: "position", interpolation: "cubic", times: new Float32Array([0, 1]),
+        values: new Float32Array(6), inTangents: new Float32Array(3), outTangents: new Float32Array(6)}]), RangeError, "tangent length");
+    throws(() => new Animation3D.Clip([{path: "position", interpolation: "cubic", times: new Float32Array([0, 1]),
+        values: new Float32Array(6)}]), TypeError, "cubic needs tangents");
+    p.dispose(); cubic.dispose(); node.dispose();
+}
+
 player.dispose(); player.dispose();
 throws(() => player.play(), TypeError, "disposed player");
 throws(() => clip.duration, TypeError, "disposed clip");

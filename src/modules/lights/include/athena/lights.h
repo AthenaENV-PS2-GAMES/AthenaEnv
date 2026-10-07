@@ -24,6 +24,9 @@ typedef struct {
     uint32_t fog_enabled;
     float fog_start,fog_end,fog_color[3];
     uint64_t revision;
+    /* Unique across all Lights objects for each effective state (0: no
+     * lights). Renderers key cached VU1 uploads by it. */
+    uint64_t stamp;
 } AthenaLightsView;
 AthenaLights *athena_lights_create(void);
 void athena_lights_destroy(AthenaLights *lights);

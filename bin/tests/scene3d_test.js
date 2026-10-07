@@ -14,7 +14,7 @@ const POST_UPDATE = 2;
 const mesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([-1,-1,-1, 1,-1,-1, 1,1,1])});
 const scene = new Scene3D.Scene();
 assert(Scene3D.MAX_DEPTH === 64, "depth limit export");
-const root = scene.root;
+let root = scene.root;
 const parent = new Scene3D.Node(), child = new Scene3D.Node(mesh), leaf = new Scene3D.Node().setMesh(mesh);
 mesh.dispose(); std.gc();
 assert(child.hasMesh && leaf.hasMesh && !parent.hasMesh, "nodes retain meshes after handle disposal");
@@ -49,6 +49,18 @@ throws(() => leaf.add({}), TypeError, "foreign child");
 throws(() => leaf.visible = 1, TypeError, "visible needs a boolean");
 throws(() => leaf.getChild(0), RangeError, "child index");
 assert(!scene.stale && leaf.getParent() !== null && child.childCount === 1, "graph unchanged");
+// Accessors reuse constructor/subclass wrappers and preserve JS properties.
+assert(scene.root === root && scene.root === scene.root, "root wrapper identity");
+assert(parent.getParent() === root && child.getParent() === parent, "parent constructor identity");
+assert(root.getChild(0) === parent && parent.getChild(0) === child && child.getChild(0) === leaf, "child identity");
+child.label = "retained metadata";
+assert(parent.getChild(0).label === child.label, "metadata survives accessors");
+const labels = new Map([[child,"child"]]);
+assert(labels.get(parent.getChild(0)) === "child", "node identity as Map key");
+class SpecialNode extends Scene3D.Node { marker() { return 42; } }
+const special = new SpecialNode(); parent.add(special);
+assert(parent.getChild(parent.childCount-1) === special && parent.getChild(parent.childCount-1).marker() === 42, "subclass wrapper reused");
+special.detach();special.dispose();
 let tail = new Scene3D.Node(); const chain = tail;
 for (let i = 1; i < Scene3D.MAX_DEPTH - 1; i++) { const next = new Scene3D.Node(); tail.add(next); tail = next; }
 root.add(chain);
@@ -92,9 +104,12 @@ assert(!scene.stale && close(leaf.getWorldTransform().get(13), 1), "Loop updated
 assert(scene.detachLoop().attached === false, "detach");
 leaf.setPosition(0, 0, 0); __runNativeSystems(POST_UPDATE, 1 / 60, 1 / 60);
 assert(scene.stale, "detached scene no longer updates");
-// Handles: wrappers are independent; dispose is idempotent.
-const again = leaf.getParent(); assert(again !== null && again.childCount === 2, "parent handle");
+// A live node has one JS wrapper: aliases share explicit disposal.
+const again = leaf.getParent(); assert(again === root && again.childCount === 2, "parent identity");
 again.dispose(); again.dispose(); throws(() => again.childCount, TypeError, "disposed handle");
+throws(() => root.childCount, TypeError, "dispose invalidates aliases");
+root = scene.root;
+assert(root !== again && leaf.getParent() === root, "disposed cache entry replaced by live wrapper");
 throws(() => Scene3D.Node.prototype.dispose.call({}), TypeError, "foreign receiver");
 // Nodes outlive their scene; scenes keep graphs alive for the Loop.
 const survivor = new Scene3D.Scene(), kept = new Scene3D.Node(), survivorRoot = survivor.root;
@@ -146,4 +161,39 @@ for (const n of bulkNodes) n.dispose();
 for (const n of singleNodes) n.dispose();
 for (let i = 0; i < 64; i++) { const n = new Scene3D.Node(); root.add(n); if (i & 1) n.detach(); }
 scene.update(); lights.dispose(); camera.dispose();
+// Cyclic unreachable wrappers are collected even while native parents retain
+// their nodes. Disposal/finalization must not remove a newer replacement.
+{
+    const s = new Scene3D.Scene();
+    let r = s.root;
+    for(let i=0;i<256;i++) {
+        let n = new Scene3D.Node().setPosition(i,0,0);
+        n.self = n; r.add(n); n = null;
+        if(i%8===0) std.gc();
+    }
+    std.gc();
+    for(let i=0;i<256;i++) {
+        const n = r.getChild(i);
+        assert(n.self === undefined && n.getLocalTransform().get(12) === i, "weak wrapper cache permits cyclic GC "+i);
+        assert(r.getChild(i) === n, "replacement identity "+i);
+        n.dispose();
+    }
+    const oldRoot = r; r.dispose(); r = s.root;
+    assert(r !== oldRoot && s.root === r, "root wrapper replaced after disposal");
+    // Repeated old-root dispose is harmless to its replacement cache entry.
+    oldRoot.dispose(); assert(s.root === r, "old disposed alias cannot remove replacement");
+    let expired=r; expired.self=expired; expired.dispose(); r=s.root; expired=null;
+    std.gc(); assert(s.root === r, "old wrapper finalization cannot remove replacement");
+    s.dispose();r.dispose();std.gc();
+}
+// Constructor prototype getters can dispose a mesh; no borrowed native
+// pointer may survive that callback.
+{
+    const m = Model3D.Mesh.fromGeometry({positions:new Float32Array([0,0,0,1,0,0,0,1,0])});
+    const target = new Proxy(function(){}, {get(t,key){
+        if(key === "prototype") { m.dispose();std.gc();return Scene3D.Node.prototype; }
+        return t[key];
+    }});
+    throws(()=>Reflect.construct(Scene3D.Node,[m],target),TypeError,"prototype getter disposes mesh safely");
+}
 console.log("Scene3D tests passed (" + checks + " checks)");

@@ -1,3 +1,4 @@
+#include <math.h>
 #include <athena/float_bits.h>
 #include "render3d_clip.h"
 static float distance_to_plane(const AthenaClipVertex3D *v,unsigned plane) {
@@ -13,6 +14,10 @@ static int append(AthenaClipVertex3D *out,unsigned *count,const AthenaClipVertex
     out[(*count)++]=*v; return 1;
 }
 static float clamp(float value,float maximum) { return value<0?0:value>maximum?maximum:value; }
+/* An interpolated value within its endpoints: float rounding may step past. */
+static float between(float value,float a,float b) {
+    float lo=a<b?a:b,hi=a<b?b:a; return value<lo?lo:value>hi?hi:value;
+}
 int athena_render3d_clip_triangle(const AthenaClipVertex3D input[3],
     AthenaClipVertex3D output[ATHENA_CLIP3D_MAX_VERTICES],int *clipped) {
     if(!input||!output||!clipped) return -1;
@@ -24,7 +29,7 @@ int athena_render3d_clip_triangle(const AthenaClipVertex3D input[3],
                 !athena_float_isfinite(input[i].color[j]) || input[i].color[j]<0 || input[i].color[j]>255)
                 return -1;
         for(unsigned j=0;j<2;j++) if(!athena_float_isfinite(input[i].texcoord[j])||
-            input[i].texcoord[j]<0||input[i].texcoord[j]>1) return -1;
+            fabsf(input[i].texcoord[j])>ATHENA_MODEL3D_UV_LIMIT) return -1;
         unsigned flags=0;
         for(unsigned plane=0;plane<6;plane++) {
             /* w+x may overflow float near FLT_MAX: reject instead of clipping NaN. */
@@ -60,7 +65,8 @@ int athena_render3d_clip_triangle(const AthenaClipVertex3D input[3],
                     intersection.position[j]=a->position[j]*(1-t)+b->position[j]*t;
                     intersection.color[j]=clamp(a->color[j]+(b->color[j]-a->color[j])*t,255);
                 }
-                for(unsigned j=0;j<2;j++) intersection.texcoord[j]=clamp(a->texcoord[j]+(b->texcoord[j]-a->texcoord[j])*t,1);
+                for(unsigned j=0;j<2;j++) intersection.texcoord[j]=between(a->texcoord[j]+(b->texcoord[j]-a->texcoord[j])*t,
+                    a->texcoord[j],b->texcoord[j]);
                 /* Snap to the current plane, avoiding a tiny negative distance
                  * from interpolation rounding on a subsequent test. */
                 intersection.position[plane/2]=(plane&1?1:-1)*intersection.position[3];
@@ -94,18 +100,19 @@ int athena_render3d_clip_mesh_textured(const AthenaMesh3DView *mesh,const Athena
     for(uint32_t first=0;first<mesh->vertex_count;first+=3) {
         AthenaClipVertex3D triangle[3],polygon[ATHENA_CLIP3D_MAX_VERTICES];
         for(unsigned i=0;i<3;i++) {
-            AthenaPosition3D p=mesh->positions[first+i];
+            uint32_t corner=athena_mesh3d_corner(mesh,first+i);
+            AthenaPosition3D p=mesh->positions[corner];
             AthenaVector4 in={p.x,p.y,p.z,1},out;
             ath_matrix4_apply(&out,matrix,&in);
             if(!athena_float_isfinite(out.x)||!athena_float_isfinite(out.y)||
                 !athena_float_isfinite(out.z)||!athena_float_isfinite(out.w)) return -1;
-            AthenaColor3D color=mesh->colors[first+i];
+            AthenaColor3D color=mesh->colors[corner];
             triangle[i]=(AthenaClipVertex3D){.position={out.x,out.y,out.z,out.w},.color={color.r,color.g,color.b,color.a}};
             if(mesh->texcoords) {
-                triangle[i].texcoord[0]=mesh->texcoords[first+i].u;
-                triangle[i].texcoord[1]=mesh->texcoords[first+i].v;
+                triangle[i].texcoord[0]=mesh->texcoords[corner].u;
+                triangle[i].texcoord[1]=mesh->texcoords[corner].v;
             }
-            if(shade&&shade->enabled) athena_render3d_shade_color_at(shade,&mesh->positions[first+i],&mesh->normals[first+i],&color,triangle[i].color);
+            if(shade&&shade->enabled) athena_render3d_shade_color_at(shade,&mesh->positions[corner],&mesh->normals[corner],&color,triangle[i].color);
         }
         int clipped=0,count=athena_render3d_clip_triangle(triangle,polygon,&clipped);
         if(count<0) return -1;

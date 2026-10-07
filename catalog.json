@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-07T02:09:26.401Z",
+  "generatedAt": "2026-10-07T17:02:13.430Z",
   "modules": [
     {
       "id": "animation3d",
@@ -641,7 +641,7 @@
     {
       "id": "model3d",
       "name": "Model3D",
-      "description": "Immutable meshes, copied materials, normals, UVs and retained opaque textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
+      "description": "Immutable meshes with copied materials, normals, UVs, procedural skin/morph streams and retained textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
       "category": "Graphics",
       "version": "1.4.0",
       "required": false,
@@ -859,7 +859,7 @@
     {
       "id": "render3d",
       "name": "Render3D",
-      "description": "Opaque color and perspective-correct textured rendering, Gouraud diffuse lighting, precise native clipping, retained batches, explicit-matrix mesh draws and inline DMA geometry.",
+      "description": "Opaque color and perspective-correct textured rendering, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
       "category": "Graphics",
       "version": "1.7.0",
       "required": false,

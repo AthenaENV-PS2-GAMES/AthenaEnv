@@ -26,20 +26,25 @@ GSCONTEXT *getGSGLOBAL(void);
 #define GS_CACHE_CLAMP 4
 #define GS_CACHE_ZBUF 33
 #define DEPTH_GEQUAL 2
-#define GS_SETREG_TEST(a,b,c,d,e,f,g,h) ((uint64_t)(g)<<16|((uint64_t)(h)<<17))
+#define GS_SETREG_TEST(a,b,c,d,e,f,g,h) ((uint64_t)(a)|((uint64_t)(b)<<1)|((uint64_t)(c)<<4)|((uint64_t)(d)<<12)|\
+    ((uint64_t)(g)<<16)|((uint64_t)(h)<<17))
 uint64_t get_register(int);
 void set_register(int,uint64_t);
 void set_register_force(int,uint64_t);
-typedef struct { uint32_t Width,Height,PSM,Filter,Vram,TBW; uint32_t *Mem; bool locked; } GSSURFACE;
+typedef struct { uint32_t Width,Height,PSM,Filter,Vram,TBW,VramClut,ClutPSM; uint32_t *Mem,*Clut; bool locked; } GSSURFACE;
 #define GS_PSM_CT32 0
 #define GS_PSM_CT24 1
+#define GS_PSM_CT16 2
+#define GS_PSM_T8 0x13
+#define GS_PSM_T4 0x14
 #define GS_FILTER_NEAREST 0
 #define GS_FILTER_LINEAR 1
 #define GRAPHICS_BIND_ERROR (-1)
 #define COLOR_MODULATE 0
-#define GS_SETREG_TEX0(v,b,p,w,h,c,f,a,d,e,g,k) ((uint64_t)(v)|((uint64_t)(b)<<14)|((uint64_t)(p)<<20)|((uint64_t)(w)<<26)|((uint64_t)(h)<<30)|((uint64_t)(c)<<34))
+#define GS_SETREG_TEX0(v,b,p,w,h,c,f,a,d,e,g,k) ((uint64_t)(v)|((uint64_t)(b)<<14)|((uint64_t)(p)<<20)|((uint64_t)(w)<<26)|((uint64_t)(h)<<30)|((uint64_t)(c)<<34)|((uint64_t)(f)<<35)|((uint64_t)(a)<<37)|((uint64_t)(d)<<51)|((uint64_t)(e)<<55)|((uint64_t)(g)<<56)|((uint64_t)(k)<<61))
 #define GS_SETREG_TEX1(l,m,mag,min,t,k,b) ((uint64_t)(mag)<<5|((uint64_t)(min)<<6))
 #define GS_SETREG_CLAMP(s,t,a,b,c,d) ((uint64_t)(s)|((uint64_t)(t)<<2))
+uint32_t athena_vram_surface_size(int,int,int);
 int graphics_surface_init(GSSURFACE *);
 void graphics_surface_release(GSSURFACE *);
 int graphics_surface_bind_sync(GSSURFACE *);

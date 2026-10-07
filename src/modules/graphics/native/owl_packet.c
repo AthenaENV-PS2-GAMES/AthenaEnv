@@ -9,6 +9,26 @@ static uint64_t flush_generation = 1;
 static uint64_t pending_generation[CHANNEL_SIZE];
 static owl_channel buffer_channel[2] = { CHANNEL_SIZE, CHANNEL_SIZE };
 static uint64_t buffer_generation[2];
+#if ATHENA_OWL_DIAGNOSTICS
+static owl_packet_stats packet_stats;
+#define OWL_COUNT(field) (packet_stats.field++)
+#else
+#define OWL_COUNT(field) ((void)0)
+#endif
+void owl_packet_stats_reset(void) {
+#if ATHENA_OWL_DIAGNOSTICS
+    memset(&packet_stats,0,sizeof(packet_stats));
+    packet_stats.peak_half_qwords=controller.alloc?controller.alloc+1:0;
+#endif
+}
+void owl_packet_stats_read(owl_packet_stats *out) {
+    if(!out) return;
+#if ATHENA_OWL_DIAGNOSTICS
+    *out=packet_stats;
+#else
+    memset(out,0,sizeof(*out));
+#endif
+}
 
 static void *uncached_address(void *ptr) {
 #if defined(__mips__)
@@ -31,10 +51,13 @@ void owl_init(void *ptr, size_t size) {
 
     controller.context = false;
     /* owl_init is called only with a drained/unused stream. */
-    flush_generation = 1;
+    /* Meshes may outlive a video reset and still remember their last ticket.
+     * Never reuse that identity when replacing the drained packet ring. */
+    flush_generation++;
     memset(pending_generation, 0, sizeof(pending_generation));
     buffer_channel[0] = buffer_channel[1] = CHANNEL_SIZE;
     buffer_generation[0] = buffer_generation[1] = 0;
+    owl_packet_stats_reset();
 }
 
 void owl_flush_packet() {
@@ -45,6 +68,12 @@ void owl_flush_packet() {
     }
 
     owl_add_end_tag(&internal_packet, 0);
+
+    OWL_COUNT(flushes);
+#if ATHENA_OWL_DIAGNOSTICS
+    packet_stats.submitted_qwords+=controller.alloc+1;
+#endif
+    if(pending_generation[controller.channel]) OWL_COUNT(submit_waits);
 
     dmaKit_wait(controller.channel, 0);
     pending_generation[controller.channel] = 0;
@@ -63,6 +92,7 @@ void owl_flush_packet() {
     owl_channel previous = buffer_channel[controller.context];
     if (previous != CHANNEL_SIZE && pending_generation[previous] &&
         pending_generation[previous] == buffer_generation[controller.context]) {
+        OWL_COUNT(reuse_waits);
         dmaKit_wait(previous, 0);
         pending_generation[previous] = 0;
     }
@@ -90,6 +120,7 @@ void owl_wait_generation(uint64_t generation) {
     }
     for (int channel=0; channel<CHANNEL_SIZE; channel++) {
         if (pending_generation[channel] && pending_generation[channel] <= generation) {
+            OWL_COUNT(fence_waits);
             dmaKit_wait(channel, 0);
             pending_generation[channel]=0;
         }
@@ -97,18 +128,25 @@ void owl_wait_generation(uint64_t generation) {
 }
 
 owl_packet *owl_query_packet(owl_channel channel, size_t size) {
+    OWL_COUNT(queries);
     if (channel != controller.channel) {
         if (controller.channel != CHANNEL_SIZE) {
+            if(controller.alloc) OWL_COUNT(channel_flushes);
             owl_flush_packet();
             
         }
 
         controller.channel = channel;
     } else if ((controller.alloc + size) + 1 >= controller.size) { // + 1 for end tag
+        if(controller.alloc) OWL_COUNT(capacity_flushes);
         owl_flush_packet();
     }
 
     controller.alloc += size;
+#if ATHENA_OWL_DIAGNOSTICS
+    if(controller.alloc+1>packet_stats.peak_half_qwords)
+        packet_stats.peak_half_qwords=controller.alloc+1;
+#endif
 
     return &internal_packet;
 }

@@ -26,7 +26,7 @@ INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/includ
 THREE_D="src/modules/matrix4/native/matrix4.c src/modules/matrix4/quickjs/ath_matrix4.c \
     src/modules/quaternion/native/quaternion.c src/modules/quaternion/quickjs/ath_quaternion.c \
     src/modules/camera3d/native/camera3d.c src/modules/camera3d/quickjs/ath_camera3d.c \
-    src/modules/lights/native/lights.c src/modules/lights/quickjs/ath_lights.c src/modules/render3d/native/render3d_shade.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c tests/host/texture3d_host.c src/modules/model3d/quickjs/ath_model3d.c \
+    src/modules/lights/native/lights.c src/modules/lights/quickjs/ath_lights.c src/modules/render3d/native/render3d_shade.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/model3d/quickjs/ath_model3d.c \
     src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c src/modules/render3d/quickjs/ath_render3d.c \
     src/modules/scene3d/native/scene3d.c src/modules/scene3d/quickjs/ath_scene3d.c \
     src/modules/animation3d/native/animation3d.c src/modules/animation3d/quickjs/ath_animation3d.c \
@@ -138,6 +138,8 @@ echo "== tests/three_d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/three_d_test.js "3D module tests passed"
 echo "== tests/lights_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/lights_test.js "3D lighting tests passed"
+echo "== tests/geometry3d_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/geometry3d_test.js "3D procedural geometry tests passed"
 echo "== tests/textures3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/textures3d_test.js "3D texture tests passed"
 echo "== tests/scene3d_test.js (two fresh runtimes)"

@@ -11,7 +11,8 @@ typedef struct {
      * a group shares among consecutive objects of the same pipeline. */
     uint32_t submitted_objects,culled_objects,draw_passes,triangles,vu_batches;
     uint32_t source_triangles,clipped_triangles,rejected_triangles,pipeline_passes;
-    /* Copied position/color/normal/UV payload including per-chunk padding.
+    /* Stream payload sent inline or by REF, including per-chunk padding and
+     * skin joints/weights as applicable.
      * Excludes tags, constants, texture/program uploads, GS state and 2D. */
     uint64_t geometry_bytes;
     /* Objects crossing the screen edges drawn by VU1 without clipping: inside
@@ -29,12 +30,16 @@ typedef struct {
  * still fit the GS's coordinate range with a margin. 1 without a GS. */
 float athena_render3d_guard_band(void);
 /* Opaque unlit/diffuse triangle lists, optionally textured; no transparent sort.
- * draw never advances game state. Inputs are copied into the owned DMA ring,
+ * draw never advances game state. Immutable mesh streams are retained until
+ * DMA consumes them; temporary inputs are copied into the owned DMA ring,
  * so releasing mesh/instance after draw cannot invalidate pending submission.
  * Precise homogeneous clipping in C for intersecting object bounds; VU1
  * transforms fully contained objects. Clipping uses fixed scratch buffers.
  * GS TEST/ZBUF and textured TEX0/TEX1/CLAMP are restored; Screen needs depth.
- * Stats accumulate in draw(); batch_draw() resets them for the batch. */
+ * Stats accumulate in draw(); batch_draw() resets them for the batch.
+ * A DIFFUSE model whose linear part is all zero (scale 0, a common way to
+ * hide an object) counts as culled instead of failing; an UNLIT one
+ * rasterizes nothing. */
 typedef enum { ATHENA_RENDER3D_CULL_NONE=0, ATHENA_RENDER3D_CULL_BACK=1,
     ATHENA_RENDER3D_CULL_FRONT=-1 } AthenaRender3DCull;
 int athena_render3d_draw(AthenaInstance3D *instance,AthenaCamera3D *camera,
@@ -44,7 +49,7 @@ int athena_render3d_draw(AthenaInstance3D *instance,AthenaCamera3D *camera,
 int athena_render3d_draw_lit(AthenaInstance3D *instance,AthenaCamera3D *camera,
     const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *stats);
 /* Same pass with an explicit model matrix (e.g. a Scene3D world transform).
- * Mesh and matrix are borrowed for the call; their data is copied to DMA. */
+ * Matrix is copied; mesh streams may be retained until DMA consumes them. */
 int athena_render3d_draw_mesh(const AthenaMesh3D *mesh,const AthenaMatrix4 *model,
     AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,
     AthenaRender3DStats *stats);
@@ -68,7 +73,7 @@ int athena_render3d_draw_morph(const AthenaMesh3DView *view,const AthenaMatrix4 
  * world(joint j) * inverse_bind, in world space, for joint_count joints
  * (<= ATHENA_RENDER3D_SKIN_JOINTS). The caller has proved the deformed mesh
  * inside the frustum (conservative bounds); the view needs joints, weights
- * and normals and no texture. Other skinned draws deform on the EE and use
+ * and normals, plus UVs when textured. Other skinned draws deform on the EE and use
  * draw_view(). Returns -1 for those inputs. */
 #define ATHENA_RENDER3D_SKIN_JOINTS 24u
 int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *view,const AthenaMatrix4 *palette,
@@ -100,4 +105,9 @@ int athena_batch3d_draw(AthenaBatch3D *batch,AthenaCamera3D *camera,
 int athena_batch3d_draw_lit(AthenaBatch3D *batch,AthenaCamera3D *camera,
     const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *stats);
 void athena_render3d_module_shutdown(void);
+/* Why the last failing draw failed ("" when unknown): missing normals, a
+ * non-finite or singular transform, UVs out of range... Main thread only.
+ * A static string, set at the failure; callers clear it before a draw. */
+const char *athena_render3d_error_detail(void);
+void athena_render3d_set_error_detail(const char *detail);
 #endif

@@ -12,8 +12,11 @@ typedef union { uint64_t dword[2]; uint32_t sword[4]; float f[4]; } owl_qword;
 typedef struct { owl_channel channel; owl_qword *base; size_t size,alloc; bool context; } owl_controller;
 typedef struct { owl_qword *base; owl_channel channel; size_t size; owl_qword *ptr; } owl_packet;
 #define DMA_CNT 1
+#define DMA_REF 3
 #define DMA_END 7
-#define DMA_TAG(q,p,id,irq,addr,spr) ((uint64_t)(q)|((uint64_t)(id)<<28))
+/* Preserve host pointers on x86_64 through borrowed address tokens. */
+uint32_t athena_test_dma_address(uintptr_t address);
+#define DMA_TAG(q,p,id,irq,addr,spr) ((uint64_t)(q)|((uint64_t)(id)<<28)|((uint64_t)((addr)?athena_test_dma_address((uintptr_t)(addr)):0)<<32))
 #define UNPACK_V3_32 8
 #define UNPACK_V2_32 4
 #define UNPACK_V4_32 12
@@ -36,6 +39,16 @@ void SyncDCache(void *,void *);
 void dmaKit_wait(owl_channel,int);
 void dmaKit_send_chain_ucab(owl_channel,void *);
 void owl_init(void *,size_t);
+#ifndef ATHENA_OWL_DIAGNOSTICS
+#define ATHENA_OWL_DIAGNOSTICS 0
+#endif
+typedef struct {
+    uint64_t queries,flushes,capacity_flushes,channel_flushes;
+    uint64_t submit_waits,reuse_waits,fence_waits,submitted_qwords;
+    size_t peak_half_qwords;
+} owl_packet_stats;
+void owl_packet_stats_reset(void);
+void owl_packet_stats_read(owl_packet_stats *);
 void owl_flush_packet(void);
 owl_packet *owl_query_packet(owl_channel,size_t);
 owl_controller *owl_get_controller(void);

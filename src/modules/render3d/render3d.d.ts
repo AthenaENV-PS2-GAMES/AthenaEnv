@@ -19,7 +19,8 @@ declare namespace Render3D {
         clippedTriangles: number;
         /** Source triangles rejected by precise clipping. */
         rejectedTriangles: number;
-        /** Copied position/color/normal/UV DMA payload, including chunk padding.
+        /** Stream payload sent inline or by DMA_REF, including chunk padding
+         * and skin joints/weights when applicable.
          * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
         geometryBytes: number;
         /** Objects crossing the screen edges drawn by VU1 without clipping,
@@ -32,12 +33,19 @@ declare namespace Render3D {
         vuMorphObjects: number;
     }
     /** Lights are borrowed for this call. Omitted lights mean black ambient and
-     * no directional lights. UNLIT materials ignore lights. Singular DIFFUSE
-     * normal transforms throw; drawing does not update lights or transforms.
+     * no directional lights. UNLIT materials ignore lights. Scale 0
+     * draws nothing (counted as culled); other singular DIFFUSE normal
+     * transforms throw, naming the reason; drawing does not update lights or transforms.
      * Pass `stats` to reuse an object every frame: its fields are assigned and
      * it is returned, instead of allocating a new Stats per call. */
     function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
         lights?: Lights.Set, stats?: T): T & Stats;
+    /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
+     * camera, program and texture skip the barrier, program upload, camera
+     * constants and GS state (and unchanged lights). The pass closes when fn
+     * returns or throws; fn's result is returned. Inside fn, draw only 3D:
+     * no 2D drawing, flip or camera change. Groups do not nest. */
+    function group<R>(fn: () => R): R;
     class Batch {
         constructor();
         readonly size: number;

@@ -8,7 +8,7 @@
 ; (world(joint) * inverse_bind), from SKIN_PALETTE.
 ; Batch input (room for 32 vertices; the EE sends 30, whole triangles):
 ; positions +2, normals +34, colors +66, joints +98 and weights +130 (V4_8,
-; weights in 0..255); output from +163.
+; weights in 0..255), optional UVs +162; output from +195.
 .syntax new
 .name VU1Draw3DSkinned
 .vu
@@ -24,7 +24,8 @@ SKIN_NORMAL_OFFSET .assign 34
 SKIN_COLOR_OFFSET .assign 66
 SKIN_JOINT_OFFSET .assign 98
 SKIN_WEIGHT_OFFSET .assign 130
-SKIN_INBUF_SIZE .assign 162
+SKIN_UV_OFFSET .assign 162
+SKIN_INBUF_SIZE .assign 194
 SKIN_PALETTE .assign 36
 
 --enter
@@ -185,14 +186,23 @@ lights_done:
     isw.x kickSecond, KICK_CYCLE(vi00)
     isw.y kickThird, KICK_CYCLE(vi00)
     isw.z kickFirst, KICK_CYCLE(vi00)
-    ; Untextured RGB uses the full 8-bit range; GS alpha uses 0..128.
-    loi 255.0
-    mul.xyz color, color, i
+    ; RGB scale is 255 untextured, 128 for GS MODULATE; alpha is 0..128.
+    lq.x rgbScale, CLIPFAN_OFFSET(vi00)
+    mulx.xyz color, color, rgbScale[x]
     loi 128.0
     mul.w color, color, i
     ColorFPtoGsRGBAQ intColor, color
-    ; Untextured PRIM: deterministic ST/Q, independent of old VU memory.
+    ; Perspective-correct ST/Q for textures; deterministic ST/Q otherwise.
+    ilw.z textured, CLIPFAN_OFFSET(vi00)
+    ibeq textured, vi00, untextured_stq
+    lq uv, SKIN_UV_OFFSET(iBase)
+    addw.z uv, vf00, vf00[w]
+    mulq.xyz uv, uv, q
+    sq.xyz uv, STQ(destAddress)
+    b stq_done
+untextured_stq:
     sq vf00, STQ(destAddress)
+stq_done:
     sq intColor, RGBA(destAddress)
     FogStore vertex, iADC, destAddress
     iaddiu iBase, iBase, 1

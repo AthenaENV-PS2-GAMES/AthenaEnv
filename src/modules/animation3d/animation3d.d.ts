@@ -15,8 +15,13 @@ declare namespace Animation3D {
          * slerp on the short arc) or 1..8 (morph target weights, see
          * Scene3D.Node.setWeights(); values.length / times.length per key). */
         values: Float32Array;
-        /** Default "linear". */
-        interpolation?: "linear" | "step";
+        /** Default "linear". "cubic" is glTF CUBICSPLINE: Hermite between
+         * keys using inTangents/outTangents (rotations normalized after). */
+        interpolation?: "linear" | "step" | "cubic";
+        /** "cubic" only: tangents per key, laid out like values, in value
+         * units per second. */
+        inTangents?: Float32Array;
+        outTangents?: Float32Array;
     }
     /** Tracks are copied; the arrays can be reused afterwards. */
     class Clip {

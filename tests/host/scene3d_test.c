@@ -7,6 +7,8 @@
 #include <athena/scene3d.h>
 #include <athena/loop.h>
 extern unsigned host_contained_draws;
+extern unsigned texture3d_host_destroyed;
+#include "../../src/modules/model3d/native/texture3d_backend.h"
 static void closef(float a,float b) { assert(fabsf(a-b)<0.0001f); }
 static AthenaMesh3D *cube(float half) {
     float xyz[]={-half,-half,-half, half,-half,-half, half,half,half};
@@ -17,6 +19,75 @@ static void point(const AthenaNode3D *n,float x,float y,float z,float ex,float e
     AthenaMatrix4 world; assert(athena_node3d_world(n,&world)==0);
     AthenaVector4 in={x,y,z,1},out; ath_matrix4_apply(&out,&world,&in);
     closef(out.x,ex); closef(out.y,ey); closef(out.z,ez);
+}
+extern AthenaMesh3DView host_last_view;
+extern int host_morph_refuse;
+/* Compare indexed CPU deformation to the same explicit triangle list.
+ * Twenty-five joints force the real CPU fallback; morph refusal covers the
+ * other fallback. Generated flat normals must never share across faces. */
+static void deform_reuse_test(int skin,int morph,int flat) {
+    const float positions[]={-.8f,-.8f,-4, .8f,-.8f,-4, .8f,.8f,-4, -.8f,.8f,-3.8f};
+    float normals[12],deltas[12],normal_deltas[12],weights[16]; uint16_t joints[16];
+    uint32_t indices[]={2,0,1,2,3,0};
+    for(unsigned i=0;i<4;i++) {
+        normals[i*3]=0;normals[i*3+1]=0;normals[i*3+2]=1;
+        deltas[i*3]=.1f*i;deltas[i*3+1]=.05f*i;deltas[i*3+2]=.03f*i;
+        normal_deltas[i*3]=.1f*i;normal_deltas[i*3+1]=0;normal_deltas[i*3+2]=0;
+        for(unsigned k=0;k<4;k++){joints[i*4+k]=k?0:24;weights[i*4+k]=k?0:1;}
+    }
+    AthenaMaterial3D material;athena_material3d_default(&material);material.shading=ATHENA_MATERIAL3D_DIFFUSE;
+    AthenaGeometry3D g={.positions=positions,.vertex_count=4,.indices=indices,.index_count=6,
+        .normals=flat?NULL:normals,.normal_count=flat?0:4,.material=&material,
+        .joints=skin?joints:NULL,.weights=skin?weights:NULL,.skin_count=skin?4:0,
+        .target_positions=morph?deltas:NULL,.target_normals=morph&&!flat?normal_deltas:NULL,.target_count=morph?1:0};
+    AthenaMesh3D *indexed=NULL,*expanded=NULL;assert(!athena_mesh3d_create(&g,&indexed));
+    AthenaMesh3DView view;athena_mesh3d_view(indexed,&view);
+    const uint16_t expected[]={0,1,2,0,4,1};
+    assert(!flat||!view.deform_reuse);
+    if(view.indices) {
+        assert(athena_mesh3d_stream_count(&view)==4&&view.chunk_count==1);
+        for(unsigned i=0;i<6;i++) {
+            uint32_t j=athena_mesh3d_corner(&view,i);
+            assert(!memcmp(&view.positions[j],positions+indices[i]*3,sizeof(AthenaPosition3D)));
+        }
+    }else if(!flat)assert(!memcmp(view.deform_reuse,expected,sizeof(expected)));
+    float ep[18],en[18],ed[18],end[18],ew[24];uint16_t ej[24];
+    for(unsigned i=0;i<6;i++) {
+        unsigned j=indices[i];memcpy(ep+i*3,positions+j*3,12);memcpy(en+i*3,normals+j*3,12);
+        memcpy(ed+i*3,deltas+j*3,12);memcpy(end+i*3,normal_deltas+j*3,12);
+        memcpy(ew+i*4,weights+j*4,16);memcpy(ej+i*4,joints+j*4,8);
+    }
+    g.positions=ep;g.vertex_count=6;g.indices=NULL;g.index_count=0;
+    g.normals=flat?NULL:en;g.normal_count=flat?0:6;
+    g.joints=skin?ej:NULL;g.weights=skin?ew:NULL;g.skin_count=skin?6:0;
+    g.target_positions=morph?ed:NULL;g.target_normals=morph&&!flat?end:NULL;
+    assert(!athena_mesh3d_create(&g,&expanded));
+    memset(indices,0xff,sizeof(indices)); /* copied identity, no borrowed indices */
+    AthenaPosition3D result_positions[6],result_normals[6];float result_lo[3],result_hi[3];
+    AthenaCamera3D camera;athena_camera3d_init(&camera);
+    assert(athena_camera3d_look_at(&camera,0,0,-1)&&athena_camera3d_set_position(&camera,0,0,0));
+    host_morph_refuse=1;
+    for(unsigned pass=0;pass<2;pass++) {
+        AthenaScene3D *scene=athena_scene3d_create();AthenaNode3D *root=athena_scene3d_root(scene),*node=athena_node3d_create();
+        assert(!athena_node3d_set_mesh(node,pass?expanded:indexed)&&!athena_node3d_add_child(root,node));
+        AthenaNode3D *bones[25];
+        if(skin) {
+            for(unsigned j=0;j<25;j++){bones[j]=athena_node3d_create();assert(!athena_node3d_add_child(root,bones[j]));}
+            assert(!athena_node3d_set_position(bones[24],.2f,.1f,0));
+            AthenaSkin3D *k=athena_skin3d_create(bones,25,NULL);assert(k&&!athena_node3d_set_skin(node,k));athena_skin3d_release(k);
+            for(unsigned j=0;j<25;j++)athena_node3d_release(bones[j]);
+        }
+        const float w=.6f;if(morph)assert(!athena_node3d_set_weights(node,&w,1));
+        assert(!athena_scene3d_update(scene,NULL));AthenaScene3DDrawStats ds;int error;
+        assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&error)&&!error);
+        assert(ds.render.source_triangles==2&&host_last_view.vertex_count==6);
+        if(!pass){memcpy(result_positions,host_last_view.positions,sizeof(result_positions));memcpy(result_normals,host_last_view.normals,sizeof(result_normals));
+            memcpy(result_lo,host_last_view.minimum,sizeof(result_lo));memcpy(result_hi,host_last_view.maximum,sizeof(result_hi));}
+        else{assert(!memcmp(result_positions,host_last_view.positions,sizeof(result_positions)));assert(!memcmp(result_normals,host_last_view.normals,sizeof(result_normals)));
+            assert(!memcmp(result_lo,host_last_view.minimum,sizeof(result_lo)));assert(!memcmp(result_hi,host_last_view.maximum,sizeof(result_hi)));}
+        athena_node3d_release(node);athena_scene3d_release(scene);
+    }
+    host_morph_refuse=0;athena_mesh3d_release(indexed);athena_mesh3d_release(expanded);
 }
 int main(void) {
     AthenaScene3D *scene=athena_scene3d_create(); assert(scene);
@@ -191,6 +262,66 @@ int main(void) {
         athena_node3d_release(group); athena_node3d_release(mover); athena_node3d_release(still);
         athena_scene3d_release(ms); athena_loop_systems_clear();
     }
+    /* A joint that is an ancestor of its skinned node (valid glTF): the skin
+     * must not keep it alive, or the subtree would leak. The mesh's texture
+     * backend is destroyed only if the whole subtree is freed. */
+    {
+        uint32_t pixel=0xffffffff; AthenaTexture3DPixels px={.width=1,.height=1,.pixels=&pixel,.pixel_count=1};
+        AthenaTexture3D *texture=NULL; assert(!athena_texture3d_create(&px,&texture));
+        AthenaTexture3DBinding binding; assert(!athena_texture3d_bind(texture,&binding));
+        AthenaMaterial3D material; athena_material3d_default(&material); material.texture=texture;
+        float positions[]={0,0,0,1,0,0,0,1,0},uv[]={0,0,1,0,0,1},weights[]={1,0,0,0,1,0,0,0,1,0,0,0};
+        uint16_t joints[12]={0};
+        AthenaGeometry3D geometry={.positions=positions,.vertex_count=3,.texcoords=uv,.texcoord_count=3,
+            .material=&material,.joints=joints,.weights=weights,.skin_count=3};
+        AthenaMesh3D *mesh=NULL; assert(!athena_mesh3d_create(&geometry,&mesh)); athena_texture3d_release(texture);
+        AthenaNode3D *joint=athena_node3d_create(),*skinned=athena_node3d_create();
+        assert(!athena_node3d_add_child(joint,skinned)&&!athena_node3d_set_mesh(skinned,mesh));
+        athena_mesh3d_release(mesh);
+        AthenaSkin3D *skin=athena_skin3d_create(&joint,1,NULL); assert(skin);
+        assert(!athena_node3d_set_skin(skinned,skin)); athena_skin3d_release(skin);
+        unsigned destroyed=texture3d_host_destroyed;
+        athena_node3d_release(skinned); athena_node3d_release(joint);
+        assert(texture3d_host_destroyed==destroyed+1);
+        /* A skin outliving its joint: the entry is cleared, not dangling. */
+        joint=athena_node3d_create(); skin=athena_skin3d_create(&joint,1,NULL); assert(skin);
+        athena_node3d_release(joint); athena_skin3d_release(skin);
+    }
+    /* Textured meshes are grouped by texture: A(t1) B(t2) C(t1) is two
+     * passes, not three. */
+    {
+        uint32_t pixel=0xffffffff; AthenaTexture3DPixels px={.width=1,.height=1,.pixels=&pixel,.pixel_count=1};
+        AthenaTexture3D *t[2]; assert(!athena_texture3d_create(&px,&t[0])&&!athena_texture3d_create(&px,&t[1]));
+        float positions[]={-.1f,-.1f,0,.1f,-.1f,0,0,.1f,0},uv[]={0,0,1,0,0,1};
+        AthenaScene3D *textured=athena_scene3d_create(); assert(textured);
+        for(int i=0;i<3;i++) {
+            AthenaMaterial3D material; athena_material3d_default(&material); material.texture=t[i==1];
+            AthenaGeometry3D geometry={.positions=positions,.vertex_count=3,.texcoords=uv,.texcoord_count=3,.material=&material};
+            AthenaMesh3D *mesh=NULL; assert(!athena_mesh3d_create(&geometry,&mesh));
+            AthenaNode3D *node=athena_node3d_create(); assert(!athena_node3d_set_mesh(node,mesh));
+            assert(!athena_node3d_add_child(athena_scene3d_root(textured),node));
+            athena_node3d_release(node); athena_mesh3d_release(mesh);
+        }
+        athena_texture3d_release(t[0]); athena_texture3d_release(t[1]);
+        AthenaCamera3D view; athena_camera3d_init(&view);
+        AthenaScene3DDrawStats drawn;
+        assert(!athena_scene3d_update(textured,NULL)&&!athena_scene3d_draw(textured,&view,NULL,ATHENA_RENDER3D_CULL_NONE,&drawn,NULL));
+        assert(drawn.queued_objects==3&&drawn.render.draw_passes==3&&drawn.render.pipeline_passes==2);
+        athena_scene3d_release(textured);
+    }
+    /* Morph followers take their parent's weights. */
+    {
+        AthenaNode3D *parent=athena_node3d_create(),*follower=athena_node3d_create(),*other=athena_node3d_create();
+        assert(!athena_node3d_add_child(parent,follower)&&!athena_node3d_add_child(parent,other));
+        assert(!athena_node3d_set_morph_follower(follower,1));
+        const float w[2]={.25f,.5f}; float got[ATHENA_MODEL3D_MAX_TARGETS];
+        assert(!athena_node3d_set_weights(parent,w,2));
+        athena_node3d_get_weights(follower,got); assert(got[0]==.25f&&got[1]==.5f&&got[2]==0);
+        athena_node3d_get_weights(other,got); assert(got[0]==0&&got[1]==0);
+        athena_node3d_release(follower); athena_node3d_release(other); athena_node3d_release(parent);
+    }
+    deform_reuse_test(1,0,0);deform_reuse_test(0,1,0);deform_reuse_test(1,1,0);
+    deform_reuse_test(1,1,1);deform_reuse_test(0,1,1);
     puts("Scene3D host tests passed");
     return 0;
 }

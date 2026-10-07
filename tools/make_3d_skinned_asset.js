@@ -5,6 +5,7 @@
 // Run `node tools/make_3d_skinned_asset.js` from any working directory.
 // `--rings=N --sides=M --out=name.glb` makes a finer column for profiling
 // (weights then blend linearly between y = 0.5 and 1.5).
+// `--texture=checker.png` adds UVs and a base-color texture for VU1 profiling.
 const fs = require('fs');
 const path = require('path');
 const args = Object.fromEntries(process.argv.slice(2).map(a => a.replace(/^--/, '').split('=')));
@@ -52,6 +53,8 @@ const pos = add(f32(positions), 'VEC3', count, 5126, {min: [-h, 0, -h], max: [h,
 const nrm = add(f32(normals), 'VEC3', count, 5126);
 const jnt = add(u16(joints), 'VEC4', count, 5123);
 const wgt = add(f32(weights), 'VEC4', count, 5126);
+const uv = args.texture ? add(f32(positions.flatMap((_, i) => i % 3 ? [] :
+    [(positions[i] / (h * Math.SQRT2) + 1) / 2, positions[i + 1] / 2])), 'VEC2', count, 5126) : null;
 // Inverse bind matrices: root at the origin, tip at y = 1.
 const ibm = add(f32([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1,  1,0,0,0, 0,1,0,0, 0,0,1,0, 0,-1,0,1]), 'MAT4', 2, 5126);
 const s = Math.SQRT1_2;
@@ -72,6 +75,12 @@ const json = {
     animations: [{name: 'bend', samplers: [{input: times, output: turn, interpolation: 'LINEAR'}],
         channels: [{sampler: 0, target: {node: 2, path: 'rotation'}}]}]
 };
+if (args.texture) {
+    const primitive = json.meshes[0].primitives[0];
+    primitive.attributes.TEXCOORD_0 = uv; primitive.material = 0;
+    json.images = [{uri: args.texture}]; json.textures = [{source: 0}];
+    json.materials = [{pbrMetallicRoughness: {baseColorTexture: {index: 0}}}];
+}
 const text = Buffer.from(JSON.stringify(json));
 const jsonChunk = Buffer.concat([text, Buffer.alloc((4 - text.length % 4) % 4, 0x20)]);
 const binChunk = Buffer.concat([buffer, Buffer.alloc((4 - buffer.length % 4) % 4)]);

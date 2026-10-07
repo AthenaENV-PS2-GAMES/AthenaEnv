@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <athena/render3d.h>
 static void closef(float a,float b) { assert(fabsf(a-b)<0.0001f); }
@@ -137,9 +138,51 @@ int main(void) {
     assert(athena_mesh3d_load("tests/host/3d/triangle.glb",&mesh)==0); athena_mesh3d_release(mesh);
     assert(athena_mesh3d_load("tests/host/3d/invalid.gltf",&mesh)==ATHENA_MODEL3D_EFORMAT && !mesh);
     assert(athena_mesh3d_load("tests/host/3d/transformed.gltf",&mesh)==ATHENA_MODEL3D_EUNSUPPORTED && !mesh);
+    assert(strstr(athena_model3d_detail(),"Gltf3D.load")); /* the detail names the cause */
     assert(athena_mesh3d_load("tests/host/3d/required-extension.gltf",&mesh)==ATHENA_MODEL3D_EUNSUPPORTED && !mesh);
-    assert(athena_mesh3d_load("tests/host/3d/quad.obj",&mesh)==ATHENA_MODEL3D_EUNSUPPORTED && !mesh);
+    assert(strstr(athena_model3d_detail(),"required extension"));
+    /* Quads and n-gons are fan triangulated: one quad, two triangles. */
+    assert(athena_mesh3d_load("tests/host/3d/quad.obj",&mesh)==0 && !athena_model3d_detail()[0]);
+    { AthenaMesh3DView quad; athena_mesh3d_view(mesh,&quad); assert(quad.vertex_count==6);
+      assert(quad.positions[3].x==-1&&quad.positions[4].x==1&&quad.positions[5].x==-1&&quad.positions[5].y==1); }
+    athena_mesh3d_release(mesh);
     assert(athena_mesh3d_load("tests/host/3d/missing.obj",&mesh)==ATHENA_MODEL3D_EIO && !mesh);
     assert(athena_mesh3d_load("triangle.fbx",&mesh)==ATHENA_MODEL3D_EUNSUPPORTED && !mesh);
+    /* Finite skin weights need stable normalization even when their sum
+     * overflows float. Indices expand all streams in the same order. */
+    {
+        float p[]={0,0,0,1,0,0,0,1,0};
+        uint16_t joints[]={0,1,0,0,1,0,0,0,0,1,0,0};
+        float weights[]={3e38f,3e38f,0,0,1,0,0,0,1,3,0,0};
+        uint32_t indices[]={2,0,1};
+        AthenaGeometry3D g={.positions=p,.vertex_count=3,.indices=indices,.index_count=3,
+            .joints=joints,.weights=weights,.skin_count=3};
+        AthenaMesh3D *mesh=NULL; assert(!athena_mesh3d_create(&g,&mesh));
+        AthenaMesh3DView view; athena_mesh3d_view(mesh,&view);
+        closef(view.weights[0],.25f); closef(view.weights[1],.75f);
+        closef(view.weights[4],.5f); closef(view.weights[5],.5f);
+        for(unsigned i=0;i<3;i++) {
+            unsigned sum=0;float normalized=0;
+            for(unsigned k=0;k<4;k++) { sum+=view.weights8[i*4+k];normalized+=view.weights[i*4+k]; }
+            assert(sum==255);closef(normalized,1);
+        }
+        assert(view.joints[8]==1&&view.joint_count==2);
+        athena_mesh3d_release(mesh);
+    }
+    /* The uint16 reuse sentinel must not collide with a valid last corner. */
+    {
+        const uint32_t n=ATHENA_MODEL3D_MAX_VERTICES;
+        float *positions=calloc(n*3,sizeof(float)),*deltas=calloc(n*3,sizeof(float));
+        uint32_t *indices=malloc(n*sizeof(*indices));assert(positions&&deltas&&indices);
+        for(uint32_t i=0;i<n;i++)indices[i]=i;
+        indices[0]=n-1;indices[1]=n-1; /* create a duplicate, keeping the last unique corner at n-1 */
+        indices[n-1]=0;
+        AthenaGeometry3D g={.positions=positions,.vertex_count=n,.indices=indices,.index_count=n,
+            .target_positions=deltas,.target_count=1};
+        AthenaMesh3D *mesh=NULL;assert(!athena_mesh3d_create(&g,&mesh));
+        AthenaMesh3DView view;athena_mesh3d_view(mesh,&view);
+        assert(view.deform_reuse&&view.deform_reuse[0]==0&&view.deform_reuse[1]==0&&view.deform_reuse[n-1]==n-1);
+        athena_mesh3d_release(mesh);free(positions);free(deltas);free(indices);
+    }
     puts("3D native tests passed"); return 0;
 }

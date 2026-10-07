@@ -68,18 +68,25 @@ static int set_trs(AthenaNode3D *n,const cgltf_node *g) {
 }
 /* The node's mesh: its first primitive on the node, the others on children.
  * Initial morph weights: the node's, else the mesh's, on every primitive
- * (animated weights reach the first primitive only). */
+ * (animated weights reach every primitive: the extra ones follow). */
 static int attach_mesh(AthenaNode3D *n,const char *path,const cgltf_node *node,const cgltf_mesh *mesh,
-    const AthenaMaterial3D *material) {
+    const AthenaMaterial3D *material,AthenaGltfTextureCache *cache) {
     const cgltf_float *initial=node->weights_count?node->weights:mesh->weights;
     cgltf_size initial_count=node->weights_count?node->weights_count:mesh->weights_count;
     float weights[ATHENA_MODEL3D_MAX_TARGETS]={0};
-    if(initial_count>ATHENA_MODEL3D_MAX_TARGETS) return ATHENA_MODEL3D_EUNSUPPORTED;
+    if(initial_count>ATHENA_MODEL3D_MAX_TARGETS) {
+        athena_model3d_set_detail("mesh '%s' has %u morph weights, at most %u",mesh->name?mesh->name:"",
+            (unsigned)initial_count,ATHENA_MODEL3D_MAX_TARGETS);
+        return ATHENA_MODEL3D_EUNSUPPORTED;
+    }
     for(cgltf_size t=0;t<initial_count;t++) weights[t]=initial[t];
     for(cgltf_size p=0;p<mesh->primitives_count;p++) {
         AthenaMesh3D *m=NULL;
-        int code=athena_model3d_gltf_primitive(path,&mesh->primitives[p],material,&m);
-        if(code<0) return code;
+        int code=athena_model3d_gltf_primitive(path,&mesh->primitives[p],material,cache,&m);
+        if(code<0) {
+            athena_model3d_detail_context("mesh '%s' primitive %u",mesh->name?mesh->name:"",(unsigned)p);
+            return code;
+        }
         if(p==0) {
             code=athena_node3d_set_mesh(n,m);
             if(code>=0) code=athena_node3d_set_weights(n,weights,(uint32_t)initial_count);
@@ -87,6 +94,8 @@ static int attach_mesh(AthenaNode3D *n,const char *path,const cgltf_node *node,c
             AthenaNode3D *child=athena_node3d_create();
             code=child?athena_node3d_set_mesh(child,m):ATHENA_MODEL3D_ENOMEM;
             if(code>=0) code=athena_node3d_set_weights(child,weights,(uint32_t)initial_count);
+            /* Animated weights target the glTF node: every primitive follows. */
+            if(code>=0&&mesh->primitives[p].targets_count) code=athena_node3d_set_morph_follower(child,1);
             if(code>=0) code=athena_node3d_add_child(n,child);
             athena_node3d_release(child);
         }
@@ -101,7 +110,7 @@ static int read_floats(const cgltf_accessor *a,float *out,cgltf_size width) {
 }
 static int load_clip(const cgltf_data *data,const cgltf_animation *anim,AthenaClip3D **out) {
     AthenaTrack3DDesc *tracks=calloc(anim->channels_count?anim->channels_count:1,sizeof(*tracks));
-    float **buffers=calloc(anim->channels_count*2+1,sizeof(*buffers));
+    float **buffers=calloc(anim->channels_count*4+1,sizeof(*buffers));
     int code=tracks&&buffers?0:ATHENA_MODEL3D_ENOMEM;
     cgltf_size used=0;
     for(cgltf_size c=0;code==0&&c<anim->channels_count;c++) {
@@ -117,27 +126,35 @@ static int load_clip(const cgltf_data *data,const cgltf_animation *anim,AthenaCl
             /* One scalar per morph target of the node's mesh, per key. */
             const cgltf_mesh *mesh=ch->target_node->mesh;
             width=mesh&&mesh->primitives_count?mesh->primitives[0].targets_count:0;
-            if(!width) { code=ATHENA_MODEL3D_EFORMAT; break; }
-            if(width>ATHENA_MODEL3D_MAX_TARGETS) { code=ATHENA_MODEL3D_EUNSUPPORTED; break; }
+            if(!width) { athena_model3d_set_detail("weights animation on a node without morph targets"); code=ATHENA_MODEL3D_EFORMAT; break; }
+            if(width>ATHENA_MODEL3D_MAX_TARGETS) { athena_model3d_set_detail("weights animation with %u targets",(unsigned)width); code=ATHENA_MODEL3D_EUNSUPPORTED; break; }
             path=ATHENA_ANIM3D_WEIGHTS;
         }
-        else { code=ATHENA_MODEL3D_EUNSUPPORTED; break; }
+        else { athena_model3d_set_detail("animation path %d is not supported",(int)ch->target_path); code=ATHENA_MODEL3D_EUNSUPPORTED; break; }
         const cgltf_accessor *in=sm->input,*outv=sm->output;
         int cubic=sm->interpolation==cgltf_interpolation_type_cubic_spline;
         int weights=path==ATHENA_ANIM3D_WEIGHTS;
         cgltf_size keys=in->count;
         /* Weights outputs are scalars, width of them per key. */
         if(!keys||in->type!=cgltf_type_scalar||outv->count*(weights?1:width)!=keys*(cubic?3:1)*width||
-            (weights&&outv->type!=cgltf_type_scalar)) { code=ATHENA_MODEL3D_EFORMAT; break; }
+            (weights&&outv->type!=cgltf_type_scalar)) { athena_model3d_set_detail("animation sampler counts disagree"); code=ATHENA_MODEL3D_EFORMAT; break; }
         float *times=malloc(keys*sizeof(float)),*raw=malloc(keys*(cubic?3:1)*width*sizeof(float));
-        buffers[used*2]=times; buffers[used*2+1]=raw;
-        if(!times||!raw) { code=ATHENA_MODEL3D_ENOMEM; break; }
-        if(!read_floats(in,times,1)||!read_floats(outv,raw,weights?1:width)) { code=ATHENA_MODEL3D_EFORMAT; break; }
-        /* CUBICSPLINE stores in-tangent, value, out-tangent: keep the values. */
-        if(cubic) for(cgltf_size k=0;k<keys;k++) memmove(&raw[k*width],&raw[(k*3+1)*width],width*sizeof(float));
+        float *in_tangents=cubic?malloc(keys*width*sizeof(float)):NULL,*out_tangents=cubic?malloc(keys*width*sizeof(float)):NULL;
+        buffers[used*4]=times; buffers[used*4+1]=raw; buffers[used*4+2]=in_tangents; buffers[used*4+3]=out_tangents;
+        if(!times||!raw||(cubic&&(!in_tangents||!out_tangents))) { code=ATHENA_MODEL3D_ENOMEM; break; }
+        if(!read_floats(in,times,1)||!read_floats(outv,raw,weights?1:width)) {
+            athena_model3d_set_detail("malformed animation sampler data"); code=ATHENA_MODEL3D_EFORMAT; break;
+        }
+        /* CUBICSPLINE stores in-tangent, value, out-tangent per key. */
+        if(cubic) for(cgltf_size k=0;k<keys;k++) {
+            memcpy(&in_tangents[k*width],&raw[k*3*width],width*sizeof(float));
+            memcpy(&out_tangents[k*width],&raw[(k*3+2)*width],width*sizeof(float));
+            memmove(&raw[k*width],&raw[(k*3+1)*width],width*sizeof(float));
+        }
         tracks[used++]=(AthenaTrack3DDesc){.target=(uint32_t)(ch->target_node-data->nodes),.path=path,
-            .interpolation=sm->interpolation==cgltf_interpolation_type_step?ATHENA_ANIM3D_STEP:ATHENA_ANIM3D_LINEAR,
-            .times=times,.values=raw,.key_count=(uint32_t)keys,.weight_count=weights?(uint32_t)width:0};
+            .interpolation=cubic?ATHENA_ANIM3D_CUBIC:sm->interpolation==cgltf_interpolation_type_step?ATHENA_ANIM3D_STEP:ATHENA_ANIM3D_LINEAR,
+            .times=times,.values=raw,.key_count=(uint32_t)keys,.weight_count=weights?(uint32_t)width:0,
+            .in_tangents=in_tangents,.out_tangents=out_tangents};
     }
     if(code==0) {
         if(!used) code=ATHENA_MODEL3D_EFORMAT;
@@ -147,28 +164,36 @@ static int load_clip(const cgltf_data *data,const cgltf_animation *anim,AthenaCl
             else if(code<0) code=ATHENA_MODEL3D_EFORMAT;
         }
     }
-    for(cgltf_size i=0;buffers&&i<anim->channels_count*2;i++) free(buffers[i]);
+    for(cgltf_size i=0;buffers&&i<anim->channels_count*4;i++) free(buffers[i]);
     free(buffers); free(tracks); return code;
 }
 int athena_gltf3d_load(const char *path,const AthenaMaterial3D *material,AthenaGltf3D **out) {
     if(!out) return ATHENA_MODEL3D_EINVAL;
     *out=NULL;
+    athena_model3d_clear_detail();
     if(!path||!*path||(material&&!athena_material3d_validate(material))) return ATHENA_MODEL3D_EINVAL;
     cgltf_options options={0}; cgltf_data *data=NULL;
+    AthenaGltfTextureCache cache={0};
     cgltf_result parsed=cgltf_parse_file(&options,path,&data);
-    if(parsed!=cgltf_result_success)
+    if(parsed!=cgltf_result_success) {
+        athena_model3d_set_detail("glTF parse error %d",(int)parsed);
         return parsed==cgltf_result_out_of_memory?ATHENA_MODEL3D_ENOMEM:
             parsed==cgltf_result_file_not_found||parsed==cgltf_result_io_error?ATHENA_MODEL3D_EIO:ATHENA_MODEL3D_EFORMAT;
+    }
     int code=0;
     AthenaGltf3D *s=calloc(1,sizeof(*s));
     if(!s) { code=ATHENA_MODEL3D_ENOMEM; goto done; }
-    for(cgltf_size e=0;e<data->extensions_required_count;e++)
-        if(strcmp(data->extensions_required[e],"KHR_materials_unlit")) { code=ATHENA_MODEL3D_EUNSUPPORTED; goto done; }
+    if((code=athena_model3d_gltf_extensions(data))<0) goto done;
     for(cgltf_size n=0;n<data->nodes_count;n++)
-        if(data->nodes[n].has_mesh_gpu_instancing) { code=ATHENA_MODEL3D_EUNSUPPORTED; goto done; }
+        if(data->nodes[n].has_mesh_gpu_instancing) {
+            athena_model3d_set_detail("EXT_mesh_gpu_instancing is not supported"); code=ATHENA_MODEL3D_EUNSUPPORTED; goto done;
+        }
     parsed=cgltf_load_buffers(&options,data,path);
-    if(parsed!=cgltf_result_success) { code=parsed==cgltf_result_out_of_memory?ATHENA_MODEL3D_ENOMEM:ATHENA_MODEL3D_EIO; goto done; }
-    if(cgltf_validate(data)!=cgltf_result_success) { code=ATHENA_MODEL3D_EFORMAT; goto done; }
+    if(parsed!=cgltf_result_success) {
+        athena_model3d_set_detail("cannot load glTF buffers (error %d)",(int)parsed);
+        code=parsed==cgltf_result_out_of_memory?ATHENA_MODEL3D_ENOMEM:ATHENA_MODEL3D_EIO; goto done;
+    }
+    if(cgltf_validate(data)!=cgltf_result_success) { athena_model3d_set_detail("glTF validation failed"); code=ATHENA_MODEL3D_EFORMAT; goto done; }
     s->root=athena_node3d_create();
     s->nodes=calloc(data->nodes_count?data->nodes_count:1,sizeof(*s->nodes));
     s->node_names=calloc(data->nodes_count?data->nodes_count:1,sizeof(*s->node_names));
@@ -178,7 +203,7 @@ int athena_gltf3d_load(const char *path,const AthenaMaterial3D *material,AthenaG
         s->node_count=(uint32_t)n+1;
         if(!s->nodes[n]||!s->node_names[n]) { code=ATHENA_MODEL3D_ENOMEM; goto done; }
         if((code=set_trs(s->nodes[n],&data->nodes[n]))<0) goto done;
-        if(data->nodes[n].mesh&&(code=attach_mesh(s->nodes[n],path,&data->nodes[n],data->nodes[n].mesh,material))<0) goto done;
+        if(data->nodes[n].mesh&&(code=attach_mesh(s->nodes[n],path,&data->nodes[n],data->nodes[n].mesh,material,&cache))<0) goto done;
     }
     for(cgltf_size n=0;n<data->nodes_count;n++)
         for(cgltf_size c=0;c<data->nodes[n].children_count;c++)
@@ -188,7 +213,10 @@ int athena_gltf3d_load(const char *path,const AthenaMaterial3D *material,AthenaG
     /* Skins: one AthenaSkin3D per glTF skin, shared by the nodes using it. */
     for(cgltf_size k=0;k<data->skins_count;k++) {
         const cgltf_skin *skin=&data->skins[k];
-        if(!skin->joints_count||skin->joints_count>ATHENA_MODEL3D_MAX_JOINTS) { code=ATHENA_MODEL3D_EUNSUPPORTED; goto done; }
+        if(!skin->joints_count||skin->joints_count>ATHENA_MODEL3D_MAX_JOINTS) {
+            athena_model3d_set_detail("skin with %u joints, 1..%u supported",(unsigned)skin->joints_count,ATHENA_MODEL3D_MAX_JOINTS);
+            code=ATHENA_MODEL3D_EUNSUPPORTED; goto done;
+        }
         AthenaNode3D *joints[ATHENA_MODEL3D_MAX_JOINTS];
         static AthenaMatrix4 bind[ATHENA_MODEL3D_MAX_JOINTS] __attribute__((aligned(16)));
         const cgltf_accessor *ibm=skin->inverse_bind_matrices;
@@ -220,7 +248,7 @@ int athena_gltf3d_load(const char *path,const AthenaMaterial3D *material,AthenaG
         s->clip_count=(uint32_t)a+1;
     }
 done:
-    cgltf_free(data);
+    athena_model3d_gltf_cache_release(&cache); cgltf_free(data);
     if(code<0) { athena_gltf3d_release(s); return code; }
     *out=s; return 0;
 }

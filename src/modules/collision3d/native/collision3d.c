@@ -44,12 +44,15 @@ void athena_collision3d_world_release(AthenaCollision3DWorld *w) {
 uint32_t athena_collision3d_triangle_count(const AthenaCollision3DWorld *w) { return w?w->triangle_count:0; }
 
 /* positions: triangle_count * 9 floats; transform applied as column-major. */
-int athena_collision3d_add_triangles(AthenaCollision3DWorld *w,const float *positions,
-    uint32_t triangle_count,const AthenaMatrix4 *transform,uint32_t layer) {
+static int add_triangles(AthenaCollision3DWorld *w,const float *positions,
+    const uint16_t *indices,uint32_t triangle_count,const AthenaMatrix4 *transform,uint32_t layer) {
     if(!w||(triangle_count&&!positions)) return ATHENA_COLLISION3D_EINVAL;
     if(triangle_count>ATHENA_COLLISION3D_MAX_TRIANGLES-w->triangle_count) return ATHENA_COLLISION3D_EFULL;
     if(transform) for(int i=0;i<16;i++) if(!athena_float_isfinite(transform->value[i])) return ATHENA_COLLISION3D_EINVAL;
-    for(uint32_t i=0;i<triangle_count*9;i++) if(!athena_float_isfinite(positions[i])) return ATHENA_COLLISION3D_EINVAL;
+    for(uint32_t i=0;i<triangle_count*3;i++) {
+        uint32_t vertex=indices?indices[i]:i;
+        for(unsigned k=0;k<3;k++) if(!athena_float_isfinite(positions[vertex*3+k])) return ATHENA_COLLISION3D_EINVAL;
+    }
     if(w->triangle_count+triangle_count>w->triangle_capacity) {
         uint32_t capacity=w->triangle_capacity?w->triangle_capacity:256;
         while(capacity<w->triangle_count+triangle_count) capacity*=2;
@@ -69,7 +72,8 @@ int athena_collision3d_add_triangles(AthenaCollision3DWorld *w,const float *posi
         Triangle *t=&w->triangles[first+added];
         float *out[3]={t->a,t->b,t->c};
         for(int v=0;v<3;v++) {
-            const float *p=&positions[i*9+v*3];
+            uint32_t corner=i*3+v;
+            const float *p=&positions[(indices?indices[corner]:corner)*3];
             if(m) for(int r=0;r<3;r++) out[v][r]=m[r]*p[0]+m[4+r]*p[1]+m[8+r]*p[2]+m[12+r];
             else memcpy(out[v],p,3*sizeof(float));
         }
@@ -86,11 +90,15 @@ int athena_collision3d_add_triangles(AthenaCollision3DWorld *w,const float *posi
     w->triangle_count+=added; w->dirty=1;
     return id;
 }
+int athena_collision3d_add_triangles(AthenaCollision3DWorld *w,const float *positions,
+    uint32_t triangle_count,const AthenaMatrix4 *transform,uint32_t layer) {
+    return add_triangles(w,positions,NULL,triangle_count,transform,layer);
+}
 int athena_collision3d_add_mesh(AthenaCollision3DWorld *w,const AthenaMesh3D *mesh,
     const AthenaMatrix4 *transform,uint32_t layer) {
     if(!mesh) return ATHENA_COLLISION3D_EINVAL;
     AthenaMesh3DView v; athena_mesh3d_view(mesh,&v);
-    return athena_collision3d_add_triangles(w,&v.positions[0].x,v.vertex_count/3,transform,layer);
+    return add_triangles(w,&v.positions[0].x,v.indices,v.vertex_count/3,transform,layer);
 }
 /* Collects the subtree's visible meshes into one buffer of world triangles. */
 typedef struct { float *data; uint32_t count,capacity; } Soup;
@@ -112,7 +120,7 @@ static int soup_node(Soup *s,AthenaNode3D *n,const AthenaMatrix4 *parent) {
         }
         const float *m=world.value;
         for(uint32_t i=0;i<count*3;i++) {
-            const AthenaPosition3D *p=&v.positions[i]; float *o=&s->data[(size_t)s->count*9+i*3];
+            const AthenaPosition3D *p=&v.positions[athena_mesh3d_corner(&v,i)]; float *o=&s->data[(size_t)s->count*9+i*3];
             for(int r=0;r<3;r++) o[r]=m[r]*p->x+m[4+r]*p->y+m[8+r]*p->z+m[12+r];
         }
         s->count+=count;

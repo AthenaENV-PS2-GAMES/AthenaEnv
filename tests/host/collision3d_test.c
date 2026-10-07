@@ -193,6 +193,27 @@ int main(void) {
     const float sky[3]={0,1,0};
     assert(athena_collision3d_raycast(level,sky,down,10,8,&hit)==1); close_to(hit.distance,4,1e-4f);
     athena_node3d_release(child); athena_node3d_release(parent); athena_mesh3d_release(mesh);
+    /* Compact indexed storage must give the same collision triangles for
+     * mesh and subtree insertion; preserve source triangle IDs across batches. */
+    {
+        const float vertices[]={-1,0,-1,-1,0,1,1,0,1,1,0,-1};
+        uint32_t indices[96];for(unsigned i=0;i<96;i++)indices[i]=(uint32_t[]){0,1,2,0,2,3}[i%6];
+        AthenaGeometry3D indexed={.positions=vertices,.vertex_count=4,.indices=indices,.index_count=96};
+        AthenaMesh3D *m=NULL;assert(!athena_mesh3d_create(&indexed,&m));
+        AthenaMesh3DView v;athena_mesh3d_view(m,&v);assert(v.indices&&v.stream_vertex_count<v.vertex_count);
+        AthenaCollision3DWorld *cw=athena_collision3d_world_create();
+        AthenaMatrix4 tr;ath_matrix4_identity(&tr);tr.value[13]=2;
+        int id=athena_collision3d_add_mesh(cw,m,&tr,1);assert(id>0);
+        assert(athena_collision3d_triangle_count(cw)==32);
+        float origin[]={.75f,5,-.75f};assert(athena_collision3d_raycast(cw,origin,down,10,1,&hit)==1);
+        close_to(hit.distance,3,1e-4f);assert(hit.shape==id&&hit.triangle%2==1);
+        AthenaNode3D *nd=athena_node3d_create();assert(!athena_node3d_set_mesh(nd,m));
+        assert(!athena_node3d_set_position(nd,0,2,0));
+        assert(athena_collision3d_add_node(cw,nd,2)>0);assert(athena_collision3d_triangle_count(cw)==64);
+        athena_node3d_release(nd);athena_mesh3d_release(m);
+        assert(athena_collision3d_raycast(cw,origin,down,10,2,&hit)==1);close_to(hit.distance,3,1e-4f);
+        athena_collision3d_world_release(cw);
+    }
     /* Many triangles: the tree answers the same as brute force. */
     for(int i=0;i<200;i++) {
         float y=(float)(i%10),x=(float)(i/10)*3;

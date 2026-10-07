@@ -38,7 +38,9 @@ int athena_node3d_set_euler(AthenaNode3D *node,float x,float y,float z);
  * the node's local axes (direction = axis, length = speed). Zero stops it. */
 int athena_node3d_set_velocity(AthenaNode3D *node,float x,float y,float z);
 int athena_node3d_set_spin(AthenaNode3D *node,float x,float y,float z);
-/* Skins: the joint nodes (retained) and their inverse bind matrices (copied;
+/* Skins: the joint nodes (weak references: a joint is often an ancestor of
+ * the skinned node, so retaining it would form a cycle; a freed joint makes
+ * the skinned draw report ESTALE) and their inverse bind matrices (copied;
  * NULL means identity). A node with a skinned mesh (Model3D joints and
  * weights) and a skin is drawn with its vertices deformed by
  * world(joint) * inverse_bind each frame, in world space: the node's own
@@ -56,6 +58,9 @@ int athena_node3d_set_skin(AthenaNode3D *node,AthenaSkin3D *skin);
  * weight is blended on the EE at draw (base + sum(weight * delta)), before
  * skinning; the node bounds grow by the weighted delta ranges. */
 int athena_node3d_set_weights(AthenaNode3D *node,const float *weights,uint32_t count);
+/* A follower takes its parent's weights whenever the parent's are set (the
+ * extra primitives of a glTF mesh, which share its morph targets). */
+int athena_node3d_set_morph_follower(AthenaNode3D *node,int follow);
 /* Copies the ATHENA_MODEL3D_MAX_TARGETS weights. */
 void athena_node3d_get_weights(const AthenaNode3D *node,float weights[ATHENA_MODEL3D_MAX_TARGETS]);
 /* Local TRS as set (rotation unit length). */
@@ -103,7 +108,7 @@ int athena_scene3d_advance(AthenaScene3D *scene,float dt);
  * Overflowing transforms return EINVAL and leave the scene stale. */
 int athena_scene3d_update(AthenaScene3D *scene,AthenaScene3DUpdateStats *stats);
 /* Culls subtrees by world bounds, queues visible meshes sorted by pipeline
- * (unlit, diffuse, textured; stable traversal order) and draws them with
+ * (unlit, diffuse, textured by texture; stable traversal order) and draws them with
  * Render3D. Never advances game state. Stats are reset. ESTALE before update;
  * ENOMEM before any submission; ERENDER stores the Render3D code (-1 invalid
  * transform, -2 packet/program memory, -3 no zbuffer) in *render_error. */

@@ -1,8 +1,9 @@
 {
-  "id": "model3d", "name": "Model3D", "description": "Immutable meshes, copied materials, normals, UVs and retained opaque textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
+  "id": "model3d", "name": "Model3D", "description": "Immutable meshes with copied materials, normals, UVs, procedural skin/morph streams and retained textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
   "category": "Graphics", "version": "1.4.0", "default": false,
-  "sources": ["native/model3d.c", "native/model3d_load.c", "native/texture3d.c", "native/texture3d_gs.c", "native/fast_obj/fast_obj.c"],
+  "sources": ["native/model3d.c", "native/model3d_load.c", "native/texture3d.c", "native/texture3d_gs.c", "native/model3d_detail.c", "native/fast_obj/fast_obj.c"],
   "dependencies": {"modules": ["quaternion", "image"], "iop": [], "ee_libs": []},
+  "native": {"shutdown": "athena_model3d_module_shutdown"},
   "quickjs": {"sources": ["quickjs/ath_model3d.c"], "module_name": "Model3D", "global_alias": "Model3D", "init_func": "athena_model3d_js_init"},
   "types": "model3d.d.ts"
 }

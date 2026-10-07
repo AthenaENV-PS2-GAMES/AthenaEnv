@@ -166,7 +166,9 @@ void athena_image_buffer_release(AthenaImageBuffer *buffer)
 	buffer->bytes = 0;
 }
 
-int athena_image_decode(const char *path, AthenaImageBuffer *buffer)
+/* path, or data/size: one source. */
+static int image_decode(const char *path, const void *data, size_t data_size,
+	AthenaImageBuffer *buffer)
 {
 	/*
 	 * The format loaders fill a GSSURFACE, but this one is a private
@@ -179,7 +181,7 @@ int athena_image_decode(const char *path, AthenaImageBuffer *buffer)
 	if (!buffer)
 		return -1;
 	memset(buffer, 0, sizeof(*buffer));
-	if (!path) {
+	if (!path && !data) {
 		buffer->error = ATHENA_IMAGE_LOAD_OPEN;
 		return -1;
 	}
@@ -187,7 +189,8 @@ int athena_image_decode(const char *path, AthenaImageBuffer *buffer)
 	scratch.PSM = GS_PSM_CT32;
 	scratch.ClutPSM = GS_PSM_CT32;
 	scratch.Filter = GS_FILTER_NEAREST;
-	if (load_image_ex(&scratch, path, true, &buffer->error) < 0) {
+	if ((path ? load_image_ex(&scratch, path, true, &buffer->error) :
+		load_image_memory_ex(&scratch, data, data_size, true, &buffer->error)) < 0) {
 		free(scratch.Mem);
 		free(scratch.Clut);
 		if (buffer->error == ATHENA_IMAGE_LOAD_OK)
@@ -216,6 +219,24 @@ int athena_image_decode(const char *path, AthenaImageBuffer *buffer)
 	buffer->bytes = size + (scratch.Clut ? image_clut_size(scratch.PSM) : 0);
 	buffer->error = ATHENA_IMAGE_LOAD_OK;
 	return 0;
+}
+
+int athena_image_decode(const char *path, AthenaImageBuffer *buffer)
+{
+	if (!path) {
+		if (buffer) {
+			memset(buffer, 0, sizeof(*buffer));
+			buffer->error = ATHENA_IMAGE_LOAD_OPEN;
+		}
+		return -1;
+	}
+	return image_decode(path, NULL, 0, buffer);
+}
+
+int athena_image_decode_memory(const void *data, size_t size,
+	AthenaImageBuffer *buffer)
+{
+	return image_decode(NULL, data, size, buffer);
 }
 
 int athena_image_apply_buffer(AthenaImage *image, const char *path,

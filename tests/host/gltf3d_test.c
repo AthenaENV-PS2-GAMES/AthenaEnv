@@ -46,7 +46,9 @@ int main(void) {
     athena_player3d_release(player);
     player=athena_player3d_create(bob,nodes,3); assert(player);
     athena_player3d_play(player); athena_player3d_advance(player,.5f);
-    trs(base,p,&q,s); closef(s[0],1.5f); /* CUBICSPLINE values, played linearly */
+    trs(base,p,&q,s); closef(s[0],1.5f); /* CUBICSPLINE: Hermite equals linear at the midpoint */
+    /* Zero tangents ease in and out: at u = 0.25, 1 + (2-1)*(3u^2-2u^3) = 1.15625 (linear: 1.25). */
+    assert(!athena_player3d_set_time(player,.25f)); trs(base,p,&q,s); closef(s[0],1.15625f);
     athena_player3d_release(player);
     /* The scene owns nothing the caller still uses after release... */
     athena_node3d_retain(base);
@@ -63,6 +65,14 @@ int main(void) {
     AthenaScene3DDrawStats ds; int render=0;
     AthenaMesh3DView source; athena_mesh3d_view(athena_node3d_mesh(athena_gltf3d_node(g,0)),&source);
     assert(source.joints && source.joint_count==2 && source.vertex_count==54);
+    /* Expand the oracle in original corner order; descriptors below borrow
+     * these explicit arrays, not the compact native streams. */
+    AthenaPosition3D source_positions[54],source_normals[54];float source_weights[54*4];uint8_t source_joints[54*4];
+    for(uint32_t i=0;i<54;i++) {
+        uint32_t j=athena_mesh3d_corner(&source,i);source_positions[i]=source.positions[j];source_normals[i]=source.normals[j];
+        memcpy(source_weights+i*4,source.weights+j*4,4*sizeof(float));memcpy(source_joints+i*4,source.joints+j*4,4);
+    }
+    source.positions=source_positions;source.normals=source_normals;source.weights=source_weights;source.joints=source_joints;source.indices=NULL;
     host_vu_skins=0;
     assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&render) && ds.queued_objects==1);
     assert(host_vu_skins==1); /* contained: deformed on VU1 */
@@ -74,14 +84,34 @@ int main(void) {
     assert(!athena_player3d_set_time(bend,1)); /* tip at 90 degrees */
     assert(athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&render)==ATHENA_SCENE3D_ESTALE);
     assert(!athena_scene3d_update(scene,NULL));
-    for(int pass=0;pass<2;pass++) {
+    AthenaMesh3D *bind_mesh=(AthenaMesh3D *)athena_node3d_mesh(bend_nodes[0]); athena_mesh3d_retain(bind_mesh);
+    for(int pass=0;pass<4;pass++) {
+        if(pass==2) {
+            /* Keep the glTF skin/palette while replacing its mesh with a
+             * textured copy. Both the contained and clipped routes must work. */
+            uint16_t joints[54*4]; float uv[54*2];
+            for(unsigned i=0;i<54*4;i++) joints[i]=source.joints[i];
+            for(unsigned i=0;i<54*2;i++) uv[i]=(i%2)?1:0;
+            uint32_t pixel=0xffffffff;
+            AthenaTexture3DPixels px={.width=1,.height=1,.pixels=&pixel,.pixel_count=1};
+            AthenaTexture3D *texture=NULL; assert(!athena_texture3d_create(&px,&texture));
+            AthenaMaterial3D mat=source.material; mat.texture=texture;
+            AthenaGeometry3D geometry={.positions=(const float *)source.positions,.vertex_count=54,
+                .normals=(const float *)source.normals,.normal_count=54,.texcoords=uv,.texcoord_count=54,
+                .joints=joints,.weights=source.weights,.skin_count=54,.material=&mat};
+            AthenaMesh3D *mesh=NULL; assert(!athena_mesh3d_create(&geometry,&mesh));
+            assert(!athena_node3d_set_mesh(bend_nodes[0],mesh));
+            athena_mesh3d_release(mesh); athena_texture3d_release(texture);
+            assert(!athena_scene3d_update(scene,NULL)); athena_camera3d_init(&camera);
+        }
         /* Pass 0: contained, VU1 (8-bit weights). Pass 1: the camera inside the
          * column makes it cross the frustum: EE skinning with float weights. */
-        if(pass) { const float eye[3]={0,1,0},at[3]={0,1,-1}; assert(athena_camera3d_set_view(&camera,eye,at)); }
+        if(pass%2) { const float eye[3]={0,1,0},at[3]={0,1,-1}; assert(athena_camera3d_set_view(&camera,eye,at)); }
         host_vu_skins=0;
         assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&render));
-        assert(host_vu_skins==(pass?0u:1u));
-        void (*check)(float,float)=pass?closef:closeq;
+        assert(host_vu_skins==(pass%2?0u:1u));
+        assert((host_last_view.material.texture!=NULL)==(pass>=2));
+        void (*check)(float,float)=pass%2?closef:closeq;
         for(uint32_t i=0;i<source.vertex_count;i++) {
             const AthenaPosition3D *v=&source.positions[i];
             float wt=source.weights[i*4+1],rx=1-v->y,ry=v->x+1;   /* Rz(90) about (0, 1) */
@@ -93,6 +123,7 @@ int main(void) {
         const AthenaPosition3D *n=&host_last_view.normals[53];
         closeq(n->x*n->x+n->y*n->y+n->z*n->z,1); closeq(n->x,-1); /* top cap: +Y turned to -X */
     }
+    athena_mesh3d_release(bind_mesh);
     athena_player3d_release(bend);
     athena_scene3d_release(scene); athena_gltf3d_release(g);
     /* Morph targets: stretch raises the top face, pinch (sparse accessor)
@@ -124,7 +155,7 @@ int main(void) {
         closef(hi[1],1+wt[0]); closef(lo[1],-1);
         assert(!athena_scene3d_draw(scene,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&ds,&render) && ds.queued_objects==1);
         for(uint32_t i=0;i<36;i++) {
-            const AthenaPosition3D *b=&mv.positions[i],*d=&host_last_view.positions[i];
+            const AthenaPosition3D *b=&mv.positions[athena_mesh3d_corner(&mv,i)],*d=&host_last_view.positions[i];
             int top=b->y>0;
             closef(d->y,b->y+(top?wt[0]:0));
             closef(d->x,b->x*(top?1-wt[1]:1)); closef(d->z,b->z*(top?1-wt[1]:1));
@@ -139,6 +170,33 @@ int main(void) {
     host_morph_refuse=0;
     athena_player3d_release(morph);
     athena_scene3d_release(scene); athena_gltf3d_release(g);
+    /* No sampler: glTF's repeat addressing and linear filtering. Two
+     * primitives sharing an image share one Texture3D; tiled UVs import;
+     * lighting-only data (normalTexture) is ignored. */
+    {
+        AthenaGltf3D *shared=NULL;
+        assert(!athena_gltf3d_load("tests/host/3d/shared_texture.gltf",NULL,&shared));
+        AthenaNode3D *node=athena_gltf3d_node(shared,0);
+        assert(athena_node3d_child_count(node)==1);
+        AthenaMesh3DView a,b;
+        athena_mesh3d_view(athena_node3d_mesh(node),&a);
+        athena_mesh3d_view(athena_node3d_mesh(athena_node3d_child(node,0)),&b);
+        assert(a.material.texture&&a.material.texture==b.material.texture);
+        assert(a.texcoords[1].u==2&&a.texcoords[2].v==-1);
+        AthenaTexture3DPixels pixels; athena_texture3d_view(a.material.texture,&pixels);
+        assert(pixels.wrap==ATHENA_TEXTURE3D_REPEAT&&pixels.filter==ATHENA_TEXTURE3D_LINEAR);
+        athena_gltf3d_release(shared);
+    }
+    /* Embedded image (base64 data URI) with a per-axis sampler: clamp U,
+     * repeat V, nearest. */
+    {
+        AthenaGltf3D *embedded=NULL;
+        assert(!athena_gltf3d_load("tests/host/3d/embedded_texture.gltf",NULL,&embedded));
+        AthenaMesh3DView v; athena_mesh3d_view(athena_node3d_mesh(athena_gltf3d_node(embedded,0)),&v);
+        AthenaTexture3DPixels pixels; assert(v.material.texture); athena_texture3d_view(v.material.texture,&pixels);
+        assert(pixels.width==64&&pixels.wrap==ATHENA_TEXTURE3D_REPEAT_V&&pixels.filter==ATHENA_TEXTURE3D_NEAREST);
+        athena_gltf3d_release(embedded);
+    }
     puts("glTF3D host tests passed");
     return 0;
 }

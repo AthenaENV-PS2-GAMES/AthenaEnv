@@ -1,6 +1,7 @@
 #ifndef ATHENA_CAMERA3D_H
 #define ATHENA_CAMERA3D_H
 #include <stdbool.h>
+#include <stdint.h>
 #include <athena/matrix4.h>
 
 /* Right-handed world, camera faces -Z; column-major matrices / column vectors.
@@ -13,6 +14,7 @@ typedef struct {
     float fov_y_degrees, aspect, near_clip, far_clip;
     AthenaMatrix4 view, projection, view_projection;
     bool dirty;
+    uint64_t stamp; /* Unique revision of the current view_projection. */
 } AthenaCamera3D;
 void athena_camera3d_init(AthenaCamera3D *camera);
 int athena_camera3d_set_projection(AthenaCamera3D *camera, float fov_y_degrees,

@@ -1,5 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
+#include <malloc.h>
+#include <string.h>
 #include <athena/float_bits.h>
 #include <athena/loop.h>
 #include <athena/tween3d.h>
@@ -38,7 +40,9 @@ int athena_tween3d_create(AthenaTween3DTarget kind,void *target,void (*release_t
     uint32_t allowed=kind==ATHENA_TWEEN3D_CAMERA?(ATHENA_TWEEN3D_POSITION|ATHENA_TWEEN3D_LOOK):
         (ATHENA_TWEEN3D_POSITION|ATHENA_TWEEN3D_SCALE|ATHENA_TWEEN3D_ROTATION);
     if(!target||!desc||kind>ATHENA_TWEEN3D_CAMERA||(desc->channels&~allowed)||!finite_desc(desc)) return ATHENA_TWEEN3D_EINVAL;
-    AthenaTween3D *t=calloc(1,sizeof(*t)); if(!t) return ATHENA_TWEEN3D_ENOMEM;
+    /* AthenaQuaternion members are quadword aligned: calloc only guarantees 8 bytes. */
+    AthenaTween3D *t=memalign(16,sizeof(*t)); if(!t) return ATHENA_TWEEN3D_ENOMEM;
+    memset(t,0,sizeof(*t));
     if(desc->channels&ATHENA_TWEEN3D_ROTATION&&
         !athena_quaternion_euler(&t->to_rotation,desc->rotation[0],desc->rotation[1],desc->rotation[2])) {
         free(t); return ATHENA_TWEEN3D_EINVAL;

@@ -4,16 +4,22 @@
 #include <string.h>
 #include <math.h>
 #include <athena/model3d.h>
+#if defined(__mips__)
+#include <kernel.h>
+#endif
 struct AthenaMesh3D {
     uint64_t refs;
-    uint32_t count;
+    /* Last DMA generation whose chain references the streams (Render3D). */
+    uint64_t dma_generation;
+    uint32_t count,stream_count,chunk_count;
+    uint16_t *indices; uint8_t *chunk_indices; AthenaMesh3DChunk *chunks;
     AthenaPosition3D *positions; AthenaColor3D *colors;
     AthenaPosition3D *normals;
     AthenaTexcoord3D *texcoords;
     uint8_t *joints; float *weights; uint8_t *weights8; uint32_t joint_count;
     AthenaPosition3D *target_positions,*target_normals; uint32_t target_count;
     float target_minimum[ATHENA_MODEL3D_MAX_TARGETS][3],target_maximum[ATHENA_MODEL3D_MAX_TARGETS][3];
-    int flat_normals;
+    int flat_normals; uint16_t *deform_reuse;
     AthenaMaterial3D material;
     float minimum[3],maximum[3];
 };
@@ -40,17 +46,37 @@ const char *athena_model3d_error(int result) {
  * to true. TypedArray input still carries arbitrary IEEE bits: inspect those. */
 
 void athena_material3d_default(AthenaMaterial3D *m) {
-    *m=(AthenaMaterial3D){.shading=ATHENA_MATERIAL3D_UNLIT,.base_color={1,1,1,1}};
+    *m=(AthenaMaterial3D){.shading=ATHENA_MATERIAL3D_UNLIT,.base_color={1,1,1,1},.alpha_cutoff=.5f};
 }
 int athena_material3d_validate(const AthenaMaterial3D *m) {
     if(!m||(m->shading!=ATHENA_MATERIAL3D_UNLIT&&m->shading!=ATHENA_MATERIAL3D_DIFFUSE)) return 0;
     for(unsigned j=0;j<4;j++) if(!athena_float_isfinite(m->base_color[j])||m->base_color[j]<0||m->base_color[j]>1) return 0;
+    if((m->alpha_mask!=0&&m->alpha_mask!=1)||!athena_float_isfinite(m->alpha_cutoff)||m->alpha_cutoff<0||m->alpha_cutoff>1) return 0;
     return 1;
 }
-static int normalize(AthenaPosition3D *out,double x,double y,double z) {
-    double length=sqrt(x*x+y*y+z*z);
-    if(length==0) return 0;
+/* Float: the R5900 emulates double in software. Dividing by the largest
+ * component first keeps the squares in [1,3]: no overflow or underflow. */
+static int normalize(AthenaPosition3D *out,float x,float y,float z) {
+    float m=fabsf(x); if(fabsf(y)>m) m=fabsf(y); if(fabsf(z)>m) m=fabsf(z);
+    if(!(m>0)||!athena_float_isfinite(m)) return 0;
+    x/=m; y/=m; z/=m;
+    float length=sqrtf(x*x+y*y+z*z);
     *out=(AthenaPosition3D){x/length,y/length,z/length}; return 1;
+}
+/* The unit normal of triangle abc, or 0 when it is degenerate (or its edges
+ * overflow). Validation and flat generation share it, so every triangle
+ * validation accepts gets a normal. Edges are rescaled before the cross
+ * product, which then neither overflows nor underflows. */
+static int face_normal(const float a[3],const float b[3],const float c[3],AthenaPosition3D *out) {
+    float u[3],v[3],m=0;
+    for(int j=0;j<3;j++) {
+        u[j]=b[j]-a[j]; v[j]=c[j]-a[j];
+        if(fabsf(u[j])>m) m=fabsf(u[j]);
+        if(fabsf(v[j])>m) m=fabsf(v[j]);
+    }
+    if(!(m>0)||!athena_float_isfinite(m)) return 0;
+    for(int j=0;j<3;j++) { u[j]/=m; v[j]/=m; }
+    return normalize(out,u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]);
 }
 AthenaGeometry3DIssue athena_geometry3d_validate(const AthenaGeometry3D *g,uint32_t *offset) {
     if(offset) *offset=0;
@@ -68,16 +94,16 @@ AthenaGeometry3DIssue athena_geometry3d_validate(const AthenaGeometry3D *g,uint3
     if((!g->joints)!=(!g->weights)||(g->joints&&g->skin_count!=g->vertex_count)||(!g->joints&&g->skin_count))
         return ATHENA_GEOMETRY3D_SKIN_COUNT;
     if(g->joints) for(uint32_t i=0;i<g->skin_count;i++) {
-        float sum=0;
+        float maximum=0;
         for(int k=0;k<4;k++) {
             float w=g->weights[i*4+k];
             if(g->joints[i*4+k]>=ATHENA_MODEL3D_MAX_JOINTS||!athena_float_isfinite(w)||w<0) {
                 if(offset) *offset=i*4+k;
                 return ATHENA_GEOMETRY3D_SKIN;
             }
-            sum+=w;
+            if(w>maximum) maximum=w;
         }
-        if(!(sum>0)) { if(offset) *offset=i*4; return ATHENA_GEOMETRY3D_SKIN; }
+        if(!(maximum>0)) { if(offset) *offset=i*4; return ATHENA_GEOMETRY3D_SKIN; }
     }
     if(g->target_count>ATHENA_MODEL3D_MAX_TARGETS||(!g->target_positions)!=(!g->target_count)||
         (g->target_normals&&(!g->target_count||!g->normals))) return ATHENA_GEOMETRY3D_TARGET_COUNT;
@@ -102,7 +128,7 @@ AthenaGeometry3DIssue athena_geometry3d_validate(const AthenaGeometry3D *g,uint3
         return ATHENA_GEOMETRY3D_INDEX;
     }
     if(g->texcoords) for(uint32_t i=0;i<g->texcoord_count*2;i++) {
-        if(!athena_float_isfinite(g->texcoords[i])||g->texcoords[i]<0||g->texcoords[i]>1) {
+        if(!athena_float_isfinite(g->texcoords[i])||fabsf(g->texcoords[i])>ATHENA_MODEL3D_UV_LIMIT) {
             if(offset) *offset=i;
             return ATHENA_GEOMETRY3D_TEXCOORD;
         }
@@ -120,8 +146,8 @@ AthenaGeometry3DIssue athena_geometry3d_validate(const AthenaGeometry3D *g,uint3
             const float *a=&g->positions[(g->indices?g->indices[i]:i)*3];
             const float *b=&g->positions[(g->indices?g->indices[i+1]:i+1)*3];
             const float *c=&g->positions[(g->indices?g->indices[i+2]:i+2)*3];
-            double u[3],v[3]; for(unsigned j=0;j<3;j++) { u[j]=(double)b[j]-a[j]; v[j]=(double)c[j]-a[j]; }
-            if(u[1]*v[2]-u[2]*v[1]==0&&u[2]*v[0]-u[0]*v[2]==0&&u[0]*v[1]-u[1]*v[0]==0) {
+            AthenaPosition3D n;
+            if(!face_normal(a,b,c,&n)) {
                 if(offset) *offset=i;
                 return ATHENA_GEOMETRY3D_NORMAL;
             }
@@ -129,13 +155,71 @@ AthenaGeometry3DIssue athena_geometry3d_validate(const AthenaGeometry3D *g,uint3
     }
     return ATHENA_GEOMETRY3D_VALID;
 }
+#ifndef ATHENA_MODEL3D_INDEXED
+#define ATHENA_MODEL3D_INDEXED 1
+#endif
+/* Prepare batches once, instead of gathering streams on every draw. Source
+ * identities may recur between batches; deform_reuse preserves CPU sharing.
+ * Optional optimization: no gain or allocation failure leaves triangle soup. */
+static uint16_t *indexed_plan(AthenaMesh3D *m,const AthenaGeometry3D *g,uint32_t corners,uint32_t *stored) {
+    if(!ATHENA_MODEL3D_INDEXED||!g->indices||(!g->normals&&m->material.shading==ATHENA_MATERIAL3D_DIFFUSE)) return NULL;
+    uint32_t max_vertices=g->target_count?16:ATHENA_MESH3D_INDEXED_VERTICES;
+    uint32_t max_corners=g->target_count?24:ATHENA_MESH3D_INDEXED_CORNERS;
+    uint32_t capacity=(corners+23)/24+1;
+    /* Morph's vertex limit can end a batch after as few as 15 corners. */
+    if(g->target_count) capacity=(corners+14)/15+1;
+    AthenaMesh3DChunk *chunks=calloc(capacity,sizeof(*chunks));
+    uint16_t *indices=malloc(corners*sizeof(*indices));
+    uint16_t *sources=malloc((corners+capacity*3)*sizeof(*sources));
+    uint8_t *local=memalign(16,capacity*ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    if(!chunks||!indices||!sources||!local) { free(chunks);free(indices);free(sources);free(local);return NULL; }
+    memset(local,0,capacity*ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    uint32_t first=0,used=0,batches=0;
+    while(first<corners) {
+        uint16_t unique[ATHENA_MESH3D_INDEXED_VERTICES];uint32_t n=0,end=first;
+        uint8_t *packed=local+batches*ATHENA_MESH3D_INDEXED_INDEX_BYTES;
+        while(end<corners&&end-first+3<=max_corners) {
+            uint32_t old=n;uint8_t tri[3];
+            for(unsigned k=0;k<3;k++) {
+                uint16_t source=g->indices[end+k];uint32_t j=0;
+                while(j<n&&unique[j]!=source)j++;
+                if(j==n) { if(n==max_vertices) { n=max_vertices+1;break; } unique[n++]=source; }
+                tri[k]=j;
+            }
+            if(n>max_vertices) { n=old;break; }
+            for(unsigned k=0;k<3;k++) { packed[end-first+k]=tri[k];indices[end+k]=used+tri[k]; }
+            end+=3;
+        }
+        uint32_t padded=(n+3)&~3u;
+        /* uint16 stream indices must remain below the legacy vertex limit. */
+        if(used+padded>ATHENA_MODEL3D_MAX_VERTICES) goto fallback;
+        for(uint32_t i=0;i<padded;i++)sources[used+i]=unique[i<n?i:0];
+        chunks[batches++]=(AthenaMesh3DChunk){first,used,n,end-first};
+        first=end;used+=padded;
+    }
+    uint32_t stride=16+(g->normals?12:0)+(g->texcoords?8:0)+(g->joints?24:0)+
+        g->target_count*12*(g->target_normals?2:1);
+    size_t cost=(size_t)used*stride+corners*sizeof(*indices)+batches*(sizeof(*chunks)+ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    if(cost>=(size_t)corners*stride)goto fallback;
+    AthenaMesh3DChunk *exact_chunks=malloc(batches*sizeof(*chunks));
+    uint8_t *exact_local=memalign(16,batches*ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    if(!exact_chunks||!exact_local) {free(exact_chunks);free(exact_local);goto fallback;}
+    memcpy(exact_chunks,chunks,batches*sizeof(*chunks));
+    memcpy(exact_local,local,batches*ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    free(chunks);free(local);chunks=exact_chunks;local=exact_local;
+    m->indices=indices;m->chunks=chunks;m->chunk_indices=local;m->chunk_count=batches;*stored=used;
+    return sources;
+fallback:
+    free(chunks);free(indices);free(sources);free(local);return NULL;
+}
 int athena_mesh3d_create(const AthenaGeometry3D *g,AthenaMesh3D **out) {
     if(!out) return ATHENA_MODEL3D_EINVAL;
     *out=NULL;
     if(athena_geometry3d_validate(g,NULL)!=ATHENA_GEOMETRY3D_VALID) return ATHENA_MODEL3D_EINVAL;
-    uint32_t count=g->indices?g->index_count:g->vertex_count;
+    uint32_t corners=g->indices?g->index_count:g->vertex_count,count=corners;
     AthenaMesh3D *m=calloc(1,sizeof(*m)); if(!m) return ATHENA_MODEL3D_ENOMEM;
     athena_material3d_default(&m->material); if(g->material) m->material=*g->material;
+    uint16_t *sources=indexed_plan(m,g,corners,&count);
     m->positions=memalign(16,(count+4)*sizeof(*m->positions));
     m->colors=memalign(16,(count+4)*sizeof(*m->colors));
     if(g->normals||m->material.shading==ATHENA_MATERIAL3D_DIFFUSE) m->normals=memalign(16,(count+4)*sizeof(*m->normals));
@@ -150,11 +234,11 @@ int athena_mesh3d_create(const AthenaGeometry3D *g,AthenaMesh3D **out) {
         (g->target_count&&!m->target_positions)||(g->target_normals&&!m->target_normals)) {
         free(m->positions); free(m->colors); free(m->normals); free(m->texcoords);
         free(m->joints); free(m->weights); free(m->weights8);
-        free(m->target_positions); free(m->target_normals); free(m); return ATHENA_MODEL3D_ENOMEM;
+        free(m->target_positions); free(m->target_normals); free(m->deform_reuse);free(m->indices);free(m->chunks);free(m->chunk_indices);free(sources); free(m); return ATHENA_MODEL3D_ENOMEM;
     }
     m->target_count=g->target_count;
     for(uint32_t t=0;t<g->target_count;t++) for(uint32_t i=0;i<count;i++) {
-        uint32_t source=t*g->vertex_count+(g->indices?g->indices[i]:i);
+        uint32_t source=t*g->vertex_count+(sources?sources[i]:g->indices?g->indices[i]:i);
         const float *d=&g->target_positions[source*3];
         m->target_positions[t*count+i]=(AthenaPosition3D){d[0],d[1],d[2]};
         if(g->target_normals) {
@@ -173,18 +257,21 @@ int athena_mesh3d_create(const AthenaGeometry3D *g,AthenaMesh3D **out) {
     if(m->normals) memset(m->normals,0,(count+4)*sizeof(*m->normals));
     if(m->texcoords) memset(m->texcoords,0,(count+4)*sizeof(*m->texcoords));
     for(uint32_t i=0;i<count;i++) {
-        uint32_t source=g->indices?g->indices[i]:i;
+        uint32_t source=sources?sources[i]:g->indices?g->indices[i]:i;
         const float *p=&g->positions[source*3];
         m->positions[i]=(AthenaPosition3D){p[0],p[1],p[2]};
         if(g->texcoords) m->texcoords[i]=(AthenaTexcoord3D){g->texcoords[source*2],g->texcoords[source*2+1]};
         if(g->joints) {
-            const float *w=&g->weights[source*4]; float sum=w[0]+w[1]+w[2]+w[3];
+            const float *w=&g->weights[source*4];
             int largest=0,total=0;
+            for(int k=1;k<4;k++) if(w[k]>w[largest]) largest=k;
+            /* Rescale first: finite weights may sum beyond FLT_MAX. */
+            float scaled[4],sum=0;
+            for(int k=0;k<4;k++) { scaled[k]=w[k]/w[largest]; sum+=scaled[k]; }
             for(int k=0;k<4;k++) {
-                m->joints[i*4+k]=(uint8_t)g->joints[source*4+k]; m->weights[i*4+k]=w[k]/sum;
+                m->joints[i*4+k]=(uint8_t)g->joints[source*4+k]; m->weights[i*4+k]=scaled[k]/sum;
                 if(w[k]>0&&g->joints[source*4+k]+1u>m->joint_count) m->joint_count=g->joints[source*4+k]+1u;
-                m->weights8[i*4+k]=(uint8_t)lroundf(w[k]/sum*255); total+=m->weights8[i*4+k];
-                if(w[k]>w[largest]) largest=k;
+                m->weights8[i*4+k]=(uint8_t)lroundf(scaled[k]/sum*255); total+=m->weights8[i*4+k];
             }
             /* The largest weight absorbs the rounding: the sum is exactly 255. */
             m->weights8[i*4+largest]=(uint8_t)(m->weights8[i*4+largest]+255-total);
@@ -202,14 +289,45 @@ int athena_mesh3d_create(const AthenaGeometry3D *g,AthenaMesh3D **out) {
     }
     m->flat_normals=m->normals&&!g->normals;
     if(m->normals&&!g->normals) for(uint32_t i=0;i<count;i+=3) {
-        AthenaPosition3D a=m->positions[i],b=m->positions[i+1],c=m->positions[i+2],n;
-        double ux=(double)b.x-a.x,uy=(double)b.y-a.y,uz=(double)b.z-a.z;
-        double vx=(double)c.x-a.x,vy=(double)c.y-a.y,vz=(double)c.z-a.z;
-        normalize(&n,uy*vz-uz*vy,uz*vx-ux*vz,ux*vy-uy*vx);
+        const AthenaPosition3D *p=&m->positions[i]; AthenaPosition3D n;
+        const float a[3]={p[0].x,p[0].y,p[0].z},b[3]={p[1].x,p[1].y,p[1].z},c[3]={p[2].x,p[2].y,p[2].z};
+        face_normal(a,b,c,&n); /* validation accepted this triangle: never degenerate */
         m->normals[i]=m->normals[i+1]=m->normals[i+2]=n;
     }
+    /* Retain source identity for CPU fallback deformation. Optional metadata:
+     * failed allocation leaves the original per-corner computation available.
+     * Generated flat normals differ across faces, so do not share them. */
+    if(g->indices&&(g->joints||g->target_count)&&!m->flat_normals) {
+        uint16_t *first=malloc(g->vertex_count*sizeof(*first));
+        uint16_t *reuse=malloc(count*sizeof(*reuse)); unsigned duplicates=0;
+        if(first&&reuse) {
+            memset(first,0xff,g->vertex_count*sizeof(*first));
+            for(uint32_t i=0;i<count;i++) {
+                uint32_t source=sources?sources[i]:g->indices[i];
+                if(first[source]==UINT16_MAX) first[source]=i;
+                else duplicates++;
+                reuse[i]=first[source];
+            }
+            if(duplicates) { m->deform_reuse=reuse; reuse=NULL; }
+        }
+        free(first); free(reuse);
+    }
     athena_texture3d_retain(m->material.texture);
-    m->refs=1; m->count=count; *out=m; return 0;
+    m->refs=1; m->count=corners;m->stream_count=count;free(sources);
+    /* The streams are immutable from here: write them back once, so DMA can
+     * read them in place (Render3D REF tags) instead of copying per draw. */
+#if defined(__mips__)
+    if(m->chunk_indices) SyncDCache(m->chunk_indices,m->chunk_indices+m->chunk_count*ATHENA_MESH3D_INDEXED_INDEX_BYTES);
+    SyncDCache(m->positions,(uint8_t *)(m->positions+count+4));
+    SyncDCache(m->colors,(uint8_t *)(m->colors+count+4));
+    if(m->normals) SyncDCache(m->normals,(uint8_t *)(m->normals+count+4));
+    if(m->texcoords) SyncDCache(m->texcoords,(uint8_t *)(m->texcoords+count+4));
+#endif
+    *out=m; return 0;
+}
+int athena_mesh3d_dma_claim(AthenaMesh3D *m,uint64_t generation) {
+    if(!m||m->dma_generation==generation) return 0;
+    m->dma_generation=generation; return 1;
 }
 void athena_mesh3d_retain(AthenaMesh3D *m) { if(m) m->refs++; }
 void athena_mesh3d_release(AthenaMesh3D *m) {
@@ -217,7 +335,7 @@ void athena_mesh3d_release(AthenaMesh3D *m) {
         athena_texture3d_release(m->material.texture);
         free(m->positions); free(m->colors); free(m->normals); free(m->texcoords);
         free(m->joints); free(m->weights); free(m->weights8);
-        free(m->target_positions); free(m->target_normals); free(m);
+        free(m->target_positions); free(m->target_normals); free(m->deform_reuse);free(m->indices);free(m->chunks);free(m->chunk_indices); free(m);
     }
 }
 void athena_mesh3d_view(const AthenaMesh3D *m,AthenaMesh3DView *out) {
@@ -225,7 +343,8 @@ void athena_mesh3d_view(const AthenaMesh3D *m,AthenaMesh3DView *out) {
         .normals=m->normals,.material=m->material,.texcoords=m->texcoords,
         .joints=m->joints,.weights=m->weights,.joint_count=m->joint_count,.weights8=m->weights8,
         .target_count=m->target_count,.target_positions=m->target_positions,.target_normals=m->target_normals,
-        .target_minimum=m->target_minimum,.target_maximum=m->target_maximum,.flat_normals=m->flat_normals};
+        .target_minimum=m->target_minimum,.target_maximum=m->target_maximum,.flat_normals=m->flat_normals,.deform_reuse=m->deform_reuse,.indices=m->indices,.stream_vertex_count=m->stream_count,
+        .chunks=m->chunks,.chunk_count=m->chunk_count,.chunk_indices=m->chunk_indices};
     memcpy(out->minimum,m->minimum,sizeof(m->minimum)); memcpy(out->maximum,m->maximum,sizeof(m->maximum));
 }
 uint32_t athena_mesh3d_target_count(const AthenaMesh3D *m) { return m?m->target_count:0; }

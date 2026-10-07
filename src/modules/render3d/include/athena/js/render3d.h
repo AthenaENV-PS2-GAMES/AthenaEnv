@@ -5,4 +5,7 @@
 /* Writes the Stats fields to obj: defined on a new object (define=1) or
  * assigned on a reused one. Returns -1 with a pending exception. */
 int athena_render3d_js_put_stats(JSContext *ctx,JSValueConst obj,int define,const AthenaRender3DStats *stats);
+/* Throws for a negative Render3D code, naming athena_render3d_error_detail()
+ * when set. Clear the detail before the draw. */
+JSValue athena_render3d_js_throw(JSContext *ctx,int code);
 #endif

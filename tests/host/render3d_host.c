@@ -3,6 +3,7 @@
 #include <athena/render3d.h>
 #include <stddef.h>
 #include <math.h>
+#include <assert.h>
 #include "render3d_clip.h"
 /* Draws that skipped the frustum test; read by the Scene3D test. */
 unsigned host_contained_draws;
@@ -28,6 +29,20 @@ int athena_render3d_draw_lit(AthenaInstance3D *i,AthenaCamera3D *c,
 }
 /* Last view drawn, for the Scene3D skinning test. */
 AthenaMesh3DView host_last_view;
+static AthenaPosition3D recorded_positions[4096],recorded_normals[4096];
+static AthenaColor3D recorded_colors[4096];
+/* Tests observe original triangle order, independently of compact storage. */
+static void record_view(const AthenaMesh3DView *v) {
+    assert(v->vertex_count<=4096);host_last_view=*v;
+    for(uint32_t i=0;i<v->vertex_count;i++) {
+        uint32_t j=athena_mesh3d_corner(v,i);recorded_positions[i]=v->positions[j];recorded_colors[i]=v->colors[j];
+        if(v->normals)recorded_normals[i]=v->normals[j];
+    }
+    host_last_view.positions=recorded_positions;host_last_view.colors=recorded_colors;
+    if(v->normals)host_last_view.normals=recorded_normals;
+    host_last_view.indices=NULL;host_last_view.chunks=NULL;host_last_view.chunk_indices=NULL;
+    host_last_view.chunk_count=0;host_last_view.stream_vertex_count=v->vertex_count;host_last_view.deform_reuse=NULL;
+}
 /* Tests may raise it to exercise guard band paths. */
 float host_guard_band=1;
 float athena_render3d_guard_band(void) { return host_guard_band; }
@@ -35,7 +50,7 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *m,AthenaC
     const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *s,int relation) {
     if(!view||!m||!c||!s||(cull!=0&&cull!=1&&cull!=-1)) return -1;
     if(!athena_camera3d_update(c)) return -1;
-    AthenaMesh3DView v=*view; host_last_view=v;
+    AthenaMesh3DView v=*view; record_view(&v);
     s->submitted_objects++;
     if(relation<0) relation=athena_camera3d_box_relation(c,m,v.minimum,v.maximum);
     else host_contained_draws++;
@@ -78,9 +93,9 @@ int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *v,const Athen
     uint32_t joint_count,AthenaCamera3D *c,const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *s) {
     (void)lights;
     if(!v||!palette||!c||!s||(cull!=0&&cull!=1&&cull!=-1)||!v->joints||!v->weights8||!v->normals||
-        v->material.texture||!joint_count||joint_count>ATHENA_RENDER3D_SKIN_JOINTS||v->joint_count>joint_count||
+        (v->material.texture&&!v->texcoords)||!joint_count||joint_count>ATHENA_RENDER3D_SKIN_JOINTS||v->joint_count>joint_count||
         v->vertex_count>4096) return -1;
-    for(uint32_t i=0;i<v->vertex_count;i++) {
+    for(uint32_t i=0;i<athena_mesh3d_stream_count(v);i++) {
         float m[16]={0};
         for(int k=0;k<4;k++) {
             float w=v->weights8[i*4+k]/255.0f; const float *pm=palette[v->joints[i*4+k]].value;
@@ -92,11 +107,11 @@ int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *v,const Athen
         float x=m[0]*n->x+m[4]*n->y+m[8]*n->z,y=m[1]*n->x+m[5]*n->y+m[9]*n->z,z=m[2]*n->x+m[6]*n->y+m[10]*n->z;
         float l=sqrtf(x*x+y*y+z*z); vu_normals[i]=(AthenaPosition3D){x/l,y/l,z/l};
     }
-    host_last_view=*v; host_last_view.positions=vu_positions; host_last_view.normals=vu_normals;
+    AthenaMesh3DView deformed=*v;deformed.positions=vu_positions;deformed.normals=vu_normals;record_view(&deformed);
     host_vu_skins++;
     s->submitted_objects++; s->draw_passes++; s->pipeline_passes++;
     s->source_triangles+=v->vertex_count/3; s->triangles+=v->vertex_count/3;
-    s->vu_batches+=(v->vertex_count+29)/30; s->geometry_bytes+=((v->vertex_count+3)&~3u)*36;
+    s->vu_batches+=(v->vertex_count+29)/30; s->geometry_bytes+=((v->vertex_count+3)&~3u)*(v->material.texture?44:36);
     return 0;
 }
 int athena_render3d_draw_view(const AthenaMesh3DView *v,const AthenaMatrix4 *m,AthenaCamera3D *c,
@@ -116,10 +131,10 @@ int athena_render3d_draw_morph(const AthenaMesh3DView *v,const AthenaMatrix4 *m,
     uint32_t active=0;
     for(uint32_t t=0;t<v->target_count;t++) if(weights[t]!=0) active++;
     if(active>ATHENA_RENDER3D_MORPH_TARGETS) return 1;
-    for(uint32_t i=0;i<v->vertex_count;i++) {
+    for(uint32_t i=0;i<athena_mesh3d_stream_count(v);i++) {
         AthenaPosition3D p=v->positions[i];
         for(uint32_t t=0;t<v->target_count;t++) {
-            const AthenaPosition3D *d=&v->target_positions[t*v->vertex_count+i];
+            const AthenaPosition3D *d=&v->target_positions[t*athena_mesh3d_stream_count(v)+i];
             p.x+=weights[t]*d->x; p.y+=weights[t]*d->y; p.z+=weights[t]*d->z;
         }
         vu_positions[i]=p;
@@ -131,7 +146,7 @@ int athena_render3d_draw_morph(const AthenaMesh3DView *v,const AthenaMatrix4 *m,
         float nx=uy*wz-uz*wy,ny=uz*wx-ux*wz,nz=ux*wy-uy*wx,l=sqrtf(nx*nx+ny*ny+nz*nz);
         if(l>1e-12f) vu_normals[i]=vu_normals[i+1]=vu_normals[i+2]=(AthenaPosition3D){nx/l,ny/l,nz/l};
     }
-    host_last_view=*v; host_last_view.positions=vu_positions; if(v->normals) host_last_view.normals=vu_normals;
+    AthenaMesh3DView deformed=*v;deformed.positions=vu_positions;if(v->normals)deformed.normals=vu_normals;record_view(&deformed);
     host_vu_morphs++;
     s->submitted_objects++; s->draw_passes++; s->pipeline_passes++; s->vu_morph_objects++;
     s->source_triangles+=v->vertex_count/3; s->triangles+=v->vertex_count/3;

@@ -59,7 +59,10 @@ static uint8_t saved_depth_method[2] = { DEPTH_ALWAYS, DEPTH_ALWAYS };
 static bool saved_depth_method_valid[2] = { false, false };
 static bool graphics_service_initialized;
 
-#define OWL_PACKET_BUFFER_SIZE 2048
+#ifndef ATHENA_OWL_PACKET_QWORDS
+#define ATHENA_OWL_PACKET_QWORDS 2048
+#endif
+#define OWL_PACKET_BUFFER_SIZE ATHENA_OWL_PACKET_QWORDS
 
 static owl_qword owl_packet_buffer[OWL_PACKET_BUFFER_SIZE] qw_aligned = { 0 };
 
@@ -941,6 +944,7 @@ static void flipScreenDoubleBuffering()
 	sync_screen(gsGlobal);
 
     graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -962,6 +966,7 @@ static void flipScreenDoubleBufferingPerf()
 	owl_flush_packet();
 
     graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -1013,6 +1018,7 @@ static void flipScreenDoubleBufferingNoVSync()
 	owl_flush_packet();
 
     graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	flip_screen(gsGlobal);
@@ -1031,6 +1037,7 @@ static void flipScreenDoubleBufferingPerfNoVSync()
 	owl_flush_packet();
 
     graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
