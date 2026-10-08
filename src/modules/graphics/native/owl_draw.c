@@ -18,40 +18,6 @@ static int texture_upload_pending(int texture_id)
 	return texture_id >= 0;
 }
 
-/*
- * The upload of a texture that is not in VRAM yet runs from the VIF1 MARK
- * interrupt, concurrently with the DIRECT of the draw that follows it. That
- * draw would sample whatever the evicted texture left in the block, for one
- * frame. So the frame that requests an upload only emits the MARK, and the
- * texture is drawn once its upload was issued.
- */
-static bool texture_draw_ready(GSSURFACE *source, int texture_id)
-{
-	owl_packet *packet;
-
-	if (texture_id == GRAPHICS_BIND_RESIDENT)
-		return !(source->Vram & GRAPHICS_TRANSFER_REQUEST_MASK) &&
-			!(source->VramClut & GRAPHICS_TRANSFER_REQUEST_MASK);
-
-	packet = owl_query_packet(CHANNEL_VIF1, 5);
-	owl_add_cnt_tag(packet, 4, 0);
-
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-	owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-	owl_add_tag(packet, GIF_NOP, 0);
-
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
-
-	return false;
-}
-
 static int draw_list_capacity(size_t base_size, size_t item_size)
 {
 	owl_controller *controller = owl_get_controller();
@@ -410,8 +376,6 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
-	if (!texture_draw_ready(source, texture_id))
-		return;
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, (texture_upload_pending(texture_id) ? 11 : 7)+(list_size*3));
 
@@ -501,8 +465,6 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 	}
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
-		return;
-	if (!texture_draw_ready(source, texture_id))
 		return;
 
 	uint32_t packet_list_size = ceilf(list_size*4.5f);
@@ -647,8 +609,6 @@ void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list,
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
-	if (!texture_draw_ready(source, texture_id))
-		return;
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_upload_pending(texture_id) ? (10+(list_size*3)) : (6+(list_size*3)));
 
@@ -745,8 +705,6 @@ static void emit_tex_quad(GSSURFACE *source, const float xs[4], const float ys[4
 	int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
-	if (!texture_draw_ready(source, texture_id))
-		return;
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_upload_pending(texture_id) ? 19 : 15);
 
@@ -839,8 +797,6 @@ static void emit_tex_rect_triangles(GSSURFACE *source, const prim_tex_rect *list
 	owl_packet *packet;
 
 	if (texture_id == GRAPHICS_BIND_ERROR)
-		return;
-	if (!texture_draw_ready(source, texture_id))
 		return;
 	upload = texture_upload_pending(texture_id);
 	/* A+D tag, TEX0, TEX1, PRIM, RGBAQ, REGLIST tag, then 6 vertices each. */
@@ -952,8 +908,6 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
 		return;
-	if (!texture_draw_ready(source, texture_id))
-		return;
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_upload_pending(texture_id) ? 13 : 9);
 
@@ -1044,8 +998,6 @@ void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float h
 
     int texture_id = graphics_surface_bind(source, true);
 	if (texture_id == GRAPHICS_BIND_ERROR)
-		return;
-	if (!texture_draw_ready(source, texture_id))
 		return;
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, texture_upload_pending(texture_id) ? 19 : 15);
