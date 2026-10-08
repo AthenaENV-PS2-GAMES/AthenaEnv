@@ -774,6 +774,8 @@ int getFreeVRAM(int mode) {
 			return texture_manager_get_locked_memory();
 		case VRAM_USED_DYNAMIC:
 			return texture_manager_get_unlocked_memory();
+		case VRAM_UPLOADED:
+			return texture_manager_uploaded_memory();
 	}
 
 	return 0;

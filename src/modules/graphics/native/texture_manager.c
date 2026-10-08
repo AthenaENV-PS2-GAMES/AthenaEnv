@@ -49,6 +49,10 @@ static int texture_upload_callback_id = -1;
 
 static int texture_upload_queue_top = 0;
 
+/* Bytes sent to VRAM during the current frame and during the last one. */
+static volatile unsigned int uploaded_bytes = 0;
+static unsigned int uploaded_bytes_last = 0;
+
 GSSURFACE *texture_upload_queue[TEXTURE_UPLOAD_QUEUE_SIZE] = { NULL };
 
 owl_packet* async_upload_packet = NULL;
@@ -178,6 +182,11 @@ void texture_send_macroblock(uint32_t *mem, int width, int height,
  * Every DIRECT is contained in one DMA tag: the VIFcodes travel in the upper
  * half of the tag (TTE) and the pixels come from a REF to the texture memory,
  * as unpack_list_append() does for UNPACK.
+ *
+ * The whole upload is one GIF packet: only TEXFLUSH, at its end, sets EOP.
+ * PATH2 keeps the GIF from the registers to the last IMAGE quadword, so a
+ * PATH3 transfer (video, started by the MARK interrupt) cannot set its own
+ * TRXDIR between them and receive these pixels.
  */
 
 /* Quadwords of `size` bytes, as texture_send() rounds them. */
@@ -206,8 +215,10 @@ static void stream_send(owl_packet *packet, uint32_t *mem, int width,
 {
 	int qwc = stream_qwords(athena_surface_size(width, height, psm));
 
+	uploaded_bytes += qwc * 16;
+
 	stream_direct_cnt(packet, 5);
-	owl_add_tag(packet, GIF_AD, GIFTAG(4, 1, 0, 0, 0, 1));
+	owl_add_tag(packet, GIF_AD, GIFTAG(4, 0, 0, 0, 0, 1));
 	owl_add_tag(packet, GS_BITBLTBUF, GS_SETREG_BITBLTBUF(0, 0, 0, tbp/256, tbw, psm));
 	owl_add_tag(packet, GS_TRXPOS, GS_SETREG_TRXPOS(0, 0, 0, 0, 0));
 	owl_add_tag(packet, GS_TRXREG, GS_SETREG_TRXREG(width, height));
@@ -217,7 +228,7 @@ static void stream_send(owl_packet *packet, uint32_t *mem, int width,
 		int chunk = qwc < GS_GIF_BLOCKSIZE ? qwc : GS_GIF_BLOCKSIZE;
 
 		stream_direct_cnt(packet, 1);
-		owl_add_tag(packet, 0, GIFTAG(chunk, 1, 0, 0, GSKIT_GIF_FLG_IMAGE, 0));
+		owl_add_tag(packet, 0, GIFTAG(chunk, 0, 0, 0, GSKIT_GIF_FLG_IMAGE, 0));
 		owl_add_tag(packet, owl_vif_code_double(
 			VIF_CODE(chunk, 0, VIF_DIRECT, 0), VIF_CODE(0, 0, VIF_NOP, 0)),
 			DMA_TAG(chunk, 0, DMA_REF, 0, (u32)mem, 0));
@@ -282,6 +293,10 @@ int upload_texture_handler(int cause) {
 			if ((tex->VramClut & TRANSFER_REQUEST_MASK) == TRANSFER_REQUEST_MASK) {
 				tex->VramClut &= ~TRANSFER_REQUEST_MASK;
 
+				uploaded_bytes += athena_surface_size(
+					tex->PSM == GS_PSM_T8 ? 16 : 8,
+					tex->PSM == GS_PSM_T8 ? 16 : 2, tex->ClutPSM);
+
 				if (tex->PSM == GS_PSM_T8) {
 					texture_send(tex->Clut, 16, 16, tex->VramClut, tex->ClutPSM, 1, GS_CLUT_PALLETE);
 
@@ -294,7 +309,9 @@ int upload_texture_handler(int cause) {
 				tex->Vram &= ~TRANSFER_REQUEST_MASK;
 
 				athena_calculate_tbw(tex);
-				
+				uploaded_bytes += athena_surface_size(tex->Width,
+					tex->Height, tex->PSM);
+
 				// Select upload function based on data format
 				if (tex->Macroblock) {
 					texture_send_macroblock(tex->Mem, tex->Width, tex->Height, tex->Vram, tex->PSM, tex->TBW);
@@ -545,9 +562,23 @@ _blockAlloc(unsigned int size, bool page_aligned)
 		}
 	}
 
-	while (block == NULL && weight != 0xFFFFFFFF) {
+	/*
+	 * Evict the least used textures first. Each pass jumps to the lowest
+	 * weight left, and the search ends once no unlocked texture is left:
+	 * stepping the weight by one up to 0xFFFFFFFF locked up the EE when the
+	 * texture could not fit at all.
+	 */
+	while (block == NULL) {
+		unsigned int next = 0xFFFFFFFF;
+
 		for (block = __head; block != NULL; block = block->pNext) {
-			if ((block->tex != NULL) && !block->bLocked && (_blockGetWeight(block) <= weight)) {
+			if ((block->tex != NULL) && !block->bLocked &&
+				(_blockGetWeight(block) > weight)) {
+				if (_blockGetWeight(block) < next)
+					next = _blockGetWeight(block);
+				continue;
+			}
+			if ((block->tex != NULL) && !block->bLocked) {
 				block->tex = NULL;
 				block = _blockMergeFree(block);
 				
@@ -562,7 +593,9 @@ _blockAlloc(unsigned int size, bool page_aligned)
 				}
 			}
 		}
-		weight++;
+		if (block == NULL && next == 0xFFFFFFFF)
+			break;
+		weight = next;
 	}
 
 	if (block != NULL) {
@@ -628,10 +661,12 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 	unsigned int cwidth = 16;
 	unsigned int cheight = 16;
 	/*
-	 * An asynchronous bind of a linear texture uploads in the VIF1 stream
-	 * and reports it resident: draws queued after it see the new pixels.
+	 * A linear texture uploads in the VIF1 stream, so draws queued after
+	 * the bind see the new pixels and draws queued before it the old ones.
+	 * An asynchronous bind reports it resident. Video (macroblock) textures
+	 * upload on PATH3: from the MARK interrupt, or now if synchronous.
 	 */
-	bool stream = async && !tex->Macroblock;
+	bool stream = !tex->Macroblock;
 
 	for (block = __head; block != NULL; block = block->pNext) {
 		if(block->tex == tex)
@@ -681,14 +716,13 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 				(u8 *)(tex->Mem) + athena_surface_size(
 					tex->Width, tex->Height, tex->PSM));
 
-			if (!async) {
-				// Sync upload - select function based on data format
-				if (tex->Macroblock) {
-					texture_send_macroblock(tex->Mem, tex->Width, tex->Height, tex->Vram, tex->PSM, tex->TBW);
-				} else {
-					texture_send(tex->Mem, tex->Width, tex->Height, tex->Vram, tex->PSM, tex->TBW, tex->Clut ? GS_CLUT_TEXTURE : GS_CLUT_NONE);
-				}
-			} else if (!stream) {
+			if (stream) {
+				/* Sent below, after the CLUT address is known. */
+			} else if (!async) {
+				uploaded_bytes += athena_surface_size(tex->Width,
+					tex->Height, tex->PSM);
+				texture_send_macroblock(tex->Mem, tex->Width, tex->Height, tex->Vram, tex->PSM, tex->TBW);
+			} else {
 				tex->Vram |= TRANSFER_REQUEST_MASK;
 			}
 		} else {
@@ -706,10 +740,14 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		if (tex->Clut) {
 			SyncDCache(tex->Clut, (u8 *)(tex->Clut) + csize);
 
-			if (!async) {
+			if (stream) {
+				/* Sent below, with the pixels. */
+			} else if (!async) {
+				uploaded_bytes += athena_surface_size(cwidth, cheight,
+					tex->ClutPSM);
 				texture_send(tex->Clut, cwidth, cheight, tex->VramClut,
 					tex->ClutPSM, 1, GS_CLUT_PALLETE);
-			} else if (!stream) {
+			} else {
 				tex->VramClut |= TRANSFER_REQUEST_MASK;
 			}
 		} else {
@@ -719,17 +757,28 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 
 	block->iUseCount++;
 
+	if (stream) {
+		if (!(ttransfer || ctransfer))
+			return async ? GRAPHICS_BIND_RESIDENT : 0;
+
+		texture_stream_upload(tex, ttransfer, ctransfer, cwidth, cheight);
+		if (async)
+			return GRAPHICS_BIND_RESIDENT;
+
+		/*
+		 * A synchronous bind returns once the pixels were read, so the
+		 * caller may free them: send the stream so far and wait for it.
+		 */
+		owl_flush_packet();
+		dmaKit_wait(DMA_CHANNEL_VIF1, 0);
+		return ttransfer | ctransfer;
+	}
+
 	if (!async && (ttransfer || ctransfer)) {
 		owl_add_end_tag(async_upload_packet, 2);
 		owl_add_tag(async_upload_packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
 		owl_add_tag(async_upload_packet, GS_TEXFLUSH, 0);
 		owl_send_packet(async_upload_packet);
-	}
-
-	if (stream) {
-		if (ttransfer || ctransfer)
-			texture_stream_upload(tex, ttransfer, ctransfer, cwidth, cheight);
-		return GRAPHICS_BIND_RESIDENT;
 	}
 
 	if (async) {
@@ -893,9 +942,37 @@ void texture_manager_free(GSSURFACE * tex)
 }
 
 //---------------------------------------------------------------------------
+unsigned int texture_manager_uploaded_memory()
+{
+	return uploaded_bytes_last;
+}
+
+/*
+ * The VIF MARK that makes the interrupt upload a video texture: the 4
+ * quadwords go inside a CNT tag the caller counts (TEXTURE_MARK_QWC).
+ */
+void texture_manager_add_mark(owl_packet *packet, int texture_id)
+{
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
+	owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
+
+	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
+	owl_add_tag(packet, GIF_NOP, 0);
+
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+	owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
+	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+}
+
 void texture_manager_nextFrame(GSCONTEXT * gsGlobal)
 {
 	struct SVramBlock * block;
+
+	uploaded_bytes_last = uploaded_bytes;
+	uploaded_bytes = 0;
 
 	// Register use count
 	for(block = __head; block != NULL; block = block->pNext) {

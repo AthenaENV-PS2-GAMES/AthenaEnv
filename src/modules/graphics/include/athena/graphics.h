@@ -393,7 +393,8 @@ typedef enum {
 	VRAM_SIZE,
 	VRAM_USED_TOTAL,
 	VRAM_USED_STATIC,
-	VRAM_USED_DYNAMIC
+	VRAM_USED_DYNAMIC,
+	VRAM_UPLOADED
 } eVRAMBlockType;
 
 int getFreeVRAM(int mode);

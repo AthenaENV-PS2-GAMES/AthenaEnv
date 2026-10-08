@@ -12,6 +12,7 @@
 #include <athena/debug.h>
 
 #include <athena/graphics/owl_packet.h>
+#include <athena/graphics/texture_manager.h>
 
 static int texture_upload_pending(int texture_id)
 {
@@ -382,19 +383,7 @@ void draw_tex_triangle_list(GSSURFACE* source, float x, float y, prim_tex_triang
 	owl_add_cnt_tag(packet, (texture_upload_pending(texture_id) ? 10 : 6)+(list_size*3), 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0,
-			texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -474,19 +463,7 @@ void draw_tex_triangle_gouraud_list(GSSURFACE* source, float x, float y, prim_te
 	owl_add_cnt_tag(packet, (texture_upload_pending(texture_id) ? 10 : 6)+packet_list_size, 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0,
-			texture_upload_pending(texture_id) ? VIF_FLUSHA : VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -615,18 +592,7 @@ void draw_image_list(GSSURFACE* source, float x, float y, prim_tex_sprite *list,
 	owl_add_cnt_tag(packet, texture_upload_pending(texture_id) ? (9+(list_size*3)) : (5+(list_size*3)), 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -711,18 +677,7 @@ static void emit_tex_quad(GSSURFACE *source, const float xs[4], const float ys[4
 	owl_add_cnt_tag(packet, texture_upload_pending(texture_id) ? 18 : 14, 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -805,18 +760,7 @@ static void emit_tex_rect_triangles(GSSURFACE *source, const prim_tex_rect *list
 	owl_add_cnt_tag(packet, (upload ? 4 : 0) + 1 + payload, 0);
 
 	if (upload) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -914,18 +858,7 @@ void draw_image(GSSURFACE* source, float x, float y, float width, float height, 
 	owl_add_cnt_tag(packet, texture_upload_pending(texture_id) ? 12 : 8, 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
@@ -1005,18 +938,7 @@ void draw_image_rotate(GSSURFACE* source, float x, float y, float width, float h
 	owl_add_cnt_tag(packet, texture_upload_pending(texture_id) ? 18 : 14, 0);
 
 	if (texture_upload_pending(texture_id)) {
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0)); 
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-		owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-		owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-		owl_add_tag(packet, GIF_NOP, 0);
-
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-		owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		texture_manager_add_mark(packet, texture_id);
 	}
 
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));

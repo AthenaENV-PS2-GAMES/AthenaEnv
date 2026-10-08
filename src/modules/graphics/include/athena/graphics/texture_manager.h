@@ -16,12 +16,16 @@
 #define __TEXTURE_MANAGER_H__
 
 #include <athena/graphics.h>
+#include <athena/graphics/owl_packet.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define TRANSFER_REQUEST_MASK GRAPHICS_TRANSFER_REQUEST_MASK
+
+/// Quadwords texture_manager_add_mark() writes.
+#define TEXTURE_MARK_QWC 4
 
 void texture_upload(GSCONTEXT *gsGlobal, GSSURFACE *Texture);
 
@@ -57,6 +61,14 @@ unsigned int texture_manager_used_memory();
 unsigned int texture_manager_get_locked_memory();
 
 unsigned int texture_manager_get_unlocked_memory();
+
+/// Bytes uploaded to VRAM during the last frame.
+unsigned int texture_manager_uploaded_memory();
+
+/// Emits the MARK that uploads `texture_id`, the id an asynchronous bind of
+/// a video texture returns. Its TEXTURE_MARK_QWC quadwords go inside a CNT
+/// tag the caller counts.
+void texture_manager_add_mark(owl_packet *packet, int texture_id);
 
 #ifdef __cplusplus
 };

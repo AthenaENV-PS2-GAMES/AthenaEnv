@@ -3092,7 +3092,11 @@ declare namespace Screen {
     function setVSync(enabled: boolean): void;
     /** Enables or disables the on-screen frame counter. */
     function setFrameCounter(enabled: boolean): void;
-    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
+    /**
+     * Returns the total or used VRAM amount for the selected `VRAM_*`
+     * accounting mode. `VRAM_UPLOADED` is the bytes uploaded to VRAM during
+     * the last frame: a scene that keeps it high is thrashing VRAM.
+     */
     function getMemoryStats(mode?: number): number;
     /** Returns currently unallocated VRAM in bytes. */
     function getFreeVRAM(): number;
@@ -3118,6 +3122,7 @@ declare namespace Screen {
     const VRAM_USED_TOTAL: number;
     const VRAM_USED_STATIC: number;
     const VRAM_USED_DYNAMIC: number;
+    const VRAM_UPLOADED: number;
     const ALPHA_TEST_ENABLE: number;
     const ALPHA_TEST_METHOD: number;
     const ALPHA_TEST_REF: number;
