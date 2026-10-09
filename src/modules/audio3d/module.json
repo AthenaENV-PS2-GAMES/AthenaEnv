@@ -1,0 +1,19 @@
+{
+  "id": "audio3d",
+  "name": "Audio3D",
+  "description": "Positional sound: sources in the world (or on Scene3D nodes) and a listener camera; distance attenuation (inverse or linear) and stereo pan applied in C to the playing SPU2 voices every frame.",
+  "category": "Audio",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/audio3d.c"],
+  "dependencies": { "modules": ["sound", "camera3d", "scene3d", "loop"], "iop": [], "ee_libs": [] },
+  "quickjs": {
+    "sources": ["quickjs/ath_audio3d.c"],
+    "module_name": "Audio3D",
+    "global_alias": "Audio3D",
+    "init_func": "athena_audio3d_js_init",
+    "cleanup_func": "athena_audio3d_js_cleanup"
+  },
+  "types": "audio3d.d.ts"
+}

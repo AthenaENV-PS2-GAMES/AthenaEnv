@@ -21,6 +21,13 @@ function spin(n) { let x = 0; for (let i = 0; i < n; i++) x += Math.sqrt(i); ret
 
 Profiler.reset(true);
 check("exports", Profiler.HISTORY === 120 && Profiler.MAX_SCOPES === 64 && Profiler.MAX_DEPTH === 32);
+const ticksBefore = Profiler.ticks();
+spin(1000);
+check("raw clock converts positive elapsed time", Profiler.ticksToMilliseconds((Profiler.ticks() - ticksBefore) >>> 0) > 0);
+throws("ticks range", () => Profiler.ticksToMilliseconds(-1), RangeError);
+throws("ticks overflow", () => Profiler.ticksToMilliseconds(0x100000000), RangeError);
+throws("ticks fraction", () => Profiler.ticksToMilliseconds(1.5), RangeError);
+throws("ticks type", () => Profiler.ticksToMilliseconds("10"), TypeError);
 check("scope 0 is frame", Profiler.names()[0] === "frame" && Profiler.scope("frame") === 0);
 const A = Profiler.scope("work");
 check("ids are stable", Profiler.scope("work") === A && A > 0);

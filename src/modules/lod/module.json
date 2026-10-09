@@ -1,0 +1,20 @@
+{
+  "id": "lod",
+  "name": "LOD",
+  "description": "Distance-based level of detail for Scene3D nodes: mesh levels with hysteresis, a global draw distance with matching fog and a quality bias, selected in C by a Loop system before the scene updates.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/lod.c"],
+  "dependencies": { "modules": ["scene3d", "model3d", "camera3d", "lights", "loop"], "iop": [], "ee_libs": [] },
+  "native": { "shutdown": "athena_lod_module_shutdown" },
+  "quickjs": {
+    "sources": ["quickjs/ath_lod.c"],
+    "module_name": "LOD",
+    "global_alias": "LOD",
+    "init_func": "athena_lod_js_init",
+    "cleanup_func": "athena_lod_js_cleanup"
+  },
+  "types": "lod.d.ts"
+}

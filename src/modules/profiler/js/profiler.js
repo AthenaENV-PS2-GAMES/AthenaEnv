@@ -29,6 +29,8 @@ export const count = Native.count;
 export const stats = Native.stats;
 export const names = Native.names;
 export const errors = Native.errors;
+export const ticks = Native.ticks;
+export const ticksToMilliseconds = Native.ticksToMilliseconds;
 
 const WARN_SECONDS = 5;
 const state = {

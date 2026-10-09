@@ -3,7 +3,8 @@
 Levantamento de performance, compatibilidade, seguranca de memoria e
 developer experience dos modulos 3D (render3d, model3d, camera3d, lights,
 scene3d, gltf3d, animation3d e, de forma mais superficial, physics3d,
-collision3d, particles3d, tween3d e camerarig3d).
+collision3d, particles3d, tween3d e camerarig3d). A rodada 14 estende
+o levantamento aos sistemas lod, audio3d, triggers3d, nav, sky e Bench.
 
 Legenda de status:
 
@@ -67,7 +68,7 @@ Legenda de status:
 
 ## 5. Validacao
 
-### Pendencias atuais (07/10/2026)
+### Pendencias atuais (09/10/2026)
 
 - Implementacoes M1-M4, C1-C10, P1-P9/P11 e D1-D7 entregues.
 - PS2 real: usuario confirmou todos os exemplos do pacote visualmente
@@ -77,9 +78,46 @@ Legenda de status:
 - P10: melhoria isolada entregue; atribuicao historica permanece sem
   conclusao. O usuario confirmou que nao possui a revisao/patch original.
   Nao reconstruir nem substituir essa baseline por uma revisao presumida.
+- Fase 4 revisada e Bench entregue na rodada 14: testes host/PCSX2 e
+  builds EE passaram; PS2 real pendente para estes novos modulos. A busca
+  sincronizada do labirinto 128x128 custa ~66 ms no emulador: distribuir
+  pedidos e limitar expansoes; retomada incremental ainda nao implementada.
 - As rodadas abaixo registram o estado na data de cada experimento;
   mencoes antigas a implementacoes pendentes nao substituem este registro.
 
+
+### Rodada 14 (09/10/2026): sistemas de jogo e medicao
+
+- Revisao da Fase 4 do [roadmap](3D_DX_MODULES_ROADMAP.md#6-fase-4-sistemas-de-jogo-3d):
+  LOD reexibe nos ao sair de bandas ocultas/limites globais; Sky preserva
+  setTime antes da inicializacao; Triggers3D evita vazamento em opcoes
+  invalidas, eventos para ids reutilizados e update recursivo. LOD/Nav/Audio3D
+  revalidam ou retem recursos nativos quando getters JS podem chamar dispose.
+- Nav reconstrui caminhos no heap de busca ja existente, removendo dois
+  buffers temporarios por consulta. Instrumentacao C de malloc/calloc/realloc:
+  **zero alocacoes em 100 buscas e moveTo**; a API JS ainda cria Float32Array
+  para o resultado. Suavizacao preserva desvios por custo, rays quase axiais
+  e coordenadas extremas passam nos testes; nearestWalkable busca apenas
+  dentro da grade, inclusive para pontos externos e raios grandes.
+- Bench inicia a Fase 5: tarefas sincronas em lotes por frame, warmup,
+  amostras em buffer reutilizado, media/p95/min/max, cleanup, cancelamento e
+  checkpoints JSON. Mede com ticks nativos do Profiler; setup/teardown e
+  escrita ficam fora do intervalo. Draws medem CPU, salvo espera GS explicita.
+- Suite completa C/JS i386 ASan/UBSan, incluindo DMA_REF=0/1 e teste Nav
+  instrumentado. Builds EE QuickJS e native hello ligados em copia isolada.
+  PCSX2 2.8.2: Fase 4 129 verificacoes, Profiler 50 e Bench 25, sem falhas.
+  Bench no host tem 27 checks por runtime (dois runtimes); a diferenca vem
+  dos testes de escrita com stub versus arquivo real no emulador.
+- [Exemplo](../bin/world_systems_bench.js) rodou e gravou
+  [resultado/configuracao/hashes](../docs/benchmarks/world-systems-bench-2026-10-09.json).
+  MEDIDO em uma execucao no PCSX2, sem rendering nem espera pelo GS:
+  LOD 300 grupos media/p95 0,1598/0,1724 ms; Nav labirinto 128x128
+  66,2583/66,2716 ms; Triggers3D 50 zonas x 20 corpos 0,4146/0,4338 ms.
+  Referencia vazia de 100 chamadas/lote: media 0,0060 ms/chamada.
+- Nao houve A/B controlado da remocao de alocacoes, nem medicao em PS2 real
+  dos novos sistemas. A atribuicao historica de P10 continua pendente com
+  o mesmo limite de baseline registrado acima. Busca incremental de Nav,
+  live reload, UI e CLI de assets sao os proximos trabalhos do roadmap.
 
 ### Rodada 13 (07/10/2026): constantes dos lotes indexados (P11)
 

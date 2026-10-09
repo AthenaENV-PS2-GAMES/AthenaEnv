@@ -1,9 +1,10 @@
 # Roadmap de novos modulos para jogos 3D (developer experience e voxel)
 
 Proposta de modulos novos que aumentam a produtividade de quem faz jogos 3D
-com o AthenaEnv, incluindo um modulo nativo de voxel. As Fases 1, 2 e 3
-foram implementadas em 2026-10-09 (registros nas secoes 3, 4 e 5); os
-demais itens seguem propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
+com o AthenaEnv, incluindo um modulo nativo de voxel. As Fases 1 a 4
+foram implementadas em 2026-10-09 (registros nas secoes 3 a 6), com
+validacao em PS2 real pendente. A Fase 5 comecou pelo `bench`; os outros
+itens continuam propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
 **aditivos** (diretorio novo em `src/modules/<id>/` com `module.json`), salvo
 quando marcado como "extensao de modulo existente".
 
@@ -509,7 +510,70 @@ PCSX2 e precisa de medicao no console.
 
 ## 6. Fase 4: sistemas de jogo 3D
 
-### 6.1 `lod`: nivel de detalhe e visibilidade (PROPOSTO)
+### Registro da Fase 4 e revisao (2026-10-09)
+
+Os cinco modulos estao implementados, opt-in, com contratos C/QuickJS,
+tipagens e testes. `Triggers3D` combina testes de pares nativos com a
+fachada de eventos JavaScript. A revisao deu continuidade a implementacao
+que ja estava no workspace, preservando a selecao atual de modulos:
+
+- `Nav`: reconstrucao do caminho reutiliza o heap do A*, eliminando os dois
+  buffers temporarios por busca. Teste C instrumenta malloc/calloc/realloc
+  durante 100 buscas e `moveTo`: **VERIFICADO, zero alocacoes**. O resultado
+  `Float32Array` da API JS continua sendo alocado.
+- Suavizacao do Nav so cria atalhos sobre celulas de custo 1, preservando
+  desvios de custo escolhidos pelo A*. Line of sight trata eixos quase
+  paralelos e coordenadas extremas sem conversao indefinida para inteiro;
+  nearestWalkable limita a consulta ao retangulo da grade. `maxIterations`
+  valida inteiros em 0..MAX_CELLS e limita trabalho sincronamente.
+- `LOD`: separa banda selecionada da visibilidade, permitindo retornar de
+  uma banda com mesh null e reexibir objetos ao remover o limite global.
+  O binding retem malhas durante getters e revalida o no apos ler prototype.
+- `Nav.Crowd` revalida a grade depois de getters de prototype;
+  `Audio3D.Source.configure` usa um snapshot retido e revalida o handle
+  antes de aplicar opcoes. Testes com dispose dentro de getters cobrem os
+  acessos a memoria liberada identificados na revisao.
+- `Triggers3D`: valida callbacks antes de reservar zonas nativas, captura
+  identidades antes de despachar eventos (ids reutilizados nao recebem
+  eventos antigos), bloqueia update recursivo e invalida handles ao destruir
+  o mundo. Arrays de despacho sao reutilizados.
+- `Sky.setTime` como primeira chamada deixa de ser sobrescrito pela
+  inicializacao tardia. O exemplo integrado guarda os handles de LOD para
+  impedir que a coleta os remova enquanto o mundo ainda esta ativo.
+
+Validacao da revisao:
+
+- Suite completa `tests/js/run.sh` no Docker i386, ASan/UBSan: sem falhas,
+  incluindo os modos DMA_REF=0/1 existentes e o novo teste C de Nav.
+- Cada modulo em dois runtimes host novos: LOD 28, Triggers3D 23,
+  Nav 41, Audio3D 23 e Sky 20 verificacoes por runtime.
+- Builds EE QuickJS e `RUNTIME=native` com `samples/native/hello/main.c`
+  ligados com sucesso em copia isolada. Warnings preexistentes no core,
+  QuickJS e headers graficos; nenhum diagnosticado nos cinco modulos.
+- PCSX2 2.8.2: Sky 17, LOD 28, Nav 41, Triggers3D 23 e Audio3D 20
+  verificacoes, **129 no total, zero falhas**. Audio usa amostra ADPCM real;
+  os testes host de vozes usam stub. PS2 real permanece **pendente**.
+
+Numeros MEDIDOS na execucao conjunta no PCSX2, com Date.now e repeticoes:
+
+| Cenario | Tempo |
+|---|---|
+| LOD, 300 grupos | 160 us/selecao |
+| Nav, labirinto 128x128, 14736 celulas expandidas | 66,2 ms/busca |
+| Triggers3D, 50 zonas x 20 corpos, movimento/eventos incluidos | 410 us/update |
+
+Sao uma execucao no emulador, nao um A/B controlado nem tempos de PS2 real.
+A busca completa do labirinto ultrapassa o orcamento de um frame: limitar
+maxIterations e distribuir pedidos entre frames; uma busca incremental
+continua sendo melhoria futura. Nao atribuir ganho percentual a remocao de
+alocacoes sem medicao equivalente. O Bench da Fase 5, descrito abaixo,
+passa a fornecer amostras e percentis para os proximos experimentos.
+
+### 6.1 `lod`: nivel de detalhe e visibilidade (VALIDAR NO HW)
+
+API implementada: Group(node, levels, {hysteresis}), setCamera, update,
+stats, setBias e setDrawDistance(distance, {lights, fogStart, color}).
+Sem culling por celulas nesta versao. Manter handles Group enquanto usados.
 
 - **Objetivo:** grupos de LOD por distancia, distancia maxima de desenho
   com fog automatico e culling por celulas de grade.
@@ -523,7 +587,12 @@ PCSX2 e precisa de medicao no console.
 - **Implementacao:** nativo, como sistema do `Loop`, atuando sobre `Scene3D.Node.visible`/malha.
 - **Esforco:** 1 semana.
 
-### 6.2 `audio3d`: som posicional (PROPOSTO)
+### 6.2 `audio3d`: som posicional (VALIDAR NO HW)
+
+API implementada: Source(Sound.Sfx, opcoes), play/stop, setPosition,
+configure/dispose, setListener, levels e update. Atenuacao linear/inversa e
+pan stereo por voz; sem occlusion, prioridade de canais ou filtragem
+frente/tras. Loop atualiza depois da cena/camera; loop do sample vem do ADPCM.
 
 - **Objetivo:** fontes sonoras no mundo e um ouvinte (camera).
 - **Usos:** passos, motores, ambiente (rio, vento), tiros, monstros fora
@@ -535,7 +604,12 @@ PCSX2 e precisa de medicao no console.
 - **Implementacao:** nativo sobre `sound` (volume/pan por canal).
 - **Esforco:** 1 semana.
 
-### 6.3 `triggers3d`: volumes de gatilho (PROPOSTO)
+### 6.3 `triggers3d`: volumes de gatilho (VALIDAR NO HW)
+
+API implementada: World.box/sphere/body, update, onEnter/onExit,
+mascaras, follow de nos e dispose. Sem onStay, grade espacial ou adaptador
+automatico para corpos fisicos. Chamar update depois de scene.update quando
+os objetos seguem nos; o teste de pares e C e o despacho de eventos e JS.
 
 - **Objetivo:** caixas e esferas que disparam `onEnter`/`onExit`/`onStay`.
 - **Usos:** checkpoints, portas, cutscenes, zonas de dano, troca de musica,
@@ -545,7 +619,12 @@ PCSX2 e precisa de medicao no console.
 - **Implementacao:** JS ou nativo leve (grade espacial).
 - **Esforco:** 3-5 dias.
 
-### 6.4 `nav`: navegacao e IA (PROPOSTO)
+### 6.4 `nav`: navegacao e IA (VALIDAR NO HW)
+
+API implementada: Grid(width, depth, {cellSize, x, z}), custos, findPath,
+lineOfSight/nearestWalkable, Crowd/Agent com moveTo, chegada e separacao.
+Crowd.update(dt) e explicito, antes de atualizar transforms da cena.
+Sem navmesh, flee, geracao automatica a partir de Voxel ou ajuste de altura.
 
 - **Objetivo:** pathfinding A* em grade/navgrid e steering (seek, arrive,
   flee, evitar obstaculos).
@@ -558,7 +637,12 @@ PCSX2 e precisa de medicao no console.
 - **Implementacao:** nativo; pode usar o `voxel.World` como grade.
 - **Esforco:** 1,5-2 semanas.
 
-### 6.5 `sky`: ceu e ambiente (PROPOSTO)
+### 6.5 `sky`: ceu e ambiente (VALIDAR NO HW)
+
+API implementada: setTime/setColors/setSun, draw, apply(lights), colorAt,
+clearColor/state. Gradiente e disco do sol, sem skybox; camera roll ignorado.
+Fog atualiza a cor quando habilitada; malhas UNLIT e bakedLight de Voxel
+nao escurecem com dia/noite. Tint por draw segue como extensao futura.
 
 - **Objetivo:** skybox ou ceu em gradiente, presets de fog e ciclo de dia.
 - **Usos:** qualquer cena externa; dia/noite em jogos de sobrevivencia.
@@ -579,7 +663,43 @@ PCSX2 e precisa de medicao no console.
 - **Implementacao:** JS (polling barato a cada N frames, so em build de desenvolvimento).
 - **Esforco:** 3-5 dias.
 
-### 7.2 `bench`: executor de benchmarks (PROPOSTO)
+### 7.2 `bench`: executor de benchmarks (VALIDAR NO HW)
+
+Implementado em 09/10/2026 como modulo JS opcional, dependente de Loop e
+Profiler. `Runner.step()` executa um lote por frame em loops manuais;
+`Bench.run()` instala um sistema postDraw no Loop existente, sem inicia-lo
+ou para-lo. API completa em [bench.d.ts](../src/modules/bench/bench.d.ts).
+
+- Aquecimento, amostras e repeticoes configuraveis por tarefa; setup/teardown
+  fora da medicao, limpeza mesmo em erro e cancelamento. Falhas de tarefas
+  ficam no relatorio e as seguintes continuam; falhas de checkpoint/onResult
+  interrompem o executor. Callbacks devem ser sincronos.
+- Clock nativo do Profiler (`ticks`/`ticksToMilliseconds`), buffer de amostras
+  reutilizado, media, p95 por nearest rank, minimo e maximo em ms por chamada.
+  O custo do timer/binding/JS permanece incluido; uma tarefa vazia serve como
+  referencia. Cada lote deve durar menos que o wrap do clock EE (~14,5 s).
+- Checkpoint JSON regravado entre tarefas em dispositivo gravavel, sem
+  garantia de escrita atomica. Metadados devem informar plataforma, revisao,
+  opcoes de build, cena e uso de espera pelo GS. Draw mede submissao CPU
+  ate que a propria tarefa espere a conclusao do GS.
+- Testes host i386 ASan/UBSan: Bench 27 checks em dois runtimes novos;
+  Profiler 50 checks por runtime. PCSX2 2.8.2: Bench 25 e Profiler 50,
+  zero falhas. Os checks de escrita host usam stub; o emulador escreve e le
+  JSON real. Builds EE QuickJS e native ligados em copia isolada.
+- [Exemplo](../bin/world_systems_bench.js) e
+  [resultado com configuracao/hashes](../docs/benchmarks/world-systems-bench-2026-10-09.json):
+  uma execucao no PCSX2, CPU sem rendering nem espera pelo GS.
+
+| Tarefa | Warmup / amostras | Media | p95 | Maximo |
+|---|---|---|---|---|
+| empty, 100 chamadas/lote | 30 / 120 | 0,0060 ms | 0,0060 ms | 0,0061 ms |
+| LOD, 300 grupos | 30 / 120 | 0,1598 ms | 0,1724 ms | 0,1724 ms |
+| Nav, labirinto 128x128 | 3 / 30 | 66,2583 ms | 66,2716 ms | 66,2725 ms |
+| Triggers3D, 50 zonas x 20 corpos | 30 / 120 | 0,4146 ms | 0,4338 ms | 0,4340 ms |
+
+Tempos MEDIDOS, por chamada; nao subtraem a tarefa vazia e nao demonstram
+um ganho A/B. Testes de PS2 real e comparacoes de revisoes repetidas seguem
+pendentes. `dev`, `ui` e CLI de assets continuam propostos.
 
 - **Objetivo:** generalizar o executor por tarefas do `voxel_bench.js`
   (aquecimento, N frames medidos, media/p95, `results.json` regravado a cada tarefa).

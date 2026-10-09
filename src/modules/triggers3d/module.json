@@ -1,0 +1,18 @@
+{
+  "id": "triggers3d",
+  "name": "Triggers3D",
+  "description": "Trigger volumes: box and sphere zones that report bodies entering and leaving them, with layer masks and Scene3D node following. Pairs are tested in C; JavaScript runs only for the events.",
+  "category": "Game",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/triggers3d.c"],
+  "dependencies": { "modules": ["scene3d"], "iop": [], "ee_libs": [] },
+  "quickjs": {
+    "sources": ["quickjs/ath_triggers3d.c"],
+    "module_name": "Triggers3DNative",
+    "init_func": "athena_triggers3d_js_init"
+  },
+  "js": { "source": "js/triggers3d.js", "module_name": "Triggers3D", "global_alias": "Triggers3D" },
+  "types": "triggers3d.d.ts"
+}

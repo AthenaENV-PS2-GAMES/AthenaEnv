@@ -61,6 +61,10 @@ declare namespace Profiler {
     function measure<R>(scope: Scope, fn: () => R): R;
     /** Adds value (default 1) to a counter for this frame. */
     function count(scope: Scope, value?: number): void;
+    /** Raw unsigned clock; wraps after about 14.5 s on the EE. */
+    function ticks(): number;
+    /** Converts an unsigned tick difference: ticksToMilliseconds((end - start) >>> 0). */
+    function ticksToMilliseconds(ticks: number): number;
     /**
      * Closes the frame and returns its length in ms. Not needed with auto().
      * Open scopes are split: their time so far goes to this frame.

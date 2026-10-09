@@ -82,6 +82,10 @@ int athena_node3d_local(AthenaNode3D *node,AthenaMatrix4 *out);
 /* World data of the last update; ESTALE when the node or an ancestor changed
  * since, or the node is not under a scene root. */
 int athena_node3d_world(const AthenaNode3D *node,AthenaMatrix4 *out);
+/* World position (translation) of the last update, even while the node is
+ * stale: for systems that run before update() and accept one frame of
+ * latency, such as LOD selection. Identity (origin) before the first update. */
+void athena_node3d_last_world_position(const AthenaNode3D *node,float out[3]);
 /* World AABB of visible meshes in the subtree. Returns 1 with bounds, 0 for
  * an empty subtree or a negative result. */
 int athena_node3d_world_bounds(const AthenaNode3D *node,float minimum[3],float maximum[3]);

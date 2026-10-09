@@ -59,6 +59,14 @@ JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
 JSModuleDef *athena_savegame_js_init(JSContext *ctx);
 JSModuleDef *athena_meshbuilder_js_init(JSContext *ctx);
 JSModuleDef *athena_voxel_js_init(JSContext *ctx);
+JSModuleDef *athena_lod_js_init(JSContext *ctx);
+void athena_lod_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_triggers3d_js_init(JSContext *ctx);
+JSModuleDef *athena_nav_js_init(JSContext *ctx);
+JSModuleDef *athena_audio3d_js_init(JSContext *ctx);
+void athena_audio3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_sky_js_init(JSContext *ctx);
+void sound_stub_init(JSContext *ctx);
 void athena_voxel_js_cleanup(JSContext *ctx);
 void athena_debug3d_js_cleanup(JSContext *ctx);
 void athena_profiler_js_cleanup(JSContext *ctx);
@@ -125,6 +133,12 @@ void draw_line_list(float x, float y, StubLine *list, int list_size) {
     for (int i = 0; i < list_size; i++)
         draw_line(x + list[i].x, y + list[i].y, x + list[i].x2, y + list[i].y2, list[i].rgba);
 }
+static int stub_quads;
+static StubColor stub_last_quad[4];
+void draw_quad_gouraud(float x, float y, float x2, float y2, float x3, float y3, float x4, float y4,
+    StubColor c1, StubColor c2, StubColor c3, StubColor c4) {
+    stub_quads++; stub_last_quad[0] = c1; stub_last_quad[1] = c2; stub_last_quad[2] = c3; stub_last_quad[3] = c4;
+}
 void draw_circle(float x, float y, float radius, StubColor color, unsigned char filled) {
     stub_circles++;
     stub_last_circle[0] = x;
@@ -146,6 +160,8 @@ static JSValue js_native_draws(JSContext *ctx, JSValueConst this_val, int argc, 
     JS_SetPropertyStr(ctx, counts, "lines", JS_NewInt32(ctx, stub_lines));
     JS_SetPropertyStr(ctx, counts, "circles", JS_NewInt32(ctx, stub_circles));
     JS_SetPropertyStr(ctx, counts, "lineLists", JS_NewInt32(ctx, stub_line_lists));
+    JS_SetPropertyStr(ctx, counts, "quads", JS_NewInt32(ctx, stub_quads));
+    JS_SetPropertyStr(ctx, counts, "lastQuadTop", JS_NewUint32(ctx, stub_last_quad[0]));
     JSValue first = JS_NewArray(ctx), circle = JS_NewArray(ctx);
     for (int i = 0; i < 2; i++)
         JS_SetPropertyUint32(ctx, first, i, JS_NewFloat64(ctx, stub_first_line[i]));
@@ -153,7 +169,7 @@ static JSValue js_native_draws(JSContext *ctx, JSValueConst this_val, int argc, 
         JS_SetPropertyUint32(ctx, circle, i, JS_NewFloat64(ctx, stub_last_circle[i]));
     JS_SetPropertyStr(ctx, counts, "firstLine", first);
     JS_SetPropertyStr(ctx, counts, "lastCircle", circle);
-    stub_sprites = stub_lines = stub_circles = stub_line_lists = 0;
+    stub_sprites = stub_lines = stub_circles = stub_line_lists = stub_quads = 0;
     return counts;
 }
 
@@ -387,10 +403,12 @@ static const struct {
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },
     { "Profiler", "../src/modules/profiler/js/profiler.js" },
+    { "Bench", "../src/modules/bench/js/bench.js" },
     { "Input", "../src/modules/input/js/input.js" },
     { "Replay", "../src/modules/replay/js/replay.js" },
     { "SaveGame", "../src/modules/savegame/js/savegame.js" },
     { "Assets3D", "../src/modules/assets3d/js/assets3d.js" },
+    { "Triggers3D", "../src/modules/triggers3d/js/triggers3d.js" },
     { "Scene", "../src/modules/scene/js/scene.js" },
     { "Draw", "../tests/js/stub/Draw.js" },
 #ifndef RUNNER_REAL_FONT
@@ -576,6 +594,12 @@ static int run_script(int argc, char **argv) {
     athena_savegame_js_init(ctx);
     athena_meshbuilder_js_init(ctx);
     athena_voxel_js_init(ctx);
+    athena_lod_js_init(ctx);
+    athena_triggers3d_js_init(ctx);
+    athena_nav_js_init(ctx);
+    sound_stub_init(ctx);
+    athena_audio3d_js_init(ctx);
+    athena_sky_js_init(ctx);
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);
@@ -618,6 +642,8 @@ static int run_script(int argc, char **argv) {
     athena_profiler_js_cleanup(ctx);
     athena_debug3d_js_cleanup(ctx);
     athena_voxel_js_cleanup(ctx);
+    athena_lod_js_cleanup(ctx);
+    athena_audio3d_js_cleanup(ctx);
     athena_animation3d_js_cleanup(ctx);
     athena_camerarig3d_js_cleanup(ctx);
     athena_tween3d_js_cleanup(ctx);

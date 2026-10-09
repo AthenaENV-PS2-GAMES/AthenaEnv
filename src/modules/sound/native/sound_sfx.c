@@ -732,6 +732,21 @@ int athena_sfx_set_volume(AthenaSfx *sfx, int volume) {
     return ATHENA_SOUND_OK;
 }
 
+int athena_sfx_set_channel_levels(AthenaSfx *sfx, int channel, int volume, int pan) {
+    if (!sfx || channel < 0 || channel >= ATHENA_SOUND_CHANNELS || volume < 0 ||
+        volume > ATHENA_SOUND_MAX_VOLUME || pan < ATHENA_SOUND_MIN_PAN || pan > ATHENA_SOUND_MAX_PAN)
+        return ATHENA_SOUND_ERR_ARGS;
+    if (channel_owner[channel] != sfx || !sfx_channel_sounding(channel))
+        return 0;
+    volume = (volume * master_volume + ATHENA_SOUND_MAX_VOLUME / 2) / ATHENA_SOUND_MAX_VOLUME;
+    if (channel_volume[channel] != volume || channel_pan[channel] != pan) {
+        audsrv_adpcm_set_volume_and_pan(channel, volume, pan);
+        channel_volume[channel] = volume;
+        channel_pan[channel] = pan;
+    }
+    return 1;
+}
+
 int athena_sfx_get_pan(const AthenaSfx *sfx) {
     return sfx ? sfx->pan : 0;
 }

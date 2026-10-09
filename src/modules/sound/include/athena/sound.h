@@ -188,6 +188,14 @@ int athena_sfx_set_volume(AthenaSfx *sfx, int volume);
 int athena_sfx_get_pan(const AthenaSfx *sfx);
 int athena_sfx_set_pan(AthenaSfx *sfx, int pan);
 
+/*
+ * Volume (0..100, scaled by the master volume) and pan (-100..100) of the
+ * voice playing `sfx` on `channel`, changed while it plays (positional
+ * audio). Returns 1 when applied, 0 when sfx is not playing there, or
+ * ATHENA_SOUND_ERR_ARGS. The sample's own volume/pan for the next play()
+ * are not changed.
+ */
+int athena_sfx_set_channel_levels(AthenaSfx *sfx, int channel, int volume, int pan);
 /* Scales every sound effect's volume, 0..100; also updates playing voices. */
 int athena_sfx_set_master_volume(int volume);
 int athena_sfx_get_master_volume(void);

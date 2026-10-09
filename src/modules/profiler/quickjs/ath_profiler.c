@@ -58,6 +58,20 @@ static JSValue js_frame(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
     if(!athena_js_argc(ctx,argc,0,0,"Profiler.frame")) return JS_EXCEPTION;
     return JS_NewFloat64(ctx,athena_profiler_frame());
 }
+static JSValue js_ticks(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self; (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Profiler.ticks")) return JS_EXCEPTION;
+    return JS_NewUint32(ctx,athena_profiler_ticks());
+}
+static JSValue js_ticks_to_ms(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,1,1,"Profiler.ticksToMilliseconds")) return JS_EXCEPTION;
+    if(!JS_IsNumber(argv[0])) return JS_ThrowTypeError(ctx,"ticks must be a number");
+    double ticks;
+    if(JS_ToFloat64(ctx,&ticks,argv[0])<0) return JS_EXCEPTION;
+    if(!(ticks>=0&&ticks<=UINT32_MAX)||ticks!=(uint32_t)ticks) return JS_ThrowRangeError(ctx,"ticks must be an unsigned 32-bit integer");
+    return JS_NewFloat64(ctx,athena_profiler_ticks_to_ms((uint32_t)ticks));
+}
 static const char *const stat_names[]={"name","kind","samples","last","average","p95","peak","lastCalls","averageCalls"};
 static JSAtom stat_atoms[countof(stat_names)];
 static AthenaJSAtoms stat_table={stat_names,countof(stat_names),stat_atoms,NULL};
@@ -123,6 +137,7 @@ static const JSCFunctionListEntry exports[]={
     JS_CFUNC_DEF("begin",1,js_begin),JS_CFUNC_DEF("end",0,js_end),JS_CFUNC_DEF("count",1,js_count),
     JS_CFUNC_DEF("frame",0,js_frame),JS_CFUNC_DEF("stats",1,js_stats),JS_CFUNC_DEF("names",0,js_names),
     JS_CFUNC_DEF("scopeCount",0,js_scope_count),
+    JS_CFUNC_DEF("ticks",0,js_ticks),JS_CFUNC_DEF("ticksToMilliseconds",1,js_ticks_to_ms),
     JS_CFUNC_DEF("errors",0,js_errors),JS_CFUNC_DEF("reset",0,js_reset),
     JS_PROP_INT32_DEF("HISTORY",ATHENA_PROFILER_HISTORY,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("MAX_SCOPES",ATHENA_PROFILER_MAX_SCOPES,JS_PROP_ENUMERABLE),

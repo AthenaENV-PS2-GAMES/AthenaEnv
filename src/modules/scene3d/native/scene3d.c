@@ -333,6 +333,10 @@ int athena_node3d_world(const AthenaNode3D *n,AthenaMatrix4 *out) {
     if(!world_current(n)) return ATHENA_SCENE3D_ESTALE;
     *out=n->world; return 0;
 }
+void athena_node3d_last_world_position(const AthenaNode3D *n,float out[3]) {
+    if(!n||!out) return;
+    out[0]=n->world.value[12]; out[1]=n->world.value[13]; out[2]=n->world.value[14];
+}
 int athena_node3d_world_bounds(const AthenaNode3D *n,float minimum[3],float maximum[3]) {
     if(!n||!minimum||!maximum) return ATHENA_SCENE3D_EINVAL;
     if((n->flags&NODE_SUBTREE)||!world_current(n)) return ATHENA_SCENE3D_ESTALE;

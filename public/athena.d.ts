@@ -2176,6 +2176,1331 @@ declare namespace Assets3D {
 }
 
 
+/* === Module: Sound (sound) === */
+/**
+ * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
+ * one streamed music track (WAV or Ogg Vorbis).
+ *
+ * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
+ * first time a sound is created or played. `audsrv = true` in athena.ini is
+ * still accepted and loads them at boot instead.
+ *
+ * Streams:
+ * - one plays at a time; `play()` on another stream replaces it (there is no
+ *   crossfade: audsrv has a single stream voice);
+ * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
+ *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
+ *   float) is converted on the EE while it plays; see `converted`;
+ * - `pause()` keeps the position heard, so `play()` resumes exactly there;
+ * - seeking, or switching to a stream of the same format, has no gap: the
+ *   new audio follows the ~0.1 s audsrv already holds (other formats pause
+ *   ~0.15 s while audsrv is reconfigured);
+ * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
+ * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
+ *   does not interrupt the music; the frame loop only has to keep calling
+ *   `Screen.flip()` (or otherwise block) for audio to flow;
+ * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
+ *
+ * Sound effects:
+ * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
+ *   (or `adpenc`; `-L` for a looping sample). Files that would make the
+ *   SPU2 play past their end are refused (`CORRUPT`);
+ * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
+ *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
+ * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
+ *   does not stall the frame;
+ * - after `IOP.reset()` a sample is uploaded again from its file the next
+ *   time it plays.
+ *
+ * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
+ * for wrong argument types, `RangeError` for values out of range,
+ * `InternalError` for I/O, format or IOP failures.
+ *
+ * @example
+ * ```js
+ * const music = new Sound.Stream("music/theme.ogg");
+ * music.loop = true;
+ * music.onLoop = () => console.log("theme looped");
+ * music.play({ fade: 1000 });
+ *
+ * const jump = new Sound.Sfx("sfx/jump.adp");
+ * jump.volume = 80;
+ * jump.pan = -30;
+ *
+ * const pad = Gamepad.player(0);
+ * Loop.run(() => {
+ *     Gamepad.update();
+ *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
+ *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
+ *     Sound.process();
+ * });
+ * ```
+ */
+declare namespace Sound {
+    type ErrorCode =
+        | 'INVALID_ARGUMENT'
+        /** The file could not be opened. */
+        | 'NOT_FOUND'
+        | 'IO'
+        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
+        | 'BAD_FORMAT'
+        /** ADPCM data the SPU2 would play past its end (truncated file). */
+        | 'CORRUPT'
+        | 'NO_MEMORY'
+        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
+        | 'SPU_MEMORY'
+        /** audsrv could not be loaded or started on the IOP. */
+        | 'IOP'
+        /** The streaming thread could not be started. */
+        | 'THREAD'
+        /** Sfx.pitch, or assigning Sfx.loop. */
+        | 'UNSUPPORTED'
+        /** The object was used after free(). */
+        | 'FREED'
+        /** The loadSfxAsync() job was cancelled. */
+        | 'CANCELLED';
+
+    interface Error {
+        code: ErrorCode;
+        message: string;
+    }
+
+    /** SPU2 sample memory in bytes. */
+    interface MemoryStats {
+        /** Sample memory in SPU2 RAM (~2 MiB). */
+        total: number;
+        /** From the start of sample memory to the end of the last sample. */
+        used: number;
+        /** After the last sample: the largest sample that still fits. */
+        free: number;
+        /**
+         * Freed but not reusable yet: audsrv only reclaims memory at the end,
+         * so a sample freed before later ones leaves a hole until those are
+         * freed too. Load long-lived samples first.
+         */
+        wasted: number;
+        /** Samples loaded. */
+        samples: number;
+    }
+
+    interface FadeOptions {
+        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
+        fade?: number;
+    }
+
+    /** Number of SPU2 voices available to sound effects (24). */
+    const CHANNELS: number;
+
+    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
+    function setVolume(volume: number): void;
+    /** Music stream volume set with `setVolume()`. */
+    function getVolume(): number;
+    /**
+     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
+     * still sounding follow at once.
+     */
+    function setSfxVolume(volume: number): void;
+    function getSfxVolume(): number;
+    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
+    function findChannel(): number;
+    /** SPU2 sample memory use. */
+    function getMemoryStats(): MemoryStats;
+    /**
+     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
+     * since the last call, each at most once per call, and returns how many
+     * ran. An exception thrown by a callback propagates.
+     */
+    function process(): number;
+
+    /**
+     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
+     * Dropping it cancels the job (and frees the sample if nobody took it).
+     */
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
+        readonly __brand: 'SoundJob';
+    }
+
+    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
+
+    interface JobStatus<T> {
+        state: JobState;
+        /** When `state` is `'done'`. The same object on every later poll. */
+        result?: T;
+        /** When `state` is `'failed'` or `'cancelled'`. */
+        error?: Error;
+    }
+
+    /**
+     * Starts loading a sound effect: a worker thread reads and checks the
+     * file while the frame loop runs, then the `poll()` that sees it read
+     * uploads it to SPU2 memory (a short DMA, on the script thread).
+     *
+     * @example
+     * ```js
+     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
+     * // each frame:
+     * const status = Sound.poll(job);
+     * if (status.state === "done") boom = status.result;
+     * ```
+     */
+    function loadSfxAsync(path: string): Job<Sfx>;
+    /** The job's state without blocking; uploads the sample once it was read. */
+    function poll<T>(job: Job<T>): JobStatus<T>;
+    /**
+     * Blocks until the job is no longer running or `timeoutMs` passes
+     * (default: no limit), letting other threads run meanwhile, then
+     * returns `poll(job)`.
+     */
+    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    function cancel(job: Job<unknown>): void;
+
+    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
+    class Stream {
+        /** Opens `path`; also callable without `new`. Does not start playback. */
+        constructor(path: string);
+        /**
+         * Starts, or resumes from `position`. Stops the stream that was
+         * playing. With `fade` it starts silent and rises to full volume;
+         * during a fade-out it cancels the fade.
+         */
+        play(options?: FadeOptions): void;
+        /**
+         * Pauses at the position heard. With `fade` it keeps playing (and
+         * `playing()` stays true) until the fade-out ends.
+         */
+        pause(options?: FadeOptions): void;
+        /** Pauses and rewinds to the start, after the fade-out if any. */
+        stop(options?: FadeOptions): void;
+        /** True from `play()` until paused, stopped, or its last sample is heard. */
+        playing(): boolean;
+        /** Moves to the start; keeps playing if it was. */
+        rewind(): void;
+        /** Closes the file. Using the object afterwards throws `FREED`. */
+        free(): void;
+        /** Restart from the beginning at the end instead of stopping. */
+        loop: boolean;
+        /**
+         * Playback position heard, in milliseconds; assigning seeks (clamped
+         * to 0..length). Right after a seek it reads the target, and starts
+         * moving once the new audio is heard (~0.1 s later).
+         */
+        position: number;
+        /**
+         * Called by `Sound.process()` after the stream's last sample was
+         * heard (without `loop`); `this` is the stream.
+         */
+        onEnd: ((this: Stream) => void) | null;
+        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
+        onLoop: ((this: Stream) => void) | null;
+        /**
+         * The stream's last sample was heard (without `loop`); cleared by
+         * `play()`, a seek or `rewind()`.
+         */
+        readonly ended: boolean;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate of the file in Hz. */
+        readonly rate: number;
+        /** 1 (mono) or 2 (stereo). */
+        readonly channels: number;
+        readonly format: 'wav' | 'ogg';
+        /**
+         * audsrv cannot play the file's format, so it is converted to 16-bit
+         * at a supported rate on the EE (a little CPU while playing).
+         */
+        readonly converted: boolean;
+    }
+
+    /** An ADPCM sample resident in SPU2 memory. */
+    class Sfx {
+        /** Loads and uploads `path` (.adp); also callable without `new`. */
+        constructor(path: string);
+        /**
+         * Plays on `channel` (0-23), or on any free channel when omitted.
+         * Returns the channel used, or -1 when that channel (or every channel)
+         * is busy. The volume and pan are applied to the channel first.
+         */
+        play(channel?: number): number;
+        /**
+         * Whether this sample is still playing on `channel`. A looping
+         * sample plays until `stop()`, `free()` or `IOP.reset()`.
+         */
+        playing(channel: number): boolean;
+        /**
+         * Silences this sample on `channel`, or on every channel it plays on.
+         * audsrv cannot key a voice off, so it is muted: `playing()` turns
+         * false at once and the channel is free for the next `play()`.
+         */
+        stop(channel?: number): void;
+        /**
+         * Releases the SPU2 memory. Using the object afterwards throws.
+         * Voices still playing this sample are stopped as with `stop()`.
+         */
+        free(): void;
+        /** 0 to 100, applied on the next `play()`. Default 100. */
+        volume: number;
+        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
+        pan: number;
+        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
+        readonly loop: boolean;
+        /**
+         * Always 0. audsrv plays samples at the rate they were encoded with;
+         * assigning throws `UNSUPPORTED`.
+         */
+        readonly pitch: number;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate in Hz. */
+        readonly rate: number;
+    }
+}
+
+
+/* === Module: Audio3D (audio3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=audio3d,... */
+/**
+ * Positional sound: footsteps, engines, rivers, monsters off screen.
+ *
+ * A Source plays a Sound.Sfx at a world position (or on a Scene3D node);
+ * the listener is usually the camera. Every frame a Loop system (after the
+ * scene updates) computes, in C, each playing source's volume from its
+ * distance (1 up to minDistance, 0 from maxDistance; "inverse" falls like
+ * minDistance / distance, "linear" in a straight line) and its stereo pan
+ * from the listener's right axis, and applies them to the SPU2 voice. The
+ * sample's own volume and pan are left for its other plays.
+ *
+ * The SPU2 mixes stereo only: sounds behind the listener are not muffled
+ * or told apart from those in front. Not in the default build:
+ * `node tools/modules.js configure --modules=audio3d,...`
+ *
+ * Example:
+ * ```js
+ * Audio3D.setListener(camera);
+ * const river = new Audio3D.Source(waterLoop, { x: 10, y: 0, z: -4, minDistance: 2, maxDistance: 25 });
+ * river.play();
+ * const growl = new Audio3D.Source(growlSfx, { node: monster, maxDistance: 40 });
+ * if (aggro) growl.play();
+ * ```
+ */
+declare namespace Audio3D {
+    interface SourceOptions {
+        x?: number; y?: number; z?: number;
+        /** Follow this node's world position (of the last scene update); null stops. */
+        node?: Scene3D.Node | null;
+        /** Full volume up to here (default 1). */
+        minDistance?: number;
+        /** Silent from here (default 30). */
+        maxDistance?: number;
+        rolloff?: "inverse" | "linear";
+        /** At full gain, 0-100 (default 100). */
+        volume?: number;
+        /** 0 (mono) to 1 (hard left/right); default 0.8. */
+        panStrength?: number;
+    }
+    class Source {
+        /** Keeps the Sfx alive; a freed Sfx stops the source. */
+        constructor(sfx: Sound.Sfx, options?: SourceOptions);
+        readonly playing: boolean;
+        /** Voice in use, -1 when not playing. */
+        readonly channel: number;
+        /** Levels applied last. */
+        readonly volume: number;
+        readonly pan: number;
+        /** Starts at the current levels; returns the channel, or -1 when beyond maxDistance (unless force) or no voice is free. */
+        play(options?: { force?: boolean }): number;
+        stop(): this;
+        setPosition(x: number, y: number, z: number): this;
+        configure(options: SourceOptions): this;
+        /** Stops and releases the source. */
+        dispose(): void;
+    }
+    /** Listens from the camera (retained; null keeps the last position). */
+    function setListener(camera: Camera3D.Camera | null): void;
+    /** Listens from a point with a right-hand axis. */
+    function setListener(x: number, y: number, z: number, rightX: number, rightY: number, rightZ: number): void;
+    /** Levels a source at (x, y, z) would get now, without playing. */
+    function levels(x: number, y: number, z: number, options?: SourceOptions): { volume: number; pan: number; distance: number };
+    /** Applies every source's levels now (the Loop system does it each frame). */
+    function update(): void;
+}
+
+
+/* === Module: Font (font) === */
+/**
+ * Font loading and text rendering.
+ *
+ * The constructor optionally accepts a path to either a TrueType file or a legacy
+ * bitmap font (`.bmp`, `.png` or `.jpg`, optionally with a `.dat` width file).
+ * With no path, the embedded Quicksand Regular font is used. Text is queued
+ * into the current graphics command stream.
+ *
+ * TrueType glyphs are rasterized once at `size` pixels and cached; `scale`
+ * stretches them, so prefer a matching `size` for large text. The same file
+ * at the same size is loaded once and shared, and at most 16 different
+ * TrueType fonts are loaded at a time: call `free()` on fonts no longer used.
+ * Glyphs keep their proportions on NTSC, PAL, 480p and 16:9 modes, and follow
+ * `Screen.setMode()`.
+ *
+ * A glyph is rasterized the first time it is printed, which can hold that
+ * frame: `preload()` (or the `preload` option of `loadAsync`) does it ahead,
+ * a few milliseconds per frame. Text printed every frame is cheaper through
+ * `render()`, which lays it out once.
+ *
+ * @example
+ * ```js
+ * const title = new Font("fonts/title.ttf", { size: 48 });
+ * title.outlineColor = Color.new(0, 0, 0);
+ * title.outline = 2;
+ * title.print(320, 40, "Game Over\nPress START");   // \n starts a new line
+ * ```
+ */
+declare class Font {
+    /** Loads `path`, or the embedded font when omitted, undefined or null. */
+    constructor(path?: string | null, options?: Font.Options);
+    constructor(options: Font.Options);
+
+    /**
+     * Loads a font without stalling the frame loop. A TrueType file is read
+     * on the shared job pool; a bitmap font's image and `.dat` widths are
+     * decoded there, and its texture is uploaded when first drawn. The Font
+     * is created on the script thread when the job is awaited or polled.
+     *
+     * With `preload`, the job resolves only once those glyphs are rasterized,
+     * `budgetMs` per frame, so a loading screen hands over a font that prints
+     * without a stall.
+     *
+     * @example
+     * ```js
+     * async function start() {
+     *     const title = await Font.loadAsync("fonts/title.ttf", { size: 48, preload: true });
+     *     Loop.run(() => title.print(40, 40, "Ready"));
+     * }
+     * start();
+     * ```
+     */
+    static loadAsync(path?: string | null, options?: Font.AsyncOptions): Font.Job;
+    /** Same as `job.poll()`, `job.wait()` and `job.cancel()`. `wait()` also finishes the preloading. */
+    static poll(job: Font.Job): AthenaJobStatus<Font>;
+    static wait(job: Font.Job, timeoutMs?: number): AthenaJobStatus<Font>;
+    static cancel(job: Font.Job): void;
+
+    /** The printable ASCII characters, from space to `~`: what `preload()` rasterizes by default. */
+    static readonly ASCII: string;
+
+    static readonly ALIGN_TOP: number;
+    static readonly ALIGN_BOTTOM: number;
+    static readonly ALIGN_VCENTER: number;
+    static readonly ALIGN_LEFT: number;
+    static readonly ALIGN_RIGHT: number;
+    static readonly ALIGN_HCENTER: number;
+    static readonly ALIGN_NONE: number;
+    static readonly ALIGN_CENTER: number;
+
+    scale: number;
+    color: Color.Value;
+    /** Horizontal alignment applies to each line. */
+    align: number;
+    outline: number;
+    outlineColor: Color.Value;
+    dropshadow: number;
+    dropshadowColor: Color.Value;
+    /** @deprecated Use `outlineColor`. */
+    outline_color: Color.Value;
+    /** @deprecated Use `dropshadowColor`. */
+    dropshadow_color: Color.Value;
+    /** TrueType rasterization size in pixels (0 for bitmap fonts). */
+    readonly size: number;
+    /** Distance between two lines at the current `scale`, in pixels. */
+    readonly lineHeight: number;
+
+    /** Queues `text`; `\n` starts a new line. */
+    print(x: number, y: number, text: string): void;
+    /** Width of the widest line and height of all lines, in pixels. */
+    getTextSize(text: string): { width: number; height: number };
+    /**
+     * Keeps `text` ready to print repeatedly: its glyphs are placed once and
+     * placed again only when `scale`, `align` or the video mode change. The
+     * outline or shadow reuse the same placement.
+     */
+    render(text: string): FontRender;
+    /**
+     * Rasterizes the glyphs of `chars` (by default `Font.ASCII`) ahead of the
+     * first print, spending at most `budgetMs` (default 2) per frame; `0`
+     * rasterizes them all now. The first slice runs during the call, the
+     * next ones once per frame, also before `Loop.run()` starts. Resolves
+     * with the font; rejects if it is freed meanwhile. Bitmap fonts resolve
+     * at once.
+     *
+     * @example
+     * ```js
+     * await hud.preload("0123456789:/ ", { budgetMs: 1 });
+     * ```
+     */
+    preload(chars?: string, options?: Font.PreloadOptions): Promise<Font>;
+    /**
+     * Releases the font now instead of when the collector finds the object.
+     * Using it afterwards throws; FontRender objects made from it throw too.
+     */
+    free(): void;
+}
+
+declare namespace Font {
+    /** A `Font.loadAsync()` job. */
+    interface Job extends AthenaJob<Font> {
+        readonly __brand: 'FontJob';
+    }
+
+    interface Options {
+        /** TrueType rasterization size in pixels, 6 to 128; defaults to 26. Ignored by bitmap fonts. */
+        size?: number;
+    }
+
+    interface PreloadOptions {
+        /** Milliseconds of rasterization per frame at most; `0` does it all at once. Defaults to 2. */
+        budgetMs?: number;
+    }
+
+    interface AsyncOptions extends Options, PreloadOptions {
+        /** Glyphs rasterized before the job resolves: a string of characters, or `true` for `Font.ASCII`. */
+        preload?: string | boolean;
+    }
+}
+
+declare class FontRender {
+    print(x: number, y: number): void;
+}
+
+
+/* === Module: Gamepad (gamepad) === */
+/**
+ * Controller input for up to eight players, as a singleton.
+ *
+ * Supported controllers: DualShock 2 and other PS2 pads on both controller
+ * ports, up to four per port through a multitap, and DualShock 3/4 over USB
+ * (two) or Bluetooth (two, with a USB Bluetooth adapter).
+ *
+ * Only the two controller ports work out of the box. Multitap, USB and
+ * Bluetooth each need an IOP driver that costs IOP memory, so they start
+ * disabled; turn on the ones the program uses, preferably before the first
+ * `update()`:
+ * ```js
+ * Gamepad.configure({ multitap: true, usb: true });
+ * ```
+ *
+ * Players are logical: a controller that connects takes the lowest free
+ * player and keeps it until it disconnects, whatever port or cable it uses.
+ * Controllers already plugged in at start-up are assigned about half a
+ * second after the first `update()`, in this order: port 1 slots A-D, port 2
+ * slots A-D, USB, Bluetooth. Without multitaps, the pads on port 1 and port 2
+ * therefore become players 0 and 1.
+ *
+ * Call `Gamepad.update()` once per frame. It polls every controller and
+ * freezes a snapshot, so everything read from a `Player` during the frame is
+ * cheap and consistent. `Gamepad.player(i)` always returns the same object.
+ *
+ * Analog values are normalized: sticks in [-1, 1], pressure and rumble
+ * strength in [0, 1].
+ *
+ * Example:
+ * ```js
+ * const p1 = Gamepad.player(0);
+ *
+ * while (true) {
+ *     Gamepad.update();
+ *     if (p1.justDisconnected) pause();
+ *     if (p1.justPressed(Gamepad.CROSS)) jump();
+ *     const move = p1.leftStick();
+ *     x += move.x * speed;
+ *     if (hit) p1.rumble(0.8, 0, 200);
+ *     Screen.flip();
+ * }
+ * ```
+ */
+declare namespace Gamepad {
+    /** How the controller bound to a player is connected. */
+    type Connection = "port" | "usb" | "bluetooth";
+
+    /** State of one optional driver, see `Gamepad.drivers()`. */
+    interface DriverState {
+        /** Requested with `Gamepad.configure()`; all drivers start disabled. */
+        readonly enabled: boolean;
+        /** Loaded on the IOP and answering. */
+        readonly ready: boolean;
+    }
+
+    /** One player. Obtain it with `Gamepad.player()`; it cannot be constructed. */
+    interface Player {
+        /** Player index, 0 to `MAX_PLAYERS - 1`. */
+        readonly index: number;
+        /** True while a controller is bound to this player. */
+        readonly connected: boolean;
+        /** True only on the update where a controller was bound to this player. */
+        readonly justConnected: boolean;
+        /** True only on the update where the controller went away. */
+        readonly justDisconnected: boolean;
+        /** How the controller is connected, or null when there is none. */
+        readonly connection: Connection | null;
+        /** Controller port (0 or 1) for `"port"` connections, otherwise -1. */
+        readonly port: number;
+        /** Multitap slot (0-3, 0 without a multitap) for `"port"` connections, otherwise -1. */
+        readonly slot: number;
+        /**
+         * Kind of device, a `TYPE_*` value (`TYPE_NONE` when empty). A
+         * DualShock 2 stays `TYPE_DUALSHOCK` in digital mode; see `analog`.
+         */
+        readonly type: DeviceType;
+        /** True while the controller is in analog mode, i.e. its sticks are live. */
+        readonly analog: boolean;
+        /** Bitmask of the buttons held at the last update. */
+        readonly buttons: number;
+        /** Bitmask of the buttons held at the update before the last one. */
+        readonly previousButtons: number;
+        /** True when face, shoulder and d-pad buttons report real pressure (DualShock 2/3). */
+        readonly hasPressure: boolean;
+        /** True once the vibration motors are available. */
+        readonly hasRumble: boolean;
+        /**
+         * Radial dead zone used by `leftStick()` and `rightStick()`, in
+         * [0, 0.95]. Defaults to 0.15; set 0 for unfiltered values. Belongs to
+         * the player, so it applies to whichever controller is bound.
+         */
+        deadzone: number;
+        /** Same as `leftStick().x`, without allocating an object. */
+        readonly leftX: number;
+        /** Same as `leftStick().y`, without allocating an object. */
+        readonly leftY: number;
+        /** Same as `rightStick().x`, without allocating an object. */
+        readonly rightX: number;
+        /** Same as `rightStick().y`, without allocating an object. */
+        readonly rightY: number;
+
+        /** True when every button in `buttons` (e.g. `L1 | R1`) is held. */
+        pressed(buttons: number): boolean;
+        /** True on the update the `buttons` combination became fully held. */
+        justPressed(buttons: number): boolean;
+        /** True on the update the last held button of `buttons` was released. */
+        justReleased(buttons: number): boolean;
+        /** True when at least one button in `buttons` is held, e.g. any d-pad direction. */
+        anyPressed(buttons: number): boolean;
+        /** True on the update at least one button in `buttons` became held. */
+        anyJustPressed(buttons: number): boolean;
+        /**
+         * Auto repeat for menus: true on the update a button in `buttons`
+         * becomes held, then after `delayMs` (default 400) and every
+         * `intervalMs` (default 100) while it stays held. Stateless, so it
+         * can be called any number of times per frame.
+         */
+        repeatPressed(buttons: number, delayMs?: number, intervalMs?: number): boolean;
+        /**
+         * D-pad as a direction: each axis is -1, 0 or 1; y is negative upwards
+         * like the sticks. Opposite directions held together cancel out.
+         */
+        dpad(): { x: -1 | 0 | 1; y: -1 | 0 | 1 };
+        /**
+         * Left stick in [-1, 1] with the dead zone applied; y is negative
+         * upwards. Allocates an object per call; prefer `leftX`/`leftY` in
+         * per-frame code for many players.
+         */
+        leftStick(): { x: number; y: number };
+        /** Right stick in [-1, 1] with the dead zone applied; y is negative upwards. */
+        rightStick(): { x: number; y: number };
+        /**
+         * How hard one button is pressed, in [0, 1]. Buttons without a sensor
+         * report 1 while held. On a DualShock 4 only L2 and R2 are analog.
+         */
+        pressure(button: Button): number;
+        /**
+         * Vibrates the controller. `strong` drives the big motor and `weak`
+         * the small one, both in [0, 1]; the small motor of the DualShock 2
+         * and 3 only switches on (any `weak` above 0) or off. With
+         * `durationMs` the motors stop by themselves, otherwise they run
+         * until changed. Cleared when the controller disconnects; ignored
+         * while the player has no controller.
+         */
+        rumble(strong: number, weak?: number, durationMs?: number): void;
+        /** Stops both motors. */
+        stopRumble(): void;
+        /**
+         * Requests analog (`true`, the default) or digital mode for PS2
+         * controllers. When `lock` is true (default) the ANALOG button cannot
+         * change it. Kept by the player and applied to every controller bound
+         * to it. DualShock 3/4 are always analog.
+         */
+        setAnalog(enabled: boolean, lock?: boolean): void;
+        /**
+         * Stores the Bluetooth adapter's address in the DualShock 3/4 plugged
+         * in over USB for this player, so it connects wirelessly once
+         * unplugged. Needs the `usb` and `bluetooth` drivers.
+         *
+         * This **replaces the pairing saved in the controller**: a DualShock 3
+         * paired with a PS3 stops connecting to it. It therefore requires an
+         * explicit `{ overwrite: true }`; ask the user before calling it.
+         *
+         * Returns false when no Bluetooth adapter is present (see
+         * `drivers().bluetooth.adapter`). Throws `TypeError` without the
+         * confirmation or when the controller is not on USB. Blocks for a few
+         * milliseconds.
+         */
+        pairBluetooth(options: { overwrite: true }): boolean;
+        /**
+         * Plain snapshot of the player (connection, type, buttons, sticks,
+         * d-pad, capabilities), so `JSON.stringify(player)` and logging show
+         * its state.
+         */
+        toJSON(): {
+            index: number; connected: boolean; connection: Connection | null;
+            port: number; slot: number; type: DeviceType; analog: boolean; buttons: number;
+            leftStick: { x: number; y: number }; rightStick: { x: number; y: number };
+            dpad: { x: number; y: number }; hasPressure: boolean; hasRumble: boolean;
+            deadzone: number;
+        };
+    }
+
+    /**
+     * Polls every controller and captures this frame's snapshot. Call exactly
+     * once per frame. The first call loads padman and the enabled drivers.
+     * Throws `InternalError` when padman cannot be started; optional drivers
+     * that fail are reported by `drivers()` instead.
+     */
+    function update(): void;
+    /** Returns the persistent object of player `index` (0 to `MAX_PLAYERS - 1`). */
+    function player(index: number): Player;
+    /** All players, by index. The array cannot be modified. */
+    const players: readonly Player[];
+    /** Players with a controller bound, by index. */
+    function connectedPlayers(): Player[];
+    /**
+     * First player whose `justPressed(buttons)` is true, or null. Useful for
+     * "press START to join" screens.
+     */
+    function findJustPressed(buttons: number): Player | null;
+
+    /**
+     * Enables or disables optional drivers; omitted options keep their value.
+     * All start disabled. An enabled driver is loaded on the next `update()`
+     * and costs IOP memory from then on. Enable drivers before the first
+     * update so the controllers on them join the start-up assignment order;
+     * enabled later, they get players as they are found. Disabling a loaded
+     * driver releases its controllers but does not unload it.
+     */
+    function configure(options: { multitap?: boolean; usb?: boolean; bluetooth?: boolean }): void;
+    /**
+     * Enabled and ready state of each optional driver. For Bluetooth,
+     * `adapter` tells whether a USB Bluetooth adapter was found (one RPC; do
+     * not call every frame).
+     */
+    function drivers(): {
+        multitap: DriverState;
+        usb: DriverState;
+        bluetooth: DriverState & { readonly adapter: boolean };
+    };
+    /** True while a multitap is plugged into controller `port` (0 or 1). */
+    function hasMultitap(port: number): boolean;
+    /**
+     * Exchanges the controllers of players `a` and `b`, with their buttons,
+     * edges and rumble; either may be empty. Dead zone and analog preference
+     * stay with each player and are applied to the controller it receives.
+     * Use it to let whoever presses START first become player 0:
+     * ```js
+     * const who = Gamepad.findJustPressed(Gamepad.START);
+     * if (who) Gamepad.swapPlayers(0, who.index);
+     * ```
+     */
+    function swapPlayers(a: number, b: number): void;
+
+    /** Number of players, and length of `players`. */
+    const MAX_PLAYERS: 8;
+
+    /*
+     * Button bits. Combine them with `|` for the methods that take a mask,
+     * e.g. `player.pressed(Gamepad.L1 | Gamepad.R1)`.
+     */
+    const SELECT: 0x0001;
+    const L3: 0x0002;
+    const R3: 0x0004;
+    const START: 0x0008;
+    const UP: 0x0010;
+    const RIGHT: 0x0020;
+    const DOWN: 0x0040;
+    const LEFT: 0x0080;
+    const L2: 0x0100;
+    const R2: 0x0200;
+    const L1: 0x0400;
+    const R1: 0x0800;
+    const TRIANGLE: 0x1000;
+    const CIRCLE: 0x2000;
+    const CROSS: 0x4000;
+    const SQUARE: 0x8000;
+
+    /** A single button, as taken by `pressure()`. */
+    type Button = typeof SELECT | typeof L3 | typeof R3 | typeof START |
+        typeof UP | typeof RIGHT | typeof DOWN | typeof LEFT |
+        typeof L2 | typeof R2 | typeof L1 | typeof R1 |
+        typeof TRIANGLE | typeof CIRCLE | typeof CROSS | typeof SQUARE;
+
+    const TYPE_NONE: 0;
+    const TYPE_NEJICON: 0x2;
+    const TYPE_KONAMIGUN: 0x3;
+    const TYPE_DIGITAL: 0x4;
+    const TYPE_ANALOG: 0x5;
+    const TYPE_NAMCOGUN: 0x6;
+    const TYPE_DUALSHOCK: 0x7;
+    const TYPE_JOGCON: 0xE;
+    const TYPE_DUALSHOCK3: 0x1003;
+    const TYPE_DUALSHOCK4: 0x1004;
+
+    /** Value of `player.type`. */
+    type DeviceType = typeof TYPE_NONE | typeof TYPE_NEJICON | typeof TYPE_KONAMIGUN |
+        typeof TYPE_DIGITAL | typeof TYPE_ANALOG | typeof TYPE_NAMCOGUN |
+        typeof TYPE_DUALSHOCK | typeof TYPE_JOGCON | typeof TYPE_DUALSHOCK3 |
+        typeof TYPE_DUALSHOCK4;
+}
+
+
+/* === Module: System Core (system) === */
+/**
+ * PS2 system, filesystem, timing and hardware helpers.
+ *
+ * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
+ * Return values from filesystem and device operations are native result codes;
+ * callers should check them before continuing.
+ *
+ * Example:
+ * ```js
+ * console.log(System.bootPath);
+ * for (const entry of System.listDir('host:/')) {
+ *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
+ * }
+ * System.sleep(16);
+ * ```
+ */
+declare namespace System {
+    /** One directory entry returned by `listDir()`. */
+    interface DirectoryEntry {
+        /** File or directory name. */
+        name: string;
+        /** File size in bytes; directory sizes may be zero. */
+        size: number;
+        /** True when this entry is a directory. */
+        dir: boolean;
+    }
+
+    /** Memory counters returned by `getMemoryStats()`. */
+    interface MemoryStats {
+        /** Core/binary footprint in bytes. */
+        core: number;
+        /** Reserved native stack in bytes. */
+        nativeStack: number;
+        /** Current native allocations in bytes. */
+        allocs: number;
+        /** Highest observed current native allocation total in bytes since startup. */
+        allocsPeak: number;
+        /** Failed nonzero native allocation requests since startup. */
+        allocationFailures: number;
+        /** Total reported usage in bytes. */
+        used: number;
+        /** Total arena and mapped regions requested from the EE heap. */
+        heapReserved: number;
+        /** Bytes in allocator in-use chunks, including chunk overhead. */
+        heapAllocated: number;
+        /** Approximate allocator metadata/alignment overhead in bytes. */
+        heapOverhead: number;
+        /** Bytes in reusable free chunks. */
+        heapFree: number;
+        /** Number of free chunks in the allocator. */
+        heapFreeChunks: number;
+        /** Free bytes in the topmost releasable chunk. */
+        heapTopFree: number;
+        /** Free bytes outside the top chunk; a fragmentation indicator. */
+        heapNonTopFree: number;
+        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
+        jsHeap: number;
+        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
+        jsLimit: number;
+        /** Live JavaScript objects. */
+        jsObjects: number;
+    }
+
+    /** EE CPU information returned by `getCPUInfo()`. */
+    interface CPUInfo {
+        /** EE CPU implementation identifier. */
+        implementation: number;
+        /** EE CPU revision identifier. */
+        revision: number;
+        /** Installed EE RAM size in bytes. */
+        RAMSize: number;
+        /** EE bus clock frequency. */
+        BUSClock: number;
+        /** EE CPU clock frequency. */
+        CPUClock: number;
+        /** PS2 machine type identifier. */
+        MachineType: number;
+    }
+
+    /** Recalculates the QuickJS heap ceiling using current free EE memory and
+     * leaves `bytes` available for native assets at this snapshot. Call at a
+     * phase boundary before loading assets. Native allocations made later can
+     * consume this headroom. At least 64 KiB must remain available for JS.
+     * Returns the resulting QuickJS allocation limit in bytes. */
+    function setNativeMemoryHeadroom(bytes: number): number;
+
+    /** Memory-card status returned by `getMCInfo()`. */
+    interface MemoryCardInfo {
+        /** Memory-card type identifier. */
+        type: number;
+        /** Free memory reported by the card driver. */
+        freemem: number;
+        /** Format/status flag reported by the card driver. */
+        format: number;
+    }
+
+    /** GS GPU information returned by `getGPUInfo()`. */
+    interface GPUInfo {
+        revision: number;
+        id: number;
+    }
+
+    /** One registered filesystem/device entry. */
+    interface DeviceInfo {
+        name: string;
+        desc: string;
+    }
+
+    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
+    const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in a directory or path relative to `bootPath`. */
+    function listDir(path?: string): DirectoryEntry[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    /** Renames a file or directory and returns the native result code. */
+    function rename(source: string, destination: string): number;
+
+    /** Returns raw EE CPU clock ticks. */
+    function getTicks(): number;
+
+    /** Returns high-resolution elapsed time in milliseconds. */
+    function getMilliseconds(): number;
+
+    /** Suspends the current EE thread for the specified milliseconds. */
+    function sleep(ms: number): void;
+
+    /** Returns currently used EE RAM in bytes. */
+    function getUsedMemory(): number;
+
+    /** Returns remaining available EE RAM in bytes. */
+    function getFreeMemory(): number;
+
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): MemoryStats;
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): CPUInfo;
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): GPUInfo;
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): MemoryCardInfo;
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): DeviceInfo[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
+    /** Forces a QuickJS garbage-collection cycle. */
+    function gc(): void;
+
+    /** Exit application to the PS2 browser/OSDSYS */
+    function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
+}
+
+
+/* === Module: Debug (debug) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=debug,... */
+/**
+ * On-screen diagnostics, for the console where there is no terminal.
+ *
+ * Everything is drawn after the game's draw by a Loop system that exists only
+ * while something is on. Games with their own loop call `Debug.frame(dt)`
+ * after drawing. The overlay text refreshes 4 times per second and is laid
+ * out once per refresh; the frame-time graph, the console tail and the
+ * rects, lines and circles are computed and drawn in C, so a hitbox per
+ * entity per frame allocates nothing. The overlay shows its own cost
+ * ("debug x ms").
+ *
+ * It never takes the game down: arguments are checked at the call (a bad
+ * color throws there), and an error while drawing turns the module off and
+ * is logged once. Shapes are capped at 2048 (texts too); the oldest go and
+ * the overlay counts them.
+ *
+ * The panels stay inside the title-safe area (5% of each edge), which CRT
+ * TVs do not cut, and use the built-in font at 16 px.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=debug,...`
+ *
+ * Example:
+ * ```js
+ * Debug.overlay(true);                          // FPS, CPU, RAM, JS heap, VRAM, graph
+ * Debug.console(true, { lines: 6 });            // last lines of console.log
+ * Debug.watch("player", () => `${player.x | 0},${player.y | 0} ${player.state}`);
+ * Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide everything
+ *
+ * // In update(): hitboxes for a second, in world coordinates.
+ * Debug.rect(enemy.x, enemy.y, 16, 16, Color.new(255, 0, 0), { seconds: 1, space: "world" });
+ * Debug.text(enemy.x, enemy.y - 10, "hit!", { seconds: 0.5, space: "world" });
+ * ```
+ */
+declare namespace Debug {
+    interface ShapeOptions {
+        /** How long it stays, in real seconds (default 0: this frame only). */
+        seconds?: number;
+        /** "screen" (default) or "world", through `setView()`. */
+        space?: "screen" | "world";
+        /** Filled instead of an outline (rect and circle). */
+        filled?: boolean;
+    }
+
+    interface TextOptions extends ShapeOptions {
+        /** Text color (default white). */
+        color?: Color.Value;
+    }
+
+    interface ConsoleOptions {
+        /** Screen lines shown, 1 to 40 (default 8). */
+        lines?: number;
+    }
+
+    interface View {
+        /** World point at the top-left corner of the screen (default 0). */
+        x?: number;
+        y?: number;
+        /** Screen pixels per world unit (default 1). */
+        scale?: number;
+    }
+
+    interface Config {
+        /**
+         * Frame budget in milliseconds for the graph colors. 0 (default)
+         * derives it from the video mode (60 Hz, or 50 Hz for PAL and 576p)
+         * and `vsyncInterval`.
+         */
+        budgetMs?: number;
+        /** The `vsyncInterval` given to Loop.run(), 1 to 4 (default 1; 2 for 30 fps). */
+        vsyncInterval?: number;
+        /**
+         * Distance from the screen edges in pixels, one number or { x, y }.
+         * null (default) is the title-safe area, 5% of each side.
+         */
+        margin?: number | { x: number; y: number } | null;
+        /** Font of every text (default the built-in font at 16 px). */
+        font?: Font;
+    }
+
+    /** Figures of the frame-time graph. */
+    interface FrameStats {
+        samples: number;
+        frameAvg: number;
+        frameMax: number;
+        cpuAvg: number;
+        cpuMax: number;
+    }
+
+    /**
+     * Shows or hides the stats panel: FPS, CPU and frame time (average and
+     * peak of the last 60 frames) and the frame budget, RAM, free VRAM, the
+     * module's own cost, the watches, and a frame-time graph: green under 75% of the budget, yellow up to it, red
+     * over it, magenta for a dropped frame. Returns whether it is on.
+     * Measured on the PS2: about 1.1 ms per frame with the console (0.95 ms
+     * compact; the graph is about 0.45 ms of it). The overlay shows its own
+     * cost as "debug x ms".
+     */
+    function overlay(on?: boolean, options?: OverlayOptions): boolean;
+
+    interface OverlayOptions {
+        /** Draw the frame-time graph (default true). */
+        graph?: boolean;
+        /** Only the FPS line and the watches (default false). */
+        compact?: boolean;
+        /**
+         * Adds the JavaScript heap size and object count (default false).
+         * Reading them walks the whole heap: 6.7 ms in one frame on the PS2,
+         * so it happens every 5 seconds, and is off by default because a
+         * busy game would drop a frame each time.
+         */
+        heap?: boolean;
+    }
+
+    /**
+     * Shows or hides the last lines the script printed (console.log, print,
+     * errors), wrapped to the screen; lines that look like errors are red.
+     * Returns whether it is on.
+     */
+    function console(on?: boolean, options?: ConsoleOptions): boolean;
+
+    /**
+     * Adds `name: read()` to the overlay, evaluated 4 times per second;
+     * errors show inline and long values are cut at 48 characters.
+     */
+    function watch(name: string, read: () => unknown): void;
+    /** Removes a watch; returns whether it existed. */
+    function unwatch(name: string): boolean;
+
+    /** Rectangle outline (or filled), for this frame or `seconds`. Default color red. */
+    function rect(x: number, y: number, width: number, height: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function line(x1: number, y1: number, x2: number, y2: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function circle(x: number, y: number, radius: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    /**
+     * Many rectangles in one call, from a Float32Array of x, y, width,
+     * height groups (length a multiple of 4), checked and queued in C: for
+     * the hitboxes of many entities, far cheaper than one `rect()` each.
+     * Groups with a value that is not finite are skipped. Returns how many
+     * were queued.
+     */
+    function rects(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    /** Many lines in one call, from x1, y1, x2, y2 groups; see `rects()`. */
+    function lines(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    function text(x: number, y: number, text: unknown, options?: TextOptions): void;
+    /** Removes every shape and text still on screen. */
+    function clear(): void;
+
+    /**
+     * Shows and hides everything when the `buttons` combination is pressed
+     * on the controller of `port` (0 or 1). The pad is read without
+     * Gamepad.update(), so the game's justPressed() is unaffected. `null`
+     * removes the shortcut.
+     */
+    function toggleWith(buttons: number | null, port?: 0 | 1): void;
+    /** Shows or hides everything, like the shortcut; returns whether shown. */
+    function show(on?: boolean): boolean;
+
+    /**
+     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
+     * Used without a camera: while `Camera2D.getCurrent()` has one, world
+     * shapes and texts follow it (zoom and rotation included) instead.
+     */
+    function setView(view: View): void;
+    function configure(options: Config): void;
+
+    /**
+     * For games that do not use Loop.run(): call after drawing, before
+     * Screen.flip(). `dt` is the frame time in seconds; `cpuMs` (optional)
+     * feeds the graph. Not needed with Loop.run(): there it does nothing and
+     * warns once.
+     */
+    function frame(dt: number, cpuMs?: number): void;
+
+    /** Figures of the graph over the last `frames` frames (default 60). */
+    function frameStats(frames?: number): FrameStats;
+}
+
+
+/* === Module: Profiler (profiler) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=profiler,... */
+/**
+ * Where the frame time goes, measured in C.
+ *
+ * Timer scopes read the EE cycle counter (COP0 Count) in C, so a begin/end
+ * pair costs far less than two System.getMilliseconds() calls; counters sum
+ * values per frame. Each frame closes into a ring of the last `HISTORY`
+ * frames, from which `stats()` gives the last value, average, 95th
+ * percentile and peak. Timers are inclusive: nested scopes count in their
+ * parents too. A single begin/end span must be shorter than about 14 s (the
+ * counter wraps).
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=profiler,...`
+ * (brings Loop and Debug).
+ *
+ * Example:
+ * ```js
+ * import * as Render3D from "Render3D";
+ * Profiler.auto();                       // close frames after every Loop draw
+ * Profiler.attachRender3D(Render3D);     // 3d.* counters + C clipper warning
+ * Profiler.overlay(true);                // one line per scope in Debug
+ *
+ * const AI = Profiler.scope("ai");       // ids skip the name lookup
+ * Profiler.begin(AI); updateAI(); Profiler.end(AI);
+ * Profiler.measure("physics", () => world.step(dt));
+ * Profiler.count("chunks.rebuilt", rebuilt);
+ * ```
+ */
+declare namespace Profiler {
+    /** Frames kept per scope (120). */
+    const HISTORY: number;
+    const MAX_SCOPES: number;
+    /** Open scopes at once. */
+    const MAX_DEPTH: number;
+    /** A scope id from scope()/counter(), or its name (1 to 31 printable characters). */
+    type Scope = number | string;
+
+    interface Stats {
+        name: string;
+        kind: "timer" | "counter";
+        /** Frames in the window. */
+        samples: number;
+        /** Per frame: milliseconds for timers, summed values for counters. */
+        last: number;
+        average: number;
+        p95: number;
+        peak: number;
+        /** begin() (or count()) calls in the last frame and on average. */
+        lastCalls: number;
+        averageCalls: number;
+    }
+
+    /** Id of a timer scope, registered on first use. Scope 0 is "frame". */
+    function scope(name: string): number;
+    /** Id of a counter, registered on first use. */
+    function counter(name: string): number;
+    /** Opens a timer scope; a name is registered on first use. */
+    function begin(scope: Scope): void;
+    /** Closes the innermost scope; when given, it must be that scope (throws otherwise). */
+    function end(scope?: Scope): void;
+    /** Runs fn inside a timer scope and returns its result; closes on throw too. */
+    function measure<R>(scope: Scope, fn: () => R): R;
+    /** Adds value (default 1) to a counter for this frame. */
+    function count(scope: Scope, value?: number): void;
+    /** Raw unsigned clock; wraps after about 14.5 s on the EE. */
+    function ticks(): number;
+    /** Converts an unsigned tick difference: ticksToMilliseconds((end - start) >>> 0). */
+    function ticksToMilliseconds(ticks: number): number;
+    /**
+     * Closes the frame and returns its length in ms. Not needed with auto().
+     * Open scopes are split: their time so far goes to this frame.
+     */
+    function frame(): number;
+    /** Closes the frames after every draw of Loop.run(). Returns whether on. */
+    function auto(on?: boolean): boolean;
+    /** Stats over the last `frames` frames (default the whole history). Optional `out` is reused. */
+    function stats<T extends object = Stats>(scope: Scope, frames?: number, out?: T): T & Stats;
+    /** Registered scope names, by id. */
+    function names(): string[];
+    /** Unmatched end() calls and begin() beyond MAX_DEPTH since the reset. */
+    function errors(): number;
+    /**
+     * Records Render3D.frameStats() at each frame() as the counters
+     * 3d.triangles, 3d.objects, 3d.passes, 3d.culled and 3d.cpuClip, and
+     * logs (at most every 5 s, unless `warn: false`) when objects are
+     * clipped in C on the EE. Pass the Render3D namespace, or null to stop.
+     */
+    function attachRender3D(render3d: typeof Render3D | null, options?: { warn?: boolean }): void;
+    /** Shows a line per scope in the Debug overlay (turning it on), over `frames` frames (default 60). */
+    function overlay(on?: boolean, options?: { frames?: number }): boolean;
+    /** The overlay line of a scope, e.g. "1.23 ms p95 2.10 max 3.40". */
+    function describe(scope: Scope, frames?: number): string;
+    /** Stats of every scope (allocates; for logs and tests). */
+    function report(frames?: number): Stats[];
+    /** Prints report() with console.log. */
+    function log(frames?: number): void;
+    /** Clears the history; forget = true also drops the names (ids become invalid). */
+    function reset(forget?: boolean): void;
+}
+
+
+/* === Module: Bench (bench) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=bench,... */
+/**
+ * One synchronous benchmark batch per frame, timed by the native Profiler
+ * clock. Setup, teardown, summary sorting and checkpoints are not timed.
+ * Samples are milliseconds per invocation (batch time / iterations),
+ * including timer/JS overhead; no overhead is subtracted. Include an empty
+ * task as a reference for small kernels. Every batch must finish within
+ * the EE clock's approximately 14.5-second wrap interval.
+ * Draw tasks measure CPU submission; include an explicit GS wait in the
+ * task to measure completion. Report metadata should identify platform,
+ * build options, revision, scene and whether the task waits for the GS.
+ * Not in the default build: configure with --modules=bench,usbmass.
+ */
+declare namespace Bench {
+    interface Task<T = any> {
+        name: string;
+        setup?(): T;
+        run(context: T, iteration: number): unknown;
+        /** Called once even when setup/run fails; context may be undefined after a failed setup. */
+        teardown?(context: T | undefined): void;
+        warmup?: number;
+        samples?: number;
+        iterations?: number;
+    }
+    interface Result {
+        name: string;
+        status: "completed" | "error" | "cancelled";
+        warmup: number; samples: number; iterations: number;
+        averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+        error?: string;
+    }
+    interface Report {
+        version: 1; label: string; metadata: Record<string, unknown>;
+        status: "running" | "completed" | "cancelled" | "error";
+        results: Result[];
+    }
+    interface Options {
+        label?: string;
+        metadata?: Record<string, unknown>;
+        /** Warmup batches, default 30; 0..10000. */
+        warmup?: number;
+        /** Measured batches, default 120; 1..10000. */
+        samples?: number;
+        /** Work invocations per batch, default 1; 1..10000. */
+        iterations?: number;
+        /** Rewrites JSON between tasks; writable device required, not an atomic save. */
+        path?: string;
+        onResult?(result: Result, report: Report): void;
+    }
+    class Runner {
+        constructor(tasks: Task[], options?: Options);
+        readonly report: Report;
+        readonly done: boolean;
+        /** Executes one batch; false when finished. Reentrant calls throw. */
+        step(): boolean;
+        /** Cleanup now, or after the current callback returns. */
+        cancel(): void;
+    }
+    /**
+     * Attaches to the existing Loop; it must be running to settle the promise.
+     * Task failures resolve with an error report; checkpoint/onResult failures reject.
+     */
+    function run(tasks: Task[], options?: Options): Promise<Report>;
+    /** Writes JSON using std.open; path/open/write errors throw. */
+    function save(report: Report, path: string): void;
+}
+
+
 /* === Module: Box2D (box2d) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=box2d,... */
 /**
@@ -4205,810 +5530,6 @@ declare namespace Collision3D {
 }
 
 
-/* === Module: Font (font) === */
-/**
- * Font loading and text rendering.
- *
- * The constructor optionally accepts a path to either a TrueType file or a legacy
- * bitmap font (`.bmp`, `.png` or `.jpg`, optionally with a `.dat` width file).
- * With no path, the embedded Quicksand Regular font is used. Text is queued
- * into the current graphics command stream.
- *
- * TrueType glyphs are rasterized once at `size` pixels and cached; `scale`
- * stretches them, so prefer a matching `size` for large text. The same file
- * at the same size is loaded once and shared, and at most 16 different
- * TrueType fonts are loaded at a time: call `free()` on fonts no longer used.
- * Glyphs keep their proportions on NTSC, PAL, 480p and 16:9 modes, and follow
- * `Screen.setMode()`.
- *
- * A glyph is rasterized the first time it is printed, which can hold that
- * frame: `preload()` (or the `preload` option of `loadAsync`) does it ahead,
- * a few milliseconds per frame. Text printed every frame is cheaper through
- * `render()`, which lays it out once.
- *
- * @example
- * ```js
- * const title = new Font("fonts/title.ttf", { size: 48 });
- * title.outlineColor = Color.new(0, 0, 0);
- * title.outline = 2;
- * title.print(320, 40, "Game Over\nPress START");   // \n starts a new line
- * ```
- */
-declare class Font {
-    /** Loads `path`, or the embedded font when omitted, undefined or null. */
-    constructor(path?: string | null, options?: Font.Options);
-    constructor(options: Font.Options);
-
-    /**
-     * Loads a font without stalling the frame loop. A TrueType file is read
-     * on the shared job pool; a bitmap font's image and `.dat` widths are
-     * decoded there, and its texture is uploaded when first drawn. The Font
-     * is created on the script thread when the job is awaited or polled.
-     *
-     * With `preload`, the job resolves only once those glyphs are rasterized,
-     * `budgetMs` per frame, so a loading screen hands over a font that prints
-     * without a stall.
-     *
-     * @example
-     * ```js
-     * async function start() {
-     *     const title = await Font.loadAsync("fonts/title.ttf", { size: 48, preload: true });
-     *     Loop.run(() => title.print(40, 40, "Ready"));
-     * }
-     * start();
-     * ```
-     */
-    static loadAsync(path?: string | null, options?: Font.AsyncOptions): Font.Job;
-    /** Same as `job.poll()`, `job.wait()` and `job.cancel()`. `wait()` also finishes the preloading. */
-    static poll(job: Font.Job): AthenaJobStatus<Font>;
-    static wait(job: Font.Job, timeoutMs?: number): AthenaJobStatus<Font>;
-    static cancel(job: Font.Job): void;
-
-    /** The printable ASCII characters, from space to `~`: what `preload()` rasterizes by default. */
-    static readonly ASCII: string;
-
-    static readonly ALIGN_TOP: number;
-    static readonly ALIGN_BOTTOM: number;
-    static readonly ALIGN_VCENTER: number;
-    static readonly ALIGN_LEFT: number;
-    static readonly ALIGN_RIGHT: number;
-    static readonly ALIGN_HCENTER: number;
-    static readonly ALIGN_NONE: number;
-    static readonly ALIGN_CENTER: number;
-
-    scale: number;
-    color: Color.Value;
-    /** Horizontal alignment applies to each line. */
-    align: number;
-    outline: number;
-    outlineColor: Color.Value;
-    dropshadow: number;
-    dropshadowColor: Color.Value;
-    /** @deprecated Use `outlineColor`. */
-    outline_color: Color.Value;
-    /** @deprecated Use `dropshadowColor`. */
-    dropshadow_color: Color.Value;
-    /** TrueType rasterization size in pixels (0 for bitmap fonts). */
-    readonly size: number;
-    /** Distance between two lines at the current `scale`, in pixels. */
-    readonly lineHeight: number;
-
-    /** Queues `text`; `\n` starts a new line. */
-    print(x: number, y: number, text: string): void;
-    /** Width of the widest line and height of all lines, in pixels. */
-    getTextSize(text: string): { width: number; height: number };
-    /**
-     * Keeps `text` ready to print repeatedly: its glyphs are placed once and
-     * placed again only when `scale`, `align` or the video mode change. The
-     * outline or shadow reuse the same placement.
-     */
-    render(text: string): FontRender;
-    /**
-     * Rasterizes the glyphs of `chars` (by default `Font.ASCII`) ahead of the
-     * first print, spending at most `budgetMs` (default 2) per frame; `0`
-     * rasterizes them all now. The first slice runs during the call, the
-     * next ones once per frame, also before `Loop.run()` starts. Resolves
-     * with the font; rejects if it is freed meanwhile. Bitmap fonts resolve
-     * at once.
-     *
-     * @example
-     * ```js
-     * await hud.preload("0123456789:/ ", { budgetMs: 1 });
-     * ```
-     */
-    preload(chars?: string, options?: Font.PreloadOptions): Promise<Font>;
-    /**
-     * Releases the font now instead of when the collector finds the object.
-     * Using it afterwards throws; FontRender objects made from it throw too.
-     */
-    free(): void;
-}
-
-declare namespace Font {
-    /** A `Font.loadAsync()` job. */
-    interface Job extends AthenaJob<Font> {
-        readonly __brand: 'FontJob';
-    }
-
-    interface Options {
-        /** TrueType rasterization size in pixels, 6 to 128; defaults to 26. Ignored by bitmap fonts. */
-        size?: number;
-    }
-
-    interface PreloadOptions {
-        /** Milliseconds of rasterization per frame at most; `0` does it all at once. Defaults to 2. */
-        budgetMs?: number;
-    }
-
-    interface AsyncOptions extends Options, PreloadOptions {
-        /** Glyphs rasterized before the job resolves: a string of characters, or `true` for `Font.ASCII`. */
-        preload?: string | boolean;
-    }
-}
-
-declare class FontRender {
-    print(x: number, y: number): void;
-}
-
-
-/* === Module: Gamepad (gamepad) === */
-/**
- * Controller input for up to eight players, as a singleton.
- *
- * Supported controllers: DualShock 2 and other PS2 pads on both controller
- * ports, up to four per port through a multitap, and DualShock 3/4 over USB
- * (two) or Bluetooth (two, with a USB Bluetooth adapter).
- *
- * Only the two controller ports work out of the box. Multitap, USB and
- * Bluetooth each need an IOP driver that costs IOP memory, so they start
- * disabled; turn on the ones the program uses, preferably before the first
- * `update()`:
- * ```js
- * Gamepad.configure({ multitap: true, usb: true });
- * ```
- *
- * Players are logical: a controller that connects takes the lowest free
- * player and keeps it until it disconnects, whatever port or cable it uses.
- * Controllers already plugged in at start-up are assigned about half a
- * second after the first `update()`, in this order: port 1 slots A-D, port 2
- * slots A-D, USB, Bluetooth. Without multitaps, the pads on port 1 and port 2
- * therefore become players 0 and 1.
- *
- * Call `Gamepad.update()` once per frame. It polls every controller and
- * freezes a snapshot, so everything read from a `Player` during the frame is
- * cheap and consistent. `Gamepad.player(i)` always returns the same object.
- *
- * Analog values are normalized: sticks in [-1, 1], pressure and rumble
- * strength in [0, 1].
- *
- * Example:
- * ```js
- * const p1 = Gamepad.player(0);
- *
- * while (true) {
- *     Gamepad.update();
- *     if (p1.justDisconnected) pause();
- *     if (p1.justPressed(Gamepad.CROSS)) jump();
- *     const move = p1.leftStick();
- *     x += move.x * speed;
- *     if (hit) p1.rumble(0.8, 0, 200);
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace Gamepad {
-    /** How the controller bound to a player is connected. */
-    type Connection = "port" | "usb" | "bluetooth";
-
-    /** State of one optional driver, see `Gamepad.drivers()`. */
-    interface DriverState {
-        /** Requested with `Gamepad.configure()`; all drivers start disabled. */
-        readonly enabled: boolean;
-        /** Loaded on the IOP and answering. */
-        readonly ready: boolean;
-    }
-
-    /** One player. Obtain it with `Gamepad.player()`; it cannot be constructed. */
-    interface Player {
-        /** Player index, 0 to `MAX_PLAYERS - 1`. */
-        readonly index: number;
-        /** True while a controller is bound to this player. */
-        readonly connected: boolean;
-        /** True only on the update where a controller was bound to this player. */
-        readonly justConnected: boolean;
-        /** True only on the update where the controller went away. */
-        readonly justDisconnected: boolean;
-        /** How the controller is connected, or null when there is none. */
-        readonly connection: Connection | null;
-        /** Controller port (0 or 1) for `"port"` connections, otherwise -1. */
-        readonly port: number;
-        /** Multitap slot (0-3, 0 without a multitap) for `"port"` connections, otherwise -1. */
-        readonly slot: number;
-        /**
-         * Kind of device, a `TYPE_*` value (`TYPE_NONE` when empty). A
-         * DualShock 2 stays `TYPE_DUALSHOCK` in digital mode; see `analog`.
-         */
-        readonly type: DeviceType;
-        /** True while the controller is in analog mode, i.e. its sticks are live. */
-        readonly analog: boolean;
-        /** Bitmask of the buttons held at the last update. */
-        readonly buttons: number;
-        /** Bitmask of the buttons held at the update before the last one. */
-        readonly previousButtons: number;
-        /** True when face, shoulder and d-pad buttons report real pressure (DualShock 2/3). */
-        readonly hasPressure: boolean;
-        /** True once the vibration motors are available. */
-        readonly hasRumble: boolean;
-        /**
-         * Radial dead zone used by `leftStick()` and `rightStick()`, in
-         * [0, 0.95]. Defaults to 0.15; set 0 for unfiltered values. Belongs to
-         * the player, so it applies to whichever controller is bound.
-         */
-        deadzone: number;
-        /** Same as `leftStick().x`, without allocating an object. */
-        readonly leftX: number;
-        /** Same as `leftStick().y`, without allocating an object. */
-        readonly leftY: number;
-        /** Same as `rightStick().x`, without allocating an object. */
-        readonly rightX: number;
-        /** Same as `rightStick().y`, without allocating an object. */
-        readonly rightY: number;
-
-        /** True when every button in `buttons` (e.g. `L1 | R1`) is held. */
-        pressed(buttons: number): boolean;
-        /** True on the update the `buttons` combination became fully held. */
-        justPressed(buttons: number): boolean;
-        /** True on the update the last held button of `buttons` was released. */
-        justReleased(buttons: number): boolean;
-        /** True when at least one button in `buttons` is held, e.g. any d-pad direction. */
-        anyPressed(buttons: number): boolean;
-        /** True on the update at least one button in `buttons` became held. */
-        anyJustPressed(buttons: number): boolean;
-        /**
-         * Auto repeat for menus: true on the update a button in `buttons`
-         * becomes held, then after `delayMs` (default 400) and every
-         * `intervalMs` (default 100) while it stays held. Stateless, so it
-         * can be called any number of times per frame.
-         */
-        repeatPressed(buttons: number, delayMs?: number, intervalMs?: number): boolean;
-        /**
-         * D-pad as a direction: each axis is -1, 0 or 1; y is negative upwards
-         * like the sticks. Opposite directions held together cancel out.
-         */
-        dpad(): { x: -1 | 0 | 1; y: -1 | 0 | 1 };
-        /**
-         * Left stick in [-1, 1] with the dead zone applied; y is negative
-         * upwards. Allocates an object per call; prefer `leftX`/`leftY` in
-         * per-frame code for many players.
-         */
-        leftStick(): { x: number; y: number };
-        /** Right stick in [-1, 1] with the dead zone applied; y is negative upwards. */
-        rightStick(): { x: number; y: number };
-        /**
-         * How hard one button is pressed, in [0, 1]. Buttons without a sensor
-         * report 1 while held. On a DualShock 4 only L2 and R2 are analog.
-         */
-        pressure(button: Button): number;
-        /**
-         * Vibrates the controller. `strong` drives the big motor and `weak`
-         * the small one, both in [0, 1]; the small motor of the DualShock 2
-         * and 3 only switches on (any `weak` above 0) or off. With
-         * `durationMs` the motors stop by themselves, otherwise they run
-         * until changed. Cleared when the controller disconnects; ignored
-         * while the player has no controller.
-         */
-        rumble(strong: number, weak?: number, durationMs?: number): void;
-        /** Stops both motors. */
-        stopRumble(): void;
-        /**
-         * Requests analog (`true`, the default) or digital mode for PS2
-         * controllers. When `lock` is true (default) the ANALOG button cannot
-         * change it. Kept by the player and applied to every controller bound
-         * to it. DualShock 3/4 are always analog.
-         */
-        setAnalog(enabled: boolean, lock?: boolean): void;
-        /**
-         * Stores the Bluetooth adapter's address in the DualShock 3/4 plugged
-         * in over USB for this player, so it connects wirelessly once
-         * unplugged. Needs the `usb` and `bluetooth` drivers.
-         *
-         * This **replaces the pairing saved in the controller**: a DualShock 3
-         * paired with a PS3 stops connecting to it. It therefore requires an
-         * explicit `{ overwrite: true }`; ask the user before calling it.
-         *
-         * Returns false when no Bluetooth adapter is present (see
-         * `drivers().bluetooth.adapter`). Throws `TypeError` without the
-         * confirmation or when the controller is not on USB. Blocks for a few
-         * milliseconds.
-         */
-        pairBluetooth(options: { overwrite: true }): boolean;
-        /**
-         * Plain snapshot of the player (connection, type, buttons, sticks,
-         * d-pad, capabilities), so `JSON.stringify(player)` and logging show
-         * its state.
-         */
-        toJSON(): {
-            index: number; connected: boolean; connection: Connection | null;
-            port: number; slot: number; type: DeviceType; analog: boolean; buttons: number;
-            leftStick: { x: number; y: number }; rightStick: { x: number; y: number };
-            dpad: { x: number; y: number }; hasPressure: boolean; hasRumble: boolean;
-            deadzone: number;
-        };
-    }
-
-    /**
-     * Polls every controller and captures this frame's snapshot. Call exactly
-     * once per frame. The first call loads padman and the enabled drivers.
-     * Throws `InternalError` when padman cannot be started; optional drivers
-     * that fail are reported by `drivers()` instead.
-     */
-    function update(): void;
-    /** Returns the persistent object of player `index` (0 to `MAX_PLAYERS - 1`). */
-    function player(index: number): Player;
-    /** All players, by index. The array cannot be modified. */
-    const players: readonly Player[];
-    /** Players with a controller bound, by index. */
-    function connectedPlayers(): Player[];
-    /**
-     * First player whose `justPressed(buttons)` is true, or null. Useful for
-     * "press START to join" screens.
-     */
-    function findJustPressed(buttons: number): Player | null;
-
-    /**
-     * Enables or disables optional drivers; omitted options keep their value.
-     * All start disabled. An enabled driver is loaded on the next `update()`
-     * and costs IOP memory from then on. Enable drivers before the first
-     * update so the controllers on them join the start-up assignment order;
-     * enabled later, they get players as they are found. Disabling a loaded
-     * driver releases its controllers but does not unload it.
-     */
-    function configure(options: { multitap?: boolean; usb?: boolean; bluetooth?: boolean }): void;
-    /**
-     * Enabled and ready state of each optional driver. For Bluetooth,
-     * `adapter` tells whether a USB Bluetooth adapter was found (one RPC; do
-     * not call every frame).
-     */
-    function drivers(): {
-        multitap: DriverState;
-        usb: DriverState;
-        bluetooth: DriverState & { readonly adapter: boolean };
-    };
-    /** True while a multitap is plugged into controller `port` (0 or 1). */
-    function hasMultitap(port: number): boolean;
-    /**
-     * Exchanges the controllers of players `a` and `b`, with their buttons,
-     * edges and rumble; either may be empty. Dead zone and analog preference
-     * stay with each player and are applied to the controller it receives.
-     * Use it to let whoever presses START first become player 0:
-     * ```js
-     * const who = Gamepad.findJustPressed(Gamepad.START);
-     * if (who) Gamepad.swapPlayers(0, who.index);
-     * ```
-     */
-    function swapPlayers(a: number, b: number): void;
-
-    /** Number of players, and length of `players`. */
-    const MAX_PLAYERS: 8;
-
-    /*
-     * Button bits. Combine them with `|` for the methods that take a mask,
-     * e.g. `player.pressed(Gamepad.L1 | Gamepad.R1)`.
-     */
-    const SELECT: 0x0001;
-    const L3: 0x0002;
-    const R3: 0x0004;
-    const START: 0x0008;
-    const UP: 0x0010;
-    const RIGHT: 0x0020;
-    const DOWN: 0x0040;
-    const LEFT: 0x0080;
-    const L2: 0x0100;
-    const R2: 0x0200;
-    const L1: 0x0400;
-    const R1: 0x0800;
-    const TRIANGLE: 0x1000;
-    const CIRCLE: 0x2000;
-    const CROSS: 0x4000;
-    const SQUARE: 0x8000;
-
-    /** A single button, as taken by `pressure()`. */
-    type Button = typeof SELECT | typeof L3 | typeof R3 | typeof START |
-        typeof UP | typeof RIGHT | typeof DOWN | typeof LEFT |
-        typeof L2 | typeof R2 | typeof L1 | typeof R1 |
-        typeof TRIANGLE | typeof CIRCLE | typeof CROSS | typeof SQUARE;
-
-    const TYPE_NONE: 0;
-    const TYPE_NEJICON: 0x2;
-    const TYPE_KONAMIGUN: 0x3;
-    const TYPE_DIGITAL: 0x4;
-    const TYPE_ANALOG: 0x5;
-    const TYPE_NAMCOGUN: 0x6;
-    const TYPE_DUALSHOCK: 0x7;
-    const TYPE_JOGCON: 0xE;
-    const TYPE_DUALSHOCK3: 0x1003;
-    const TYPE_DUALSHOCK4: 0x1004;
-
-    /** Value of `player.type`. */
-    type DeviceType = typeof TYPE_NONE | typeof TYPE_NEJICON | typeof TYPE_KONAMIGUN |
-        typeof TYPE_DIGITAL | typeof TYPE_ANALOG | typeof TYPE_NAMCOGUN |
-        typeof TYPE_DUALSHOCK | typeof TYPE_JOGCON | typeof TYPE_DUALSHOCK3 |
-        typeof TYPE_DUALSHOCK4;
-}
-
-
-/* === Module: System Core (system) === */
-/**
- * PS2 system, filesystem, timing and hardware helpers.
- *
- * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
- * Return values from filesystem and device operations are native result codes;
- * callers should check them before continuing.
- *
- * Example:
- * ```js
- * console.log(System.bootPath);
- * for (const entry of System.listDir('host:/')) {
- *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
- * }
- * System.sleep(16);
- * ```
- */
-declare namespace System {
-    /** One directory entry returned by `listDir()`. */
-    interface DirectoryEntry {
-        /** File or directory name. */
-        name: string;
-        /** File size in bytes; directory sizes may be zero. */
-        size: number;
-        /** True when this entry is a directory. */
-        dir: boolean;
-    }
-
-    /** Memory counters returned by `getMemoryStats()`. */
-    interface MemoryStats {
-        /** Core/binary footprint in bytes. */
-        core: number;
-        /** Reserved native stack in bytes. */
-        nativeStack: number;
-        /** Current native allocations in bytes. */
-        allocs: number;
-        /** Highest observed current native allocation total in bytes since startup. */
-        allocsPeak: number;
-        /** Failed nonzero native allocation requests since startup. */
-        allocationFailures: number;
-        /** Total reported usage in bytes. */
-        used: number;
-        /** Total arena and mapped regions requested from the EE heap. */
-        heapReserved: number;
-        /** Bytes in allocator in-use chunks, including chunk overhead. */
-        heapAllocated: number;
-        /** Approximate allocator metadata/alignment overhead in bytes. */
-        heapOverhead: number;
-        /** Bytes in reusable free chunks. */
-        heapFree: number;
-        /** Number of free chunks in the allocator. */
-        heapFreeChunks: number;
-        /** Free bytes in the topmost releasable chunk. */
-        heapTopFree: number;
-        /** Free bytes outside the top chunk; a fragmentation indicator. */
-        heapNonTopFree: number;
-        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
-        jsHeap: number;
-        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
-        jsLimit: number;
-        /** Live JavaScript objects. */
-        jsObjects: number;
-    }
-
-    /** EE CPU information returned by `getCPUInfo()`. */
-    interface CPUInfo {
-        /** EE CPU implementation identifier. */
-        implementation: number;
-        /** EE CPU revision identifier. */
-        revision: number;
-        /** Installed EE RAM size in bytes. */
-        RAMSize: number;
-        /** EE bus clock frequency. */
-        BUSClock: number;
-        /** EE CPU clock frequency. */
-        CPUClock: number;
-        /** PS2 machine type identifier. */
-        MachineType: number;
-    }
-
-    /** Recalculates the QuickJS heap ceiling using current free EE memory and
-     * leaves `bytes` available for native assets at this snapshot. Call at a
-     * phase boundary before loading assets. Native allocations made later can
-     * consume this headroom. At least 64 KiB must remain available for JS.
-     * Returns the resulting QuickJS allocation limit in bytes. */
-    function setNativeMemoryHeadroom(bytes: number): number;
-
-    /** Memory-card status returned by `getMCInfo()`. */
-    interface MemoryCardInfo {
-        /** Memory-card type identifier. */
-        type: number;
-        /** Free memory reported by the card driver. */
-        freemem: number;
-        /** Format/status flag reported by the card driver. */
-        format: number;
-    }
-
-    /** GS GPU information returned by `getGPUInfo()`. */
-    interface GPUInfo {
-        revision: number;
-        id: number;
-    }
-
-    /** One registered filesystem/device entry. */
-    interface DeviceInfo {
-        name: string;
-        desc: string;
-    }
-
-    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
-    const bootPath: string;
-    /** Legacy alias for bootPath. */
-    const boot_path: string;
-
-    /** Lists entries in a directory or path relative to `bootPath`. */
-    function listDir(path?: string): DirectoryEntry[];
-
-    /** Removes an empty directory and returns the underlying system result. */
-    function removeDirectory(path: string): number;
-
-    /** Copies a file and returns zero on success. */
-    function copyFile(source: string, destination: string): number;
-
-    /** Moves or renames a file and returns zero on success. */
-    function moveFile(source: string, destination: string): number;
-    /** Renames a file or directory and returns the native result code. */
-    function rename(source: string, destination: string): number;
-
-    /** Returns raw EE CPU clock ticks. */
-    function getTicks(): number;
-
-    /** Returns high-resolution elapsed time in milliseconds. */
-    function getMilliseconds(): number;
-
-    /** Suspends the current EE thread for the specified milliseconds. */
-    function sleep(ms: number): void;
-
-    /** Returns currently used EE RAM in bytes. */
-    function getUsedMemory(): number;
-
-    /** Returns remaining available EE RAM in bytes. */
-    function getFreeMemory(): number;
-
-    /** Yields briefly to the EE scheduler. */
-    function delay(): void;
-
-    /** Returns memory counters from the legacy System API. */
-    function getMemoryStats(): MemoryStats;
-
-    /** Returns basic EE CPU and memory information. */
-    function getCPUInfo(): CPUInfo;
-
-    /** Returns basic GS GPU information. */
-    function getGPUInfo(): GPUInfo;
-
-    /** Returns the console temperature in Celsius when supported. */
-    function getTemperature(): number | undefined;
-
-    /** Returns memory-card information for a controller port (0 or 1). */
-    function getMCInfo(port?: number): MemoryCardInfo;
-
-    /** Returns information about a mass-storage block device. */
-    function getBDMInfo(device: string): { name: string; index: number } | undefined;
-
-    /** Returns currently registered file-system devices. */
-    function devices(): DeviceInfo[];
-
-    /** Mounts a block device at a file-system mount point. */
-    function mount(mountpoint: string, blockdev: string, mode?: number): number;
-
-    /** Unmounts a file-system device. */
-    function umount(device: string): number;
-
-    /** Loads an ELF using the legacy Athena loader. */
-    function loadELF(path: string, args?: string[]): number;
-
-    /** Enables or disables the legacy dark-mode flag. */
-    function setDarkMode(enabled: boolean): void;
-
-    /** Forces a QuickJS garbage-collection cycle. */
-    function gc(): void;
-
-    /** Exit application to the PS2 browser/OSDSYS */
-    function exit(): void;
-
-    /** Alias for exiting to the PS2 browser/OSDSYS. */
-    function exitToBrowser(): void;
-}
-
-
-/* === Module: Debug (debug) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=debug,... */
-/**
- * On-screen diagnostics, for the console where there is no terminal.
- *
- * Everything is drawn after the game's draw by a Loop system that exists only
- * while something is on. Games with their own loop call `Debug.frame(dt)`
- * after drawing. The overlay text refreshes 4 times per second and is laid
- * out once per refresh; the frame-time graph, the console tail and the
- * rects, lines and circles are computed and drawn in C, so a hitbox per
- * entity per frame allocates nothing. The overlay shows its own cost
- * ("debug x ms").
- *
- * It never takes the game down: arguments are checked at the call (a bad
- * color throws there), and an error while drawing turns the module off and
- * is logged once. Shapes are capped at 2048 (texts too); the oldest go and
- * the overlay counts them.
- *
- * The panels stay inside the title-safe area (5% of each edge), which CRT
- * TVs do not cut, and use the built-in font at 16 px.
- *
- * Not in the default build: `node tools/modules.js configure --modules=debug,...`
- *
- * Example:
- * ```js
- * Debug.overlay(true);                          // FPS, CPU, RAM, JS heap, VRAM, graph
- * Debug.console(true, { lines: 6 });            // last lines of console.log
- * Debug.watch("player", () => `${player.x | 0},${player.y | 0} ${player.state}`);
- * Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide everything
- *
- * // In update(): hitboxes for a second, in world coordinates.
- * Debug.rect(enemy.x, enemy.y, 16, 16, Color.new(255, 0, 0), { seconds: 1, space: "world" });
- * Debug.text(enemy.x, enemy.y - 10, "hit!", { seconds: 0.5, space: "world" });
- * ```
- */
-declare namespace Debug {
-    interface ShapeOptions {
-        /** How long it stays, in real seconds (default 0: this frame only). */
-        seconds?: number;
-        /** "screen" (default) or "world", through `setView()`. */
-        space?: "screen" | "world";
-        /** Filled instead of an outline (rect and circle). */
-        filled?: boolean;
-    }
-
-    interface TextOptions extends ShapeOptions {
-        /** Text color (default white). */
-        color?: Color.Value;
-    }
-
-    interface ConsoleOptions {
-        /** Screen lines shown, 1 to 40 (default 8). */
-        lines?: number;
-    }
-
-    interface View {
-        /** World point at the top-left corner of the screen (default 0). */
-        x?: number;
-        y?: number;
-        /** Screen pixels per world unit (default 1). */
-        scale?: number;
-    }
-
-    interface Config {
-        /**
-         * Frame budget in milliseconds for the graph colors. 0 (default)
-         * derives it from the video mode (60 Hz, or 50 Hz for PAL and 576p)
-         * and `vsyncInterval`.
-         */
-        budgetMs?: number;
-        /** The `vsyncInterval` given to Loop.run(), 1 to 4 (default 1; 2 for 30 fps). */
-        vsyncInterval?: number;
-        /**
-         * Distance from the screen edges in pixels, one number or { x, y }.
-         * null (default) is the title-safe area, 5% of each side.
-         */
-        margin?: number | { x: number; y: number } | null;
-        /** Font of every text (default the built-in font at 16 px). */
-        font?: Font;
-    }
-
-    /** Figures of the frame-time graph. */
-    interface FrameStats {
-        samples: number;
-        frameAvg: number;
-        frameMax: number;
-        cpuAvg: number;
-        cpuMax: number;
-    }
-
-    /**
-     * Shows or hides the stats panel: FPS, CPU and frame time (average and
-     * peak of the last 60 frames) and the frame budget, RAM, free VRAM, the
-     * module's own cost, the watches, and a frame-time graph: green under 75% of the budget, yellow up to it, red
-     * over it, magenta for a dropped frame. Returns whether it is on.
-     * Measured on the PS2: about 1.1 ms per frame with the console (0.95 ms
-     * compact; the graph is about 0.45 ms of it). The overlay shows its own
-     * cost as "debug x ms".
-     */
-    function overlay(on?: boolean, options?: OverlayOptions): boolean;
-
-    interface OverlayOptions {
-        /** Draw the frame-time graph (default true). */
-        graph?: boolean;
-        /** Only the FPS line and the watches (default false). */
-        compact?: boolean;
-        /**
-         * Adds the JavaScript heap size and object count (default false).
-         * Reading them walks the whole heap: 6.7 ms in one frame on the PS2,
-         * so it happens every 5 seconds, and is off by default because a
-         * busy game would drop a frame each time.
-         */
-        heap?: boolean;
-    }
-
-    /**
-     * Shows or hides the last lines the script printed (console.log, print,
-     * errors), wrapped to the screen; lines that look like errors are red.
-     * Returns whether it is on.
-     */
-    function console(on?: boolean, options?: ConsoleOptions): boolean;
-
-    /**
-     * Adds `name: read()` to the overlay, evaluated 4 times per second;
-     * errors show inline and long values are cut at 48 characters.
-     */
-    function watch(name: string, read: () => unknown): void;
-    /** Removes a watch; returns whether it existed. */
-    function unwatch(name: string): boolean;
-
-    /** Rectangle outline (or filled), for this frame or `seconds`. Default color red. */
-    function rect(x: number, y: number, width: number, height: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    function line(x1: number, y1: number, x2: number, y2: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    function circle(x: number, y: number, radius: number,
-        color?: Color.Value, options?: ShapeOptions): void;
-    /**
-     * Many rectangles in one call, from a Float32Array of x, y, width,
-     * height groups (length a multiple of 4), checked and queued in C: for
-     * the hitboxes of many entities, far cheaper than one `rect()` each.
-     * Groups with a value that is not finite are skipped. Returns how many
-     * were queued.
-     */
-    function rects(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
-    /** Many lines in one call, from x1, y1, x2, y2 groups; see `rects()`. */
-    function lines(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
-    function text(x: number, y: number, text: unknown, options?: TextOptions): void;
-    /** Removes every shape and text still on screen. */
-    function clear(): void;
-
-    /**
-     * Shows and hides everything when the `buttons` combination is pressed
-     * on the controller of `port` (0 or 1). The pad is read without
-     * Gamepad.update(), so the game's justPressed() is unaffected. `null`
-     * removes the shortcut.
-     */
-    function toggleWith(buttons: number | null, port?: 0 | 1): void;
-    /** Shows or hides everything, like the shortcut; returns whether shown. */
-    function show(on?: boolean): boolean;
-
-    /**
-     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
-     * Used without a camera: while `Camera2D.getCurrent()` has one, world
-     * shapes and texts follow it (zoom and rotation included) instead.
-     */
-    function setView(view: View): void;
-    function configure(options: Config): void;
-
-    /**
-     * For games that do not use Loop.run(): call after drawing, before
-     * Screen.flip(). `dt` is the frame time in seconds; `cpuMs` (optional)
-     * feeds the graph. Not needed with Loop.run(): there it does nothing and
-     * warns once.
-     */
-    function frame(dt: number, cpuMs?: number): void;
-
-    /** Figures of the graph over the last `frames` frames (default 60). */
-    function frameStats(frames?: number): FrameStats;
-}
-
-
 /* === Module: Debug3D (debug3d) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=debug3d,... */
 /**
@@ -5538,6 +6059,72 @@ declare namespace IOP {
 }
 
 
+/* === Module: LOD (lod) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=lod,... */
+/**
+ * Distance-based level of detail for Scene3D nodes: forests, cities, crowds.
+ *
+ * A Group gives a node meshes by distance from the camera; beyond the last
+ * level, or beyond the global draw distance, the node is hidden. Selection
+ * runs in C, uses the node's world position of the last scene update (one
+ * frame of latency) and touches the node only when its level changes, so it
+ * must run before Scene3D's update: `setCamera()` adds a Loop POST_UPDATE
+ * system at priority -100 (Scene3D's attachLoop() defaults to 0); games
+ * without it call `LOD.update(camera)` before `scene.update()`. A
+ * hysteresis band (default 10% of each threshold) stops flicker. While a
+ * group is enabled it owns its node's `visible` flag. Keep Group handles
+ * alive for as long as they are needed; disposing/collecting one removes it.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=lod,...`
+ *
+ * Example:
+ * ```js
+ * const groups = trees.map(tree => new LOD.Group(tree,
+ *     [{ mesh: treeHigh, until: 15 }, { mesh: treeLow, until: 45 }, { mesh: billboard, until: 90 }]));
+ * LOD.setCamera(camera);
+ * LOD.setDrawDistance(90, { lights, color: [0.6, 0.7, 0.85] });   // fog hides the cut
+ * ```
+ */
+declare namespace LOD {
+    const MAX_LEVELS: 8;
+    /** Group.level of a hidden node. */
+    const HIDDEN: -1;
+    interface Level {
+        /** null hides the node in this band. */
+        mesh: Model3D.Mesh | null;
+        /** Used while the distance is below this (increasing, > 0). */
+        until: number;
+    }
+    interface Stats { groups: number; hidden: number; changes: number; perLevel: number[] }
+    class Group {
+        /** Retains the node and meshes. hysteresis: 0 to 0.5 of each threshold (default 0.1). */
+        constructor(node: Scene3D.Node, levels: Level[], options?: { hysteresis?: number });
+        /** Current level, HIDDEN, or -2 before the first selection. */
+        readonly level: number;
+        /** Distance at the last selection. */
+        readonly distance: number;
+        /** Disabled groups leave the node alone. */
+        enabled: boolean;
+        dispose(): void;
+    }
+    /** Selects levels every frame with this camera (retained); null stops. */
+    function setCamera(camera: Camera3D.Camera | null): void;
+    /** Selects every level now; returns the number of changes, or fills stats. */
+    function update(camera: Camera3D.Camera): number;
+    function update<T extends object>(camera: Camera3D.Camera, stats: T): T & Stats;
+    /** Of the last selection. */
+    function stats<T extends object = Stats>(out?: T): T & Stats;
+    /** Multiplies every threshold (quality setting, default 1). */
+    function setBias(bias: number): void;
+    /**
+     * Hides nodes beyond distance (0: no limit). With `lights`, sets their
+     * fog from fogStart (default 60%) to distance in `color`, so the cut
+     * fades instead of popping.
+     */
+    function setDrawDistance(distance: number, options?: { lights?: Lights.Set; fogStart?: number; color?: [number, number, number] }): void;
+}
+
+
 /* === Module: Memory Card (memcard) === */
 /**
  * Memory Card access on mc0: (port 0) and mc1: (port 1).
@@ -5942,6 +6529,104 @@ declare namespace MeshBuilder {
         clear(): this;
         /** New meshes with material (normals for DIFFUSE, UVs with a texture). Empty geometry gives []. */
         build(material?: Model3D.Material): Model3D.Mesh[];
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Nav (nav) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=nav,... */
+/**
+ * Navigation for enemies, NPCs and mobs: A* on an XZ grid and crowds of
+ * agents, in C.
+ *
+ * A Grid covers width x depth cells of `cellSize` world units from (x, z);
+ * each cell has a cost: 0 is blocked, 1-255 multiplies the distance walked
+ * through it (mud, water...). Every cell starts at 1. `findPath` runs A*
+ * over fixed arrays (no allocation per search) with 8-way moves that never
+ * cut corners, and by default smooths the path by line of sight through
+ * cost-1 cells, retaining detours around more expensive terrain. Native
+ * searches reuse scratch storage; findPath() allocates its returned array.
+ *
+ * A Crowd moves agents along their paths every `update(dt)`, slowing down
+ * on arrival and pushing overlapping agents apart (staying on walkable
+ * cells); an agent bound to a Scene3D node sets its position (keeping the
+ * agent's y) and, with `face`, its yaw.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=nav,...`
+ *
+ * Example:
+ * ```js
+ * const grid = new Nav.Grid(64, 64, { cellSize: 1, x: -32, z: -32 });
+ * grid.fill(10, 0, 12, 40, 0);                         // a wall
+ * const crowd = new Nav.Crowd(grid);
+ * const orc = crowd.add({ x: 0, y: 0, z: 0, speed: 3, node: orcNode });
+ * orc.moveTo(player.x, player.z);
+ * // each frame:
+ * crowd.update(dt);
+ * ```
+ */
+declare namespace Nav {
+    /** Cells per grid (512 x 512). */
+    const MAX_CELLS: number;
+    /** Points per path. */
+    const MAX_PATH: number;
+    const MAX_AGENTS: number;
+    interface PathOptions {
+        /** 8-way moves (default true). */
+        diagonal?: boolean;
+        /** Shortcuts across visible cost-1 cells (default true); preserves weighted detours. */
+        smooth?: boolean;
+        /** Integer 0..MAX_CELLS; 0/default searches the whole grid. Exhaustion returns null. */
+        maxIterations?: number;
+    }
+    class Grid {
+        constructor(width: number, depth: number, options?: { cellSize?: number; x?: number; z?: number });
+        readonly width: number; readonly depth: number; readonly cellSize: number;
+        /** Cells expanded by the last findPath (its cost). */
+        readonly lastExpanded: number;
+        setCost(cellX: number, cellZ: number, cost: number): this;
+        /** 0 outside the grid. */
+        getCost(cellX: number, cellZ: number): number;
+        /** Inclusive cell rectangle; returns the cells set. */
+        fill(x0: number, z0: number, x1: number, z1: number, cost: number): number;
+        /** width * depth costs, x fastest. */
+        setCosts(costs: Uint8Array): this;
+        /** True when every cell the segment crosses is walkable. */
+        lineOfSight(x0: number, z0: number, x1: number, z1: number): boolean;
+        /** World x, z pairs from the start to the exact target, or null when unreachable. */
+        findPath(x0: number, z0: number, x1: number, z1: number, options?: PathOptions): Float32Array | null;
+        /** Centre of the nearest walkable cell within radius cells (default 8), or null. */
+        nearestWalkable(x: number, z: number, radius?: number): { x: number; z: number } | null;
+        dispose(): void;
+    }
+    class Agent {
+        private constructor();
+        readonly x: number; readonly y: number; readonly z: number;
+        readonly state: "idle" | "moving" | "arrived";
+        /** Facing angle about Y (radians), from the last movement. */
+        readonly yaw: number;
+        /** Distance per second of the last update. */
+        readonly velocity: number;
+        /** Points of the current path. */
+        readonly waypoints: number;
+        /** Units per second. */
+        speed: number;
+        /** Plans a path; false when unreachable (the agent stops). */
+        moveTo(x: number, z: number): boolean;
+        stop(): this;
+        setPosition(x: number, y: number, z: number): this;
+        /** Drives a node (retained); null stops. */
+        bind(node: Scene3D.Node | null): this;
+        /** Leaves the crowd. */
+        dispose(): void;
+    }
+    class Crowd {
+        /** options: the PathOptions used by moveTo(). */
+        constructor(grid: Grid, options?: PathOptions);
+        add(options: { x?: number; y?: number; z?: number; speed?: number; radius?: number; face?: boolean; node?: Scene3D.Node }): Agent;
+        /** Moves every agent; returns how many arrived in this update. */
+        update(dt: number): number;
         dispose(): void;
     }
 }
@@ -6533,104 +7218,6 @@ declare namespace Physics3D {
 }
 
 
-/* === Module: Profiler (profiler) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=profiler,... */
-/**
- * Where the frame time goes, measured in C.
- *
- * Timer scopes read the EE cycle counter (COP0 Count) in C, so a begin/end
- * pair costs far less than two System.getMilliseconds() calls; counters sum
- * values per frame. Each frame closes into a ring of the last `HISTORY`
- * frames, from which `stats()` gives the last value, average, 95th
- * percentile and peak. Timers are inclusive: nested scopes count in their
- * parents too. A single begin/end span must be shorter than about 14 s (the
- * counter wraps).
- *
- * Not in the default build: `node tools/modules.js configure --modules=profiler,...`
- * (brings Loop and Debug).
- *
- * Example:
- * ```js
- * import * as Render3D from "Render3D";
- * Profiler.auto();                       // close frames after every Loop draw
- * Profiler.attachRender3D(Render3D);     // 3d.* counters + C clipper warning
- * Profiler.overlay(true);                // one line per scope in Debug
- *
- * const AI = Profiler.scope("ai");       // ids skip the name lookup
- * Profiler.begin(AI); updateAI(); Profiler.end(AI);
- * Profiler.measure("physics", () => world.step(dt));
- * Profiler.count("chunks.rebuilt", rebuilt);
- * ```
- */
-declare namespace Profiler {
-    /** Frames kept per scope (120). */
-    const HISTORY: number;
-    const MAX_SCOPES: number;
-    /** Open scopes at once. */
-    const MAX_DEPTH: number;
-    /** A scope id from scope()/counter(), or its name (1 to 31 printable characters). */
-    type Scope = number | string;
-
-    interface Stats {
-        name: string;
-        kind: "timer" | "counter";
-        /** Frames in the window. */
-        samples: number;
-        /** Per frame: milliseconds for timers, summed values for counters. */
-        last: number;
-        average: number;
-        p95: number;
-        peak: number;
-        /** begin() (or count()) calls in the last frame and on average. */
-        lastCalls: number;
-        averageCalls: number;
-    }
-
-    /** Id of a timer scope, registered on first use. Scope 0 is "frame". */
-    function scope(name: string): number;
-    /** Id of a counter, registered on first use. */
-    function counter(name: string): number;
-    /** Opens a timer scope; a name is registered on first use. */
-    function begin(scope: Scope): void;
-    /** Closes the innermost scope; when given, it must be that scope (throws otherwise). */
-    function end(scope?: Scope): void;
-    /** Runs fn inside a timer scope and returns its result; closes on throw too. */
-    function measure<R>(scope: Scope, fn: () => R): R;
-    /** Adds value (default 1) to a counter for this frame. */
-    function count(scope: Scope, value?: number): void;
-    /**
-     * Closes the frame and returns its length in ms. Not needed with auto().
-     * Open scopes are split: their time so far goes to this frame.
-     */
-    function frame(): number;
-    /** Closes the frames after every draw of Loop.run(). Returns whether on. */
-    function auto(on?: boolean): boolean;
-    /** Stats over the last `frames` frames (default the whole history). Optional `out` is reused. */
-    function stats<T extends object = Stats>(scope: Scope, frames?: number, out?: T): T & Stats;
-    /** Registered scope names, by id. */
-    function names(): string[];
-    /** Unmatched end() calls and begin() beyond MAX_DEPTH since the reset. */
-    function errors(): number;
-    /**
-     * Records Render3D.frameStats() at each frame() as the counters
-     * 3d.triangles, 3d.objects, 3d.passes, 3d.culled and 3d.cpuClip, and
-     * logs (at most every 5 s, unless `warn: false`) when objects are
-     * clipped in C on the EE. Pass the Render3D namespace, or null to stop.
-     */
-    function attachRender3D(render3d: typeof Render3D | null, options?: { warn?: boolean }): void;
-    /** Shows a line per scope in the Debug overlay (turning it on), over `frames` frames (default 60). */
-    function overlay(on?: boolean, options?: { frames?: number }): boolean;
-    /** The overlay line of a scope, e.g. "1.23 ms p95 2.10 max 3.40". */
-    function describe(scope: Scope, frames?: number): string;
-    /** Stats of every scope (allocates; for logs and tests). */
-    function report(frames?: number): Stats[];
-    /** Prints report() with console.log. */
-    function log(frames?: number): void;
-    /** Clears the history; forget = true also drops the names (ids become invalid). */
-    function reset(forget?: boolean): void;
-}
-
-
 /* === Module: Replay (replay) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=replay,... */
 /**
@@ -6757,284 +7344,55 @@ declare namespace SaveGame {
 }
 
 
-/* === Module: Sound (sound) === */
+/* === Module: Sky (sky) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=sky,... */
 /**
- * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
- * one streamed music track (WAV or Ogg Vorbis).
+ * Sky and time of day for outdoor scenes.
  *
- * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
- * first time a sound is created or played. `audsrv = true` in athena.ini is
- * still accepted and loads them at boot instead.
+ * `draw(camera)` paints the sky in screen space before the 3D scene: a
+ * vertical gradient from the ground colour through the horizon to the
+ * zenith, by the elevation of the camera ray through each band (camera
+ * roll is ignored), and the sun as a disc with a halo. There is no geometry
+ * around the camera, so nothing goes to the clipper. `setTime(hours)`
+ * blends built-in keyframes (night, dawn, day, dusk) into the colors and
+ * the sun, and `apply(lights)` writes the matching ambient, the sun (or
+ * moon) as directional slot 0 and the horizon as fog colour. Colors are
+ * linear [r, g, b] in [0, 1].
  *
- * Streams:
- * - one plays at a time; `play()` on another stream replaces it (there is no
- *   crossfade: audsrv has a single stream voice);
- * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
- *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
- *   float) is converted on the EE while it plays; see `converted`;
- * - `pause()` keeps the position heard, so `play()` resumes exactly there;
- * - seeking, or switching to a stream of the same format, has no gap: the
- *   new audio follows the ~0.1 s audsrv already holds (other formats pause
- *   ~0.15 s while audsrv is reconfigured);
- * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
- * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
- *   does not interrupt the music; the frame loop only has to keep calling
- *   `Screen.flip()` (or otherwise block) for audio to flow;
- * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
+ * Not covered: UNLIT meshes (and Voxel baked light) do not darken at night,
+ * as Render3D has no per-draw tint yet; use DIFFUSE materials for lit
+ * scenes. Not in the default build: `node tools/modules.js configure --modules=sky,...`
  *
- * Sound effects:
- * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
- *   (or `adpenc`; `-L` for a looping sample). Files that would make the
- *   SPU2 play past their end are refused (`CORRUPT`);
- * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
- *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
- * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
- *   does not stall the frame;
- * - after `IOP.reset()` a sample is uploaded again from its file the next
- *   time it plays.
- *
- * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
- * for wrong argument types, `RangeError` for values out of range,
- * `InternalError` for I/O, format or IOP failures.
- *
- * @example
+ * Example:
  * ```js
- * const music = new Sound.Stream("music/theme.ogg");
- * music.loop = true;
- * music.onLoop = () => console.log("theme looped");
- * music.play({ fade: 1000 });
- *
- * const jump = new Sound.Sfx("sfx/jump.adp");
- * jump.volume = 80;
- * jump.pan = -30;
- *
- * const pad = Gamepad.player(0);
- * Loop.run(() => {
- *     Gamepad.update();
- *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
- *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
- *     Sound.process();
+ * let hours = 6;
+ * Loop.run({
+ *     update(dt) { hours += dt / 10; Sky.setTime(hours); Sky.apply(lights); },
+ *     draw() {
+ *         Screen.clear(Sky.clearColor());
+ *         Sky.draw(camera);
+ *         scene.draw(camera, Render3D.CULL_BACK, lights);
+ *     },
  * });
  * ```
  */
-declare namespace Sound {
-    type ErrorCode =
-        | 'INVALID_ARGUMENT'
-        /** The file could not be opened. */
-        | 'NOT_FOUND'
-        | 'IO'
-        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
-        | 'BAD_FORMAT'
-        /** ADPCM data the SPU2 would play past its end (truncated file). */
-        | 'CORRUPT'
-        | 'NO_MEMORY'
-        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
-        | 'SPU_MEMORY'
-        /** audsrv could not be loaded or started on the IOP. */
-        | 'IOP'
-        /** The streaming thread could not be started. */
-        | 'THREAD'
-        /** Sfx.pitch, or assigning Sfx.loop. */
-        | 'UNSUPPORTED'
-        /** The object was used after free(). */
-        | 'FREED'
-        /** The loadSfxAsync() job was cancelled. */
-        | 'CANCELLED';
-
-    interface Error {
-        code: ErrorCode;
-        message: string;
-    }
-
-    /** SPU2 sample memory in bytes. */
-    interface MemoryStats {
-        /** Sample memory in SPU2 RAM (~2 MiB). */
-        total: number;
-        /** From the start of sample memory to the end of the last sample. */
-        used: number;
-        /** After the last sample: the largest sample that still fits. */
-        free: number;
-        /**
-         * Freed but not reusable yet: audsrv only reclaims memory at the end,
-         * so a sample freed before later ones leaves a hole until those are
-         * freed too. Load long-lived samples first.
-         */
-        wasted: number;
-        /** Samples loaded. */
-        samples: number;
-    }
-
-    interface FadeOptions {
-        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
-        fade?: number;
-    }
-
-    /** Number of SPU2 voices available to sound effects (24). */
-    const CHANNELS: number;
-
-    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
-    function setVolume(volume: number): void;
-    /** Music stream volume set with `setVolume()`. */
-    function getVolume(): number;
-    /**
-     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
-     * still sounding follow at once.
-     */
-    function setSfxVolume(volume: number): void;
-    function getSfxVolume(): number;
-    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
-    function findChannel(): number;
-    /** SPU2 sample memory use. */
-    function getMemoryStats(): MemoryStats;
-    /**
-     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
-     * since the last call, each at most once per call, and returns how many
-     * ran. An exception thrown by a callback propagates.
-     */
-    function process(): number;
-
-    /**
-     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
-     * Dropping it cancels the job (and frees the sample if nobody took it).
-     */
-    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
-        readonly __brand: 'SoundJob';
-    }
-
-    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
-
-    interface JobStatus<T> {
-        state: JobState;
-        /** When `state` is `'done'`. The same object on every later poll. */
-        result?: T;
-        /** When `state` is `'failed'` or `'cancelled'`. */
-        error?: Error;
-    }
-
-    /**
-     * Starts loading a sound effect: a worker thread reads and checks the
-     * file while the frame loop runs, then the `poll()` that sees it read
-     * uploads it to SPU2 memory (a short DMA, on the script thread).
-     *
-     * @example
-     * ```js
-     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
-     * // each frame:
-     * const status = Sound.poll(job);
-     * if (status.state === "done") boom = status.result;
-     * ```
-     */
-    function loadSfxAsync(path: string): Job<Sfx>;
-    /** The job's state without blocking; uploads the sample once it was read. */
-    function poll<T>(job: Job<T>): JobStatus<T>;
-    /**
-     * Blocks until the job is no longer running or `timeoutMs` passes
-     * (default: no limit), letting other threads run meanwhile, then
-     * returns `poll(job)`.
-     */
-    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
-    /** The job ends as `'cancelled'` unless it already finished. */
-    function cancel(job: Job<unknown>): void;
-
-    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
-    class Stream {
-        /** Opens `path`; also callable without `new`. Does not start playback. */
-        constructor(path: string);
-        /**
-         * Starts, or resumes from `position`. Stops the stream that was
-         * playing. With `fade` it starts silent and rises to full volume;
-         * during a fade-out it cancels the fade.
-         */
-        play(options?: FadeOptions): void;
-        /**
-         * Pauses at the position heard. With `fade` it keeps playing (and
-         * `playing()` stays true) until the fade-out ends.
-         */
-        pause(options?: FadeOptions): void;
-        /** Pauses and rewinds to the start, after the fade-out if any. */
-        stop(options?: FadeOptions): void;
-        /** True from `play()` until paused, stopped, or its last sample is heard. */
-        playing(): boolean;
-        /** Moves to the start; keeps playing if it was. */
-        rewind(): void;
-        /** Closes the file. Using the object afterwards throws `FREED`. */
-        free(): void;
-        /** Restart from the beginning at the end instead of stopping. */
-        loop: boolean;
-        /**
-         * Playback position heard, in milliseconds; assigning seeks (clamped
-         * to 0..length). Right after a seek it reads the target, and starts
-         * moving once the new audio is heard (~0.1 s later).
-         */
-        position: number;
-        /**
-         * Called by `Sound.process()` after the stream's last sample was
-         * heard (without `loop`); `this` is the stream.
-         */
-        onEnd: ((this: Stream) => void) | null;
-        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
-        onLoop: ((this: Stream) => void) | null;
-        /**
-         * The stream's last sample was heard (without `loop`); cleared by
-         * `play()`, a seek or `rewind()`.
-         */
-        readonly ended: boolean;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate of the file in Hz. */
-        readonly rate: number;
-        /** 1 (mono) or 2 (stereo). */
-        readonly channels: number;
-        readonly format: 'wav' | 'ogg';
-        /**
-         * audsrv cannot play the file's format, so it is converted to 16-bit
-         * at a supported rate on the EE (a little CPU while playing).
-         */
-        readonly converted: boolean;
-    }
-
-    /** An ADPCM sample resident in SPU2 memory. */
-    class Sfx {
-        /** Loads and uploads `path` (.adp); also callable without `new`. */
-        constructor(path: string);
-        /**
-         * Plays on `channel` (0-23), or on any free channel when omitted.
-         * Returns the channel used, or -1 when that channel (or every channel)
-         * is busy. The volume and pan are applied to the channel first.
-         */
-        play(channel?: number): number;
-        /**
-         * Whether this sample is still playing on `channel`. A looping
-         * sample plays until `stop()`, `free()` or `IOP.reset()`.
-         */
-        playing(channel: number): boolean;
-        /**
-         * Silences this sample on `channel`, or on every channel it plays on.
-         * audsrv cannot key a voice off, so it is muted: `playing()` turns
-         * false at once and the channel is free for the next `play()`.
-         */
-        stop(channel?: number): void;
-        /**
-         * Releases the SPU2 memory. Using the object afterwards throws.
-         * Voices still playing this sample are stopped as with `stop()`.
-         */
-        free(): void;
-        /** 0 to 100, applied on the next `play()`. Default 100. */
-        volume: number;
-        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
-        pan: number;
-        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
-        readonly loop: boolean;
-        /**
-         * Always 0. audsrv plays samples at the rate they were encoded with;
-         * assigning throws `UNSUPPORTED`.
-         */
-        readonly pitch: number;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate in Hz. */
-        readonly rate: number;
-    }
+declare namespace Sky {
+    type RGB = [number, number, number];
+    function setColors(colors: { zenith?: RGB; horizon?: RGB; ground?: RGB }): void;
+    /** Direction toward the sun (normalized); color black hides the disc; size: radius in pixels (default 18). */
+    function setSun(dx: number, dy: number, dz: number, options?: { color?: RGB; size?: number }): void;
+    /** Hours (wrapped to 0..24): colors, sun direction and color, light colors. */
+    function setTime(hours: number): void;
+    /** Ambient, directional slot 0 and (with fog on in lights, unless fog: false) the fog colour. */
+    function apply(lights: Lights.Set, options?: { fog?: boolean }): void;
+    /** Draws the gradient (1-64 bands, default 16) and the sun; returns the bands drawn. */
+    function draw(camera: Camera3D.Camera, bands?: number): number;
+    /** Sky color of a ray at an elevation in radians. */
+    function colorAt(elevation: number): RGB;
+    /** The horizon as a Color.new() value, for Screen.clear(). */
+    function clearColor(): number;
+    function state(): { time: number; zenith: RGB; horizon: RGB; ground: RGB; sunDirection: RGB; sunColor: RGB;
+        ambient: RGB; light: RGB; lightDirection: RGB };
 }
 
 
@@ -7888,6 +8246,94 @@ declare namespace Timer {
 
     /** Releases the native timer. Do not use `timer` afterwards. */
     function destroy(timer: Handle): void;
+}
+
+
+/* === Module: Triggers3D (triggers3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=triggers3d,... */
+/**
+ * Trigger volumes: checkpoints, doors, damage zones, music changes, area
+ * loading. Zones (boxes and spheres) report bodies (spheres; radius 0 is a
+ * point) that enter and leave them. `update()` tests every pair in C and
+ * runs JavaScript only for the changes. A zone reacts to the bodies whose
+ * `layers` share a bit with its `mask`. Zones and bodies can follow a
+ * Scene3D node: they use its world position of the last scene update, so
+ * call `update()` after `scene.update()` (or let the attached Loop update the
+ * scene first).
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
+ *
+ * Example:
+ * ```js
+ * const triggers = new Triggers3D.World();
+ * const PLAYER = 1, ENEMY = 2;
+ * const hero = triggers.body(0, 0, 0, { radius: 0.4, layers: PLAYER }).follow(heroNode);
+ * triggers.box(10, 0, -2, 12, 3, 2, { mask: PLAYER, onEnter: () => openDoor() });
+ * triggers.sphere(0, 0, 20, 3, { mask: PLAYER | ENEMY, onEnter: b => hurt(b.data), onExit: b => stopHurt(b.data) });
+ * // each frame, after the scene update:
+ * triggers.update();
+ * ```
+ */
+declare namespace Triggers3D {
+    /** Zones and bodies per world, each. */
+    const MAX: number;
+    interface ZoneOptions {
+        /** Body layers it reacts to (default all bits). */
+        mask?: number;
+        onEnter?(body: Body, zone: Zone): void;
+        onExit?(body: Body, zone: Zone): void;
+        data?: any;
+    }
+    class Zone {
+        private constructor();
+        readonly id: number;
+        enabled: boolean;
+        mask: number;
+        onEnter?: (body: Body, zone: Zone) => void;
+        onExit?: (body: Body, zone: Zone) => void;
+        data: any;
+        setBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): this;
+        setSphere(x: number, y: number, z: number, radius: number): this;
+        /** Moves with the node plus the offset (the shape's coordinates become relative); null stops. Retains the node. */
+        follow(node: Scene3D.Node | null, ox?: number, oy?: number, oz?: number): this;
+        /** As of the last update(). */
+        contains(body: Body): boolean;
+        occupants(): Body[];
+        /** Removes the zone; onExit runs for the bodies inside. */
+        dispose(): void;
+    }
+    class Body {
+        private constructor();
+        readonly id: number;
+        readonly radius: number;
+        layers: number;
+        data: any;
+        setPosition(x: number, y: number, z: number, radius?: number): this;
+        /** The position becomes the node's world position plus the offset; null stops. */
+        follow(node: Scene3D.Node | null, ox?: number, oy?: number, oz?: number): this;
+        /** Removes the body; onExit runs for the zones it was in. */
+        dispose(): void;
+    }
+    class World {
+        constructor();
+        /** Called for every event after the zone's own callbacks. */
+        onEnter?: (zone: Zone, body: Body) => void;
+        onExit?: (zone: Zone, body: Body) => void;
+        box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, options?: ZoneOptions): Zone;
+        sphere(x: number, y: number, z: number, radius: number, options?: ZoneOptions): Zone;
+        body(x: number, y: number, z: number, options?: { radius?: number; layers?: number; data?: any }): Body;
+        /**
+         * Tests every pair and runs callbacks; returns events generated.
+         * Callbacks may remove/create bodies or zones: pending events for
+         * removed objects are skipped, new objects are tested next update.
+         * Recursive update() throws; callback errors propagate.
+         */
+        update(): number;
+        zones(): Zone[];
+        bodies(): Body[];
+        /** Releases native state and invalidates all its zones/bodies; no exit callbacks. */
+        dispose(): void;
+    }
 }
 
 

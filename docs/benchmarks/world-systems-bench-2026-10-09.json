@@ -1,0 +1,127 @@
+{
+  "date": "2026-10-09",
+  "experiment": "Bench phase 5, phase 4 world systems after correctness review",
+  "scope": "Single PCSX2 run; CPU work and JS bindings, no rendering or GS wait; no before/after comparison and no hardware timings.",
+  "build": {
+    "base_commit": "2a07201",
+    "working_tree": "phase 4 modules, correctness review and Bench (uncommitted)",
+    "runtime": "QuickJS",
+    "debug": true,
+    "image": "athenaenv-build-server:latest",
+    "requested_modules": [
+      "screen",
+      "font",
+      "gamepad",
+      "usbmass",
+      "lod",
+      "audio3d",
+      "triggers3d",
+      "nav",
+      "sky",
+      "meshbuilder",
+      "debug3d",
+      "bench"
+    ],
+    "elf_sha256": "91c362e1c4ea6a4d20cbaccf226efd65413555df796dcce94847dd7c4e7f7f79",
+    "harness": "bin/world_systems_bench.js",
+    "harness_sha256": "551dabfce95e45cd38341e8d0f6b283b85a4b30a39fd7f9ba530064f9ba40495",
+    "harness_adjustment": "Only metadata.platform and metadata.revision replaced in the isolated emulator copy.",
+    "bench_source_sha256": "f29a5aed19727dc10b1a50f0fc15b25c209b07a4370ac7fdebf20ee1e90182e3"
+  },
+  "validation": {
+    "phase4_pcsx2": {
+      "sky": 17,
+      "lod": 28,
+      "nav": 41,
+      "triggers3d": 23,
+      "audio3d": 20,
+      "failures": 0
+    },
+    "phase5_pcsx2": {
+      "profiler": 50,
+      "bench": 25,
+      "failures": 0
+    },
+    "bench_host": {
+      "checks_per_runtime": 27,
+      "runtimes": 2,
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ]
+    },
+    "native_nav": "100 searches and moveTo with malloc/calloc/realloc instrumentation: zero allocations",
+    "ee_builds": [
+      "QuickJS",
+      "native hello with the same native module selection"
+    ],
+    "ps2_hardware": "pending",
+    "full_host_suite": {
+      "command": "sh tests/js/run.sh",
+      "result": "passed",
+      "sanitizers": [
+        "ASan",
+        "UBSan"
+      ],
+      "environment_skips": 5,
+      "skip_scope": "MemoryCard host tests without std.open/Loop"
+    }
+  },
+  "report": {
+    "version": 1,
+    "label": "world-systems",
+    "metadata": {
+      "platform": "PCSX2 2.8.2",
+      "revision": "2a07201 + working tree, phase4 review and Bench",
+      "timing": "CPU, JS bindings included; no GS wait",
+      "note": "single run; compare repeated runs of the same scene"
+    },
+    "status": "completed",
+    "results": [
+      {
+        "name": "empty",
+        "status": "completed",
+        "warmup": 30,
+        "samples": 120,
+        "iterations": 100,
+        "averageMs": 0.00598347,
+        "p95Ms": 0.006024407325701304,
+        "minMs": 0.00597988556972723,
+        "maxMs": 0.006100565637900672
+      },
+      {
+        "name": "lod.300",
+        "status": "completed",
+        "warmup": 30,
+        "samples": 120,
+        "iterations": 1,
+        "averageMs": 0.159783,
+        "p95Ms": 0.17238023674440228,
+        "minMs": 0.15583292759333744,
+        "maxMs": 0.17238023674440228
+      },
+      {
+        "name": "nav.maze128",
+        "status": "completed",
+        "warmup": 3,
+        "samples": 30,
+        "iterations": 1,
+        "averageMs": 66.2583,
+        "p95Ms": 66.27159676654833,
+        "minMs": 66.2467385035593,
+        "maxMs": 66.2724512587422
+      },
+      {
+        "name": "triggers.50x20",
+        "status": "completed",
+        "warmup": 30,
+        "samples": 120,
+        "iterations": 1,
+        "averageMs": 0.414641,
+        "p95Ms": 0.43375312280636535,
+        "minMs": 0.3930698000206121,
+        "maxMs": 0.43401760848541926
+      }
+    ]
+  }
+}

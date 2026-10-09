@@ -1,0 +1,19 @@
+{
+  "id": "sky",
+  "name": "Sky",
+  "description": "Sky and time of day: a screen-space gradient (zenith, horizon, ground) by camera ray elevation with a sun disc, and built-in keyframes for night, dawn, day and dusk that drive the colors, the sun and a Lights set (ambient, sun or moon light, fog colour).",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/sky.c", "native/sky_gs.c"],
+  "dependencies": { "modules": ["graphics", "camera3d", "lights"], "iop": [], "ee_libs": [] },
+  "native": { "shutdown": "athena_sky_module_shutdown" },
+  "quickjs": {
+    "sources": ["quickjs/ath_sky.c"],
+    "module_name": "Sky",
+    "global_alias": "Sky",
+    "init_func": "athena_sky_js_init"
+  },
+  "types": "sky.d.ts"
+}

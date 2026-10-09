@@ -1,0 +1,12 @@
+{
+  "id": "bench",
+  "name": "Bench",
+  "description": "Frame-paced benchmark tasks with warmup, repeated batches timed by the native Profiler clock, average/p95/peak, cleanup, cancellation and JSON checkpoints. Written in JavaScript.",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": { "modules": ["loop", "profiler"], "iop": [], "ee_libs": [] },
+  "js": { "source": "js/bench.js", "module_name": "Bench", "global_alias": "Bench" },
+  "types": "bench.d.ts"
+}

@@ -33,9 +33,10 @@ hardware through native modules: GS rendering, VU1-accelerated tilemaps, 3D
 and particles, IPU video decoding, SPU2 audio, controllers, storage, threads
 and physics.
 
-Every feature is a **module** that can be left out of the build. A game ships
+Features are **modules** that can be left out of the build. A game ships
 only what it uses, so the binary and its RAM footprint stay small. The same
-modules can also be used from C, without the JavaScript engine.
+native modules can also be used from C, without the JavaScript engine;
+modules written entirely in JavaScript require QuickJS.
 
 Highlights:
 
@@ -108,8 +109,9 @@ exception screen with the CPU registers and the faulting function.
 
 ### Globals and imports
 
-Every module of the build is available as a global (`Screen`, `Draw`,
-`Gamepad`...). Modules can also be imported explicitly, which documents the
+Modules with a JavaScript API expose globals (`Screen`, `Draw`,
+`Gamepad`...). Driver-only modules have no JavaScript global. Modules can
+also be imported explicitly, which documents the
 dependencies of a file:
 
 ```js
@@ -117,8 +119,10 @@ import * as Screen from "Screen";
 import { Font } from "Font";
 ```
 
-`Font`, `Image`, `ImageList` and `Video` are classes; the other modules are
-namespaces of functions and constants. QuickJS's `std` and `os` modules are
+`Font`, `Image`, `ImageList`, `Video` and `Scene` are classes; other globals
+are namespaces that can also expose classes, such as `Scene3D.Node` and
+`Input.Map`. A global is available only when its module is in the build.
+QuickJS's `std` and `os` modules are
 global as well, together with `setTimeout`, `setInterval`, `setImmediate` and
 their `clear*` counterparts.
 
@@ -275,9 +279,26 @@ own kinds of jobs through `<athena/job.h>` and expose them with
 
 ## Modules
 
-The default build contains every module except `box2d`, `box2ddraw`, `erl`, `hdd`, `ilink` and `mx4sio`.
+The default build includes 2D graphics (`graphics`, `screen`, `loop`, `draw`,
+`color`, `image`, `imagelist`, `font`, `tilemap`, `camera2d`, `sprite`),
+`collision`, `gamepad`, `sound`, `video`, math (`vector`, `matrix4`, `random`,
+`noise`), system and storage (`system`, `archive`, `iop`, `memcard`, `usbmass`,
+`cdrom`, `poweroff`), and concurrency (`thread`, `mutex`, `timer`). All other
+modules are optional; `system` is required in every build. The `default` and
+`required` fields in each `src/modules/<id>/module.json` define this selection;
+`node tools/modules.js list` shows the available modules.
 Each module's API is documented in its TypeScript declaration, linked in the
 tables below.
+
+Browse [Graphics](#graphics), [3D](#3d), [Input](#input), [Audio](#audio),
+[Animation](#animation), [Game structure](#game-structure),
+[Physics](#physics), [Math](#math), [System and storage](#system-and-storage),
+[Concurrency and timing](#concurrency-and-timing) and
+[Native modules](#native-modules).
+
+Examples using optional APIs require those modules in the selected build.
+Custom builds must also include every API used by the script and a driver
+for its boot device; see [Choosing modules](#choosing-modules).
 
 ### Graphics
 
@@ -293,8 +314,8 @@ tables below.
 | [`tilemap`](src/modules/tilemap/tilemap.d.ts) | `TileMap` | VU1-accelerated batched sprites and tilemaps. |
 | [`camera2d`](src/modules/camera2d/camera2d.d.ts) | `Camera2D` | 2D cameras applied in C to `Draw`, `Image`, `Font` and `TileMap`: position, zoom, rotation and viewport (split screen); follow with smoothing, dead zone, lookahead and auto zoom; bounds, rooms, shake, parallax, culling, timed zoom and pan, fades, flashes, letterbox and transitions between cameras. |
 | [`sprite`](src/modules/sprite/sprite.d.ts) | `Sprite` | Spritesheets (grids, Aseprite and TexturePacker JSON with trimmed frames and tags) and animation clips (fps or per-frame durations, loop, once and pingpong, frame events), animated sprites with origin, scale, rotation and flip, and batch animation of `TileMap` sprites, all advanced in C by the `Loop`. |
-| [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. See [docs/VIDEO.md](docs/VIDEO.md). |
-| [`particles2d`](src/modules/particles2d/particles2d.d.ts) | `Particles2D` | Particle emitters simulated in C (pool, rate and bursts, gravity, drag, size and color over life, rotation and spin) and drawn by a VU1 program that builds each rotated quad through the 2D camera. Not in the default build; see [docs/PARTICLES2D.md](docs/PARTICLES2D.md). |
+| [`video`](src/modules/video/video.d.ts) | `Video` | MPEG-1/2 playback on the IPU, drawn directly or used as an `Image`. |
+| [`particles2d`](src/modules/particles2d/particles2d.d.ts) | `Particles2D` | Particle emitters simulated in C (pool, rate and bursts, gravity, drag, size and color over life, rotation and spin) and drawn by a VU1 program that builds each rotated quad through the 2D camera. Not in the default build. |
 | `graphics` | — | GS initialization and the rendering core shared by the modules above. |
 
 ```js
@@ -410,7 +431,7 @@ ones no longer used.
 
 ### 3D
 
-Not in the default build: `node tools/modules.js configure --modules=scene3d,...`
+Not in the default build: `node tools/modules.js configure --modules=scene3d,screen,usbmass`
 (dependencies such as `render3d`, `model3d` and `camera3d` come with it). The
 screen needs a depth buffer: `mode.zbuffering = true` before `Screen.setMode()`.
 
@@ -420,10 +441,15 @@ screen needs a depth buffer: `mode.zbuffering = true` before `Screen.setMode()`.
 | [`camera3d`](src/modules/camera3d/camera3d.d.ts) | `Camera3D` | Perspective cameras with reversed depth, look-at and frustum tests. |
 | [`model3d`](src/modules/model3d/model3d.d.ts) | `Model3D` | One mesh from glTF/GLB or OBJ, or geometry from typed arrays; materials (unlit, diffuse) and textures; instances with their own transform; bulk position/rotation setters. Whole scenes with animations: `GLTF3D`. |
 | [`lights`](src/modules/lights/lights.d.ts) | `Lights` | Ambient, up to four directional and four point lights (lit per vertex on VU1, with distance falloff), and distance fog applied by the GS. |
-| [`render3d`](src/modules/render3d/render3d.d.ts) | `Render3D` | Opaque rendering on VU1: color, Gouraud diffuse and perspective-correct textures, culling, objects crossing the screen edges drawn on VU1 inside the GS guard band, near-plane clipping on VU1 for objects crossing the camera, clipping in C for the rest, and batches that share one GS/VU1 pass per pipeline. See [docs/3D.md](docs/3D.md). |
-| [`gltf3d`](src/modules/gltf3d/gltf3d.d.ts) | `GLTF3D` | glTF/GLB scenes: node hierarchy as Scene3D nodes, every primitive as a mesh, animations as Animation3D clips, skinned meshes deformed by their joints (on VU1 with a bone palette of up to 24 joints when the mesh is fully on screen, in C with clipping otherwise), and morph targets blended by animated or scripted weights (on VU1 for up to four active targets). See [docs/GLTF3D.md](docs/GLTF3D.md). |
-| [`scene3d`](src/modules/scene3d/scene3d.d.ts) | `Scene3D` | Scene graph: hierarchy with dirty propagation, subtree bounds culling, a render queue sorted by pipeline, native motion (velocity and spin), skins and morph weights, and an update system on the Loop. See [docs/3D_SCENE.md](docs/3D_SCENE.md). |
-| [`particles3d`](src/modules/particles3d/particles3d.d.ts) | `Particles3D` | Billboard particles: emitters in C, quads built and projected by VU1, depth tested against the scene without writing depth. See [docs/PARTICLES3D.md](docs/PARTICLES3D.md). |
+| [`render3d`](src/modules/render3d/render3d.d.ts) | `Render3D` | Opaque rendering on VU1: color, Gouraud diffuse and perspective-correct textures, culling, objects crossing the screen edges drawn on VU1 inside the GS guard band, near-plane clipping on VU1 for objects crossing the camera, clipping in C for the rest, and batches that share one GS/VU1 pass per pipeline. |
+| [`gltf3d`](src/modules/gltf3d/gltf3d.d.ts) | `GLTF3D` | glTF/GLB scenes: node hierarchy as Scene3D nodes, every primitive as a mesh, animations as Animation3D clips, skinned meshes deformed by their joints (on VU1 with a bone palette of up to 24 joints when the mesh is fully on screen, in C with clipping otherwise), and morph targets blended by animated or scripted weights (on VU1 for up to four active targets). |
+| [`scene3d`](src/modules/scene3d/scene3d.d.ts) | `Scene3D` | Scene graph: hierarchy with dirty propagation, subtree bounds culling, a render queue sorted by pipeline, native motion (velocity and spin), skins and morph weights, and an update system on the Loop. |
+| [`particles3d`](src/modules/particles3d/particles3d.d.ts) | `Particles3D` | Billboard particles: emitters in C, quads built and projected by VU1, depth tested against the scene without writing depth. |
+| [`meshbuilder`](src/modules/meshbuilder/meshbuilder.d.ts) | `MeshBuilder` | Native procedural geometry: boxes, spheres, cylinders, planes and heightmaps, transformed mesh merging, vertex colors and atlas UVs; splits large builds into multiple Model3D meshes. |
+| [`voxel`](src/modules/voxel/voxel.d.ts) | `Voxel` | Editable block worlds in native memory, terrain and caves, chunk meshing within a time budget, distance/frustum culling, block raycasts and box movement. |
+| [`lod`](src/modules/lod/lod.d.ts) | `LOD` | Distance-based mesh selection for Scene3D nodes, hysteresis, quality bias, draw-distance culling and optional fog settings. |
+| [`sky`](src/modules/sky/sky.d.ts) | `Sky` | Sky gradient, sun disc and day/night keyframes; applies matching ambient, directional light and fog color to a Lights.Set. |
+| [`debug3d`](src/modules/debug3d/debug3d.d.ts) | `Debug3D` | World-space lines, boxes, spheres, axes, grids, frusta and mesh normals, projected and clipped in C and drawn over the scene. |
 
 Animation and cameras for 3D objects are listed under [Animation](#animation):
 `Animation3D`, `CameraRig3D` and `Tween3D`.
@@ -453,13 +479,65 @@ Players, camera rigs and tweens act by themselves in native systems, so they
 stay active until `dispose()` (or, for tweens, until they end), even when no
 variable holds them; a script that ends releases what it created.
 
+#### Procedural worlds and visibility
+
+`MeshBuilder.Builder` keeps a current color, transform and UV rectangle for
+the geometry added next. `build(material)` returns an array of meshes;
+dispose the builder after building and keep the meshes for drawing or
+Scene3D nodes. `merge()` bakes static props into shared geometry to reduce
+draw calls; `heightmap()` accepts a `Float32Array`, including Noise output.
+
+```js
+const builder = new MeshBuilder.Builder();
+const meshes = builder.color(.4, .6, .3)
+    .plane(0, 0, 0, 40, 40, 8, 8)
+    .build({ shading: Model3D.DIFFUSE });
+builder.dispose();
+for (const mesh of meshes) scene.root.add(new Scene3D.Node(mesh));
+```
+
+`Voxel.World` stores one byte per block (0 is air, 1–255 are material ids).
+Edits mark chunks and affected neighbors dirty. Call `rebuild(budgetMs,
+x, y, z)` each frame to rebuild near the player first, then `draw()`;
+`rebuild(0)` builds everything during a loading screen. The budget is checked
+between chunks, so at least one chunk is rebuilt even if it exceeds the
+budget. Naive meshing supports atlas textures and ambient occlusion; greedy
+meshing merges faces and supports colors without atlas textures or AO.
+`raycast()` selects blocks and `moveBox()` handles block collisions.
+Start with small worlds and inspect `stats().meshBytes`: mesh memory is in
+addition to block storage. [bin/voxel_example.js](bin/voxel_example.js) shows
+editing and first-person movement.
+
+`LOD.Group` retains a node and up to eight meshes with increasing `until`
+distances. `LOD.setCamera(camera)` selects them every frame; beyond the last
+distance the node is hidden. Hysteresis prevents repeated swaps near a
+threshold. Groups control their node's `visible` flag until disabled.
+Selection uses the last scene update's world position and runs before the
+next one; with a manual loop, call `LOD.update(camera)` before
+`scene.update()`. `setBias()` scales thresholds and `setDrawDistance()` can
+configure a Lights.Set's fog to soften the visibility cutoff.
+
+Draw `Sky.draw(camera)` before the scene. `Sky.setTime(hours)` wraps a
+24-hour clock and `Sky.apply(lights)` updates ambient light, directional
+slot 0 and the color of enabled fog. Use DIFFUSE materials for objects that
+should react to daylight; UNLIT materials and baked voxel lighting keep
+their colors. The sky gradient ignores camera roll.
+
+`Debug3D.setCamera(camera)` draws queued shapes after the Loop's draw, with
+no depth test, so diagnostics stay visible. Shapes last one frame by
+default, or a supplied number of real-time seconds. `lines(Float32Array)`
+queues many segments at once; `dropped()` reports queue overflow.
+See [bin/debug3d_example.js](bin/debug3d_example.js) and
+[bin/world_systems_example.js](bin/world_systems_example.js), which combines
+procedural geometry, LOD, navigation, triggers and a day/night cycle.
+
 Systems run in this order within a frame: `Tween3D` (pre-update), then
 `Animation3D`, `Scene3D` (advance and update) and `CameraRig3D` (post-update),
 so cameras read world transforms of the same frame. `Render3D.Batch` draws
 `Model3D.Instance` lists without a scene graph. Performance notes and
-measurements on PCSX2 are in [docs/3D.md](docs/3D.md) and
-`docs/benchmarks/`; `bin/3d_profile.js` and `bin/3d_regression.js` (and their
-native counterparts in `samples/native/`) reproduce them.
+profiling examples are in [bin/3d_profile.js](bin/3d_profile.js) and
+[bin/3d_regression.js](bin/3d_regression.js), with native counterparts in
+`samples/native/3d_profile/` and `samples/native/3d_regression/`.
 
 ### JavaScript or native?
 
@@ -483,15 +561,16 @@ result objects (`draw(..., stats)`, `update(stats)`). Bulk setters
 `Float32Array` (physics output, precomputed animation); filling one per frame
 in JavaScript costs as much as the calls it saves.
 
-Inside C, VU1 is the next step: a skinned mesh of 2334 vertices costs 5.1 ms
-per frame deformed on the EE and 0.59 ms with its bone palette on VU1
-([measurement](docs/benchmarks/3d-skinning-2026-10-06.json)).
+Inside C, VU1 is the next step: GLTF3D uses a VU1 bone palette for eligible
+skinned meshes, with an EE fallback when clipping is required. Inspect the
+render statistics in your own scenes to identify expensive paths.
 
 ### Input
 
 | Module | Global | Description |
 |---|---|---|
 | [`gamepad`](src/modules/gamepad/gamepad.d.ts) | `Gamepad` | Up to eight players: DualShock 2 on both ports and multitaps, DualShock 3/4 over USB and Bluetooth. Buttons, sticks, pressure and rumble. |
+| [`input`](src/modules/input/input.d.ts) | `Input` | Named actions, button combinations and edges, digital axes, sticks with radial dead zones, response curves, sensitivity and d-pad fallback; rebinding and serializable bindings. Written in JavaScript; optional. |
 
 ```js
 Gamepad.configure({ multitap: true });   // optional drivers: multitap, usb, bluetooth
@@ -503,11 +582,36 @@ Loop.run(() => {
 });
 ```
 
+For gameplay actions, enable `input` and update the map after the pad:
+
+```js
+const controls = new Input.Map({
+    move: Input.stick("left", { dpad: true, deadZone: .15 }),
+    jump: Input.button(Gamepad.CROSS),
+});
+Loop.run({
+    update(dt) {
+        Gamepad.update();
+        controls.update();
+        player.x += controls.x("move") * 120 * dt;
+        if (controls.justPressed("jump")) player.jump();
+    },
+    draw() { player.draw(); },
+});
+```
+
+`Input.button(L1 | R1)` requires both buttons; separate arguments are
+alternatives. `rebind()` changes an action, and `bindings()`/`load()` save
+and restore bindings as plain data. Maps read raw sticks and apply their
+own radial dead zone, setting their Gamepad player's `deadzone` to zero.
+`setSource()` can read a Replay snapshot instead of a live controller.
+
 ### Audio
 
 | Module | Global | Description |
 |---|---|---|
 | [`sound`](src/modules/sound/sound.d.ts) | `Sound` | ADPCM sound effects on the 24 SPU2 voices, loaded sync or on a worker with `Sound.loadSfxAsync()`, and one streamed WAV or Ogg Vorbis music track, with fades. |
+| [`audio3d`](src/modules/audio3d/audio3d.d.ts) | `Audio3D` | Positional Sound.Sfx sources at world positions or following Scene3D nodes; camera listener, distance attenuation and stereo pan applied to playing SPU2 voices in C. Optional. |
 
 ```js
 const music = new Sound.Stream("music/theme.ogg");
@@ -524,9 +628,26 @@ Loop.run(() => {
 });
 ```
 
+For spatial effects, enable `audio3d`, set the listener and keep a source
+for each sound that moves:
+
+```js
+Audio3D.setListener(camera);
+const engine = new Audio3D.Source(engineSfx, {
+    node: vehicleNode, minDistance: 2, maxDistance: 40, rolloff: "inverse",
+});
+engine.play();
+```
+
+The module updates voice levels after the scene and camera systems in
+`Loop.run()`; manual loops call `Audio3D.update()` after updating transforms.
+`play()` returns -1 when out of range or no voice is free. A source retains
+its Sfx; `dispose()` stops and releases the source. SPU2 output is stereo:
+position affects volume and pan, without front/back filtering or occlusion.
+
 ### Animation
 
-Not in the default build: `node tools/modules.js configure --modules=ease,tween,...`
+Not in the default build: `node tools/modules.js configure --modules=tween,draw,usbmass`
 
 | Module | Global | Description |
 |---|---|---|
@@ -561,17 +682,21 @@ frame (see [3D](#3d)):
 
 | Module | Global | Description |
 |---|---|---|
-| [`tween3d`](src/modules/tween3d/tween3d.d.ts) | `Tween3D` | `Tween` for `Scene3D.Node`, `Model3D.Instance` and `Camera3D.Camera`: position, scale, rotation (slerp) and camera target, with the `Ease` curves in C, delay, repeat, yoyo, overwrite and awaitable handles. See [docs/3D_TWEEN.md](docs/3D_TWEEN.md). |
-| [`animation3d`](src/modules/animation3d/animation3d.d.ts) | `Animation3D` | Keyframe clips (position, rotation, scale, morph weights; linear or step) sampled in C and played on Scene3D nodes. See [docs/3D_ANIMATION.md](docs/3D_ANIMATION.md). |
-| [`camerarig3d`](src/modules/camerarig3d/camerarig3d.d.ts) | `CameraRig3D` | Follow and orbit controllers for `Camera3D` with limits, input deltas, auto-rotation and frame-rate independent smoothing. See [docs/3D_CAMERA_RIG.md](docs/3D_CAMERA_RIG.md). |
+| [`tween3d`](src/modules/tween3d/tween3d.d.ts) | `Tween3D` | `Tween` for `Scene3D.Node`, `Model3D.Instance` and `Camera3D.Camera`: position, scale, rotation (slerp) and camera target, with the `Ease` curves in C, delay, repeat, yoyo, overwrite and awaitable handles. |
+| [`animation3d`](src/modules/animation3d/animation3d.d.ts) | `Animation3D` | Keyframe clips (position, rotation, scale, morph weights; linear or step) sampled in C and played on Scene3D nodes. |
+| [`camerarig3d`](src/modules/camerarig3d/camerarig3d.d.ts) | `CameraRig3D` | Follow and orbit controllers for `Camera3D` with limits, input deltas, auto-rotation and frame-rate independent smoothing. |
 
 ### Game structure
 
-Not in the default build: `node tools/modules.js configure --modules=scene,...`
+Not in the default build: `node tools/modules.js configure --modules=scene,usbmass`
 
 | Module | Global | Description |
 |---|---|---|
 | [`scene`](src/modules/scene/scene.d.ts) | `Scene` | Scenes with a lifecycle, a stack for pause menus, fade transitions and a loading screen; reference-counted assets (images, sprite sheets, sounds, music, fonts, JSON) loaded in the background and kept while two scenes share them. Written in JavaScript. |
+| [`assets3d`](src/modules/assets3d/assets3d.d.ts) | `Assets3D` | Adds meshes, textures3d and gltf kinds to Scene.Assets manifests, shared and disposed by reference count. Loads queued between frames. Written in JavaScript; optional. |
+| [`replay`](src/modules/replay/replay.d.ts) | `Replay` | Compact controller recording and playback for up to eight players, with a stored seed, quantized sticks and snapshots compatible with Input.Map. Written in JavaScript; optional. |
+| [`nav`](src/modules/nav/nav.d.ts) | `Nav` | Native A* on a weighted XZ grid, diagonal movement without corner cutting, path smoothing, and crowds with arrival and separation that drive Scene3D nodes. Optional. |
+| [`triggers3d`](src/modules/triggers3d/triggers3d.d.ts) | `Triggers3D` | Box and sphere zones with layer masks and enter/exit events for spherical bodies; zones and bodies can follow Scene3D nodes. Pair tests in C, callbacks in JavaScript. Optional. |
 
 ```js
 class Level1 extends Scene {
@@ -607,14 +732,63 @@ to a scene's lifetime. `Scene.Assets.stats()` shows what is held (for finding
 VRAM leaks), and `Scene.Assets.define()` adds asset kinds.
 `bin/tests/scene_example.js` shows it all.
 
+`Assets3D` registers its kinds when imported. Add `meshes`, `textures3d`
+and `gltf` entries to a scene's asset manifest; include `gltf3d` explicitly
+when using the `gltf` kind, since it is not an Assets3D dependency.
+`Assets3D.setBudget(ms)` controls the queued loading budget (default 8 ms
+per frame). Model parsing is synchronous and at least one load runs per
+frame: a single large model can exceed the budget. These loads are spread
+across frames rather than decoded on a worker. Shared assets are disposed
+when their last scene releases them.
+
+For repeatable input, call `Replay.Recorder.capture()` once per simulation
+step and let gameplay read `recorder.source(0)` through `Input.Map`.
+Save with `recorder.save(path)`; load with `Replay.load(path)`, then call
+`playback.advance()` before updating controls each step. Use a fixed step
+and seed the same Random generators from the recording's `seed` in both
+runs. Recorded sticks are quantized to 1/127, so gameplay must read the
+recorded snapshots during capture too. The file stores input and a seed;
+reproducing a run also requires the same initial game state and game logic.
+Replay has no required module dependencies; include `gamepad`, `input`,
+`random` and `loop` when using them in this workflow.
+
+`Nav.Grid` stores costs from 0 (blocked) to 255; configure it from your
+level data. `findPath()` returns world XZ pairs or null, and `Nav.Crowd`
+advances agents with `crowd.update(dt)`. Navigation keeps each agent's Y
+position; populate the grid and handle terrain height/collision in the game.
+It has no automatic Loop attachment. Move bound agents in the game update,
+before Scene3D's post-update system computes their world transforms.
+
+`Triggers3D.World` also requires an explicit `update()`. If its bodies or
+zones follow nodes, run it after `scene.update()` so callbacks see the
+current world positions. With `scene.attachLoop()` at its default priority,
+register a later post-update system:
+
+```js
+const triggers = new Triggers3D.World();
+triggers.body(0, 0, 0, { radius: .4, layers: 1 }).follow(heroNode);
+triggers.box(10, 0, -2, 12, 3, 2, {
+    mask: 1, onEnter: () => console.log("Checkpoint reached"),
+});
+const triggerSystem = Loop.addSystem({
+    name: "triggers", priority: 100,
+    postUpdate() { triggers.update(); },
+});
+// On leaving the level: Loop.removeSystem(triggerSystem); triggers.dispose();
+```
+
+The masks filter event recipients; these zones report overlaps and do not
+resolve physical collisions. Dispose grids, crowds, trigger worlds and LOD
+groups when a level releases them.
+
 ### Physics
 
 | Module | Global | Description |
 |---|---|---|
 | [`collision`](src/modules/collision/collision.d.ts) | `Collision` | Light collision and simple physics in C: rectangles and circles in a spatial hash, tile grids with solid tiles, one-way platforms and slopes, swept movement that slides on walls and never tunnels, gravity, bounce, moving platforms that carry riders, layers and masks, queries, pairs and raycasts. |
-| [`collision3d`](src/modules/collision3d/collision3d.d.ts) | `Collision3D` | Light 3D collision in C: static triangles of level meshes, glTF scenes and boxes in a BVH; raycasts (also many per call), sphere casts and overlaps with layers; kinematic characters that walk with collide-and-slide (gravity, walkable slopes, steps, ground snapping, no tunneling) and drive a Scene3D node from one Loop system. Not in the default build; see [docs/COLLISION3D.md](docs/COLLISION3D.md). |
-| [`physics3d`](src/modules/physics3d/physics3d.d.ts) | `Physics3D` | 3D rigid bodies in C: dynamic, kinematic and static spheres, boxes and capsules with friction, restitution, rolling resistance, warm starting and island sleeping, against each other and the static level of a `Collision3D` world; ball, hinge (limits, motor), distance/rope and weld joints; bodies drive Scene3D nodes, each world steps in the Loop. Not in the default build; see [docs/PHYSICS3D.md](docs/PHYSICS3D.md). |
-| [`box2d`](src/modules/box2d/box2d.d.ts) | `Box2D` | Box2D 3.2: worlds, bodies, five shape types, chains, seven joint types, ray and shape casts, overlap queries, character movers, events and snapshots. Not in the default build; see [docs/BOX2D.md](docs/BOX2D.md). |
+| [`collision3d`](src/modules/collision3d/collision3d.d.ts) | `Collision3D` | Light 3D collision in C: static triangles of level meshes, glTF scenes and boxes in a BVH; raycasts (also many per call), sphere casts and overlaps with layers; kinematic characters that walk with collide-and-slide (gravity, walkable slopes, steps, ground snapping, no tunneling) and drive a Scene3D node from one Loop system. Not in the default build. |
+| [`physics3d`](src/modules/physics3d/physics3d.d.ts) | `Physics3D` | 3D rigid bodies in C: dynamic, kinematic and static spheres, boxes and capsules with friction, restitution, rolling resistance, warm starting and island sleeping, against each other and the static level of a `Collision3D` world; ball, hinge (limits, motor), distance/rope and weld joints; bodies drive Scene3D nodes, each world steps in the Loop. Not in the default build. |
+| [`box2d`](src/modules/box2d/box2d.d.ts) | `Box2D` | Box2D 3.2: worlds, bodies, five shape types, chains, seven joint types, ray and shape casts, overlap queries, character movers, events and snapshots. Not in the default build. |
 | [`box2ddraw`](src/modules/box2ddraw/box2ddraw.d.ts) | `Box2DDraw` | Debug drawing of a Box2D world. Not in the default build. |
 
 `Collision` is for platformers, top-down games and shooters that want
@@ -713,7 +887,10 @@ stalling the frame: `fillAsync()` returns a `Job` (await it, `poll()` its
 | [`archive`](src/modules/archive/archive.d.ts) | `Archive` | Reads zip, tar, tar.gz and gzip; safe extraction, also on a worker thread; gzip in memory. |
 | [`iop`](src/modules/iop/iop.d.ts) | `IOP` | IOP driver discovery, loading, reset and memory statistics. |
 | [`debug`](src/modules/debug/debug.d.ts) | `Debug` | On-screen diagnostics: stats overlay (FPS, CPU and frame time, RAM, JS heap, VRAM) with a frame-time graph, watches, the script's console output, shapes and text in screen or world space for a set time, and a controller shortcut to show and hide it all. Not in the default build. |
+| [`profiler`](src/modules/profiler/profiler.d.ts) | `Profiler` | Native CPU timer scopes and per-frame counters, a 120-frame history with average, p95 and peak, Render3D totals and Debug overlay integration. Optional; includes Loop and Debug. |
+| [`bench`](src/modules/bench/bench.d.ts) | `Bench` | Frame-paced benchmark tasks with warmup, native timing, repeated batches, average/p95/peak, cleanup, cancellation and JSON checkpoints. Written in JavaScript; optional, includes Profiler. |
 | [`memcard`](src/modules/memcard/memcard.d.ts) | `MemoryCard` | Memory cards on `mc0:/` and `mc1:/`: card status and swap detection, files (whole, JSON or streamed), directories, attributes and dates, atomic saves, `icon.sys`, format, and every slow call also as an awaitable background job. Also the drivers the memory card boot device needs. |
+| [`savegame`](src/modules/savegame/savegame.d.ts) | `SaveGame` | Versioned JSON save slots over MemoryCard, CRC-32 validation, atomic background writes, migrations, browser icons and optional gzip when Archive is included. JavaScript with a native codec; optional. |
 | `usbmass` | — | USB storage drivers (`mass:/`). |
 | `mx4sio` | — | MX4SIO (SD card adapter in memory card slot 2) drivers (`mass:/`). Not in the default build; slot 2 no longer reads memory cards while it is loaded. |
 | `hdd` | — | Internal hard disk drivers for exFAT/FAT32 disks, not PFS (`mass:/`). Not in the default build. |
@@ -722,7 +899,7 @@ stalling the frame: `fillAsync()` returns a `Job` (await it, `poll()` its
 | `poweroff` | — | IOP power-off driver. |
 
 ```js
-// Debug (node tools/modules.js configure --modules=debug,...): on screen,
+// Debug (node tools/modules.js configure --modules=debug,usbmass): on screen,
 // since the console has no terminal.
 Debug.overlay(true);                          // FPS, CPU, RAM, VRAM, frame graph
 Debug.console(true, { lines: 5 });            // the last lines of console.log
@@ -743,6 +920,54 @@ USB, MX4SIO, the internal HDD and i.LINK all appear as `mass:/` through the
 same BDM drivers. When booting from `mass:`, the drivers of every one of
 these modules in the build are started, the one holding the boot folder is
 found, and only that one is kept.
+
+Enable `profiler` to measure named sections of a frame:
+
+```js
+Profiler.auto();                         // close history frames after each draw
+Profiler.overlay(true);                 // scope statistics in the Debug overlay
+const aiScope = Profiler.scope("ai");
+// Inside update():
+Profiler.measure(aiScope, () => updateAI());
+Profiler.count("enemies.active", enemies.length);
+```
+
+`stats(scope)` reports milliseconds for timers and totals for counters.
+Scopes are inclusive, so nested time is counted in the parent too.
+`Profiler.attachRender3D(Render3D)` adds rendering counters and reports
+CPU clipping; include `render3d` explicitly to use it. Manual loops call
+`Profiler.frame()` once per frame. Individual timer spans must be shorter
+than about 14 seconds because the EE counter wraps.
+
+Enable `bench` with `node tools/modules.js configure --modules=bench,usbmass`,
+adding the modules used by your tasks. For repeatable measurements,
+`Bench.run()` attaches to an existing Loop and runs one synchronous batch
+per frame:
+
+```js
+Bench.run([
+    { name: "empty", run() {} },
+    { name: "navigation", run() { crowd.update(1 / 60); } },
+], {
+    warmup: 30, samples: 120, iterations: 1,
+    metadata: { platform: "PS2", revision: "record-your-build-commit", timing: "CPU" },
+    path: "results.json",                         // writable boot device
+}).then(report => { console.log(JSON.stringify(report)); Loop.stop(); });
+Loop.run(() => {});
+```
+
+Tasks can provide `setup()` and `teardown(context)`; cleanup runs even if a
+task fails, and the next task continues. Task failures appear in the report;
+checkpoint failures reject the promise. Warmup batches, setup, cleanup and
+JSON writes are excluded from timings. Reported milliseconds are per
+invocation (batch duration divided by `iterations`), including JS and timer
+overhead. `Bench.Runner.step()` supports manual loops and `cancel()` stops
+the runner. Every batch must finish before the EE clock wraps (about 14.5 s).
+Drawing measures CPU submission unless the task explicitly waits for the
+GS. Use an empty task as a timing reference and record platform, build and
+scene metadata; compare repeated runs of the same workload.
+[bin/world_systems_bench.js](bin/world_systems_bench.js) measures LOD,
+navigation and triggers and writes a checkpoint after each task.
 
 ```js
 // Read a file straight from a zip, without extracting it.
@@ -779,6 +1004,30 @@ included, and each directory holds a fixed number of entries. A handle opened
 before the card was swapped or the IOP was reset is refused instead of writing
 to the wrong card. `bin/tests/memcard_example.js` is a complete save/load
 screen.
+
+For game save slots, `SaveGame` adds validation and version migrations over
+the lower-level MemoryCard API:
+
+```js
+SaveGame.define({
+    directory: "MYGAME", title: "My Game", icon: "assets/icon.ico", version: 2,
+    migrate(data, fromVersion) {
+        return fromVersion === 1 ? { ...data, coins: 0 } : data;
+    },
+});
+async function saveProgress() {
+    await SaveGame.save(0, { level: 3, coins: 120 });
+    const state = await SaveGame.load(0);    // null for an empty slot
+    return state;
+}
+```
+
+Slots are 0–99 or names of 1–20 letters, digits, underscores or hyphens.
+`save()` and `load()` are asynchronous; `exists()`, `list()` and `status()`
+are synchronous card accesses. Catch errors by `error.code`, including
+MemoryCard errors, `CORRUPT`, `NEWER_VERSION` and `OLD_VERSION` (a migration
+is required). Include `archive` for gzip compression; without an icon,
+SaveGame does not create `icon.sys` for the PS2 browser.
 
 ### Concurrency and timing
 
@@ -858,13 +1107,35 @@ node tools/modules.js configure --all                          # everything
 ```
 
 `configure` regenerates `Makefile.modules`, `src/generated/` and
-`bin/athena.d.ts`. Boot devices are modules too: a build that runs from USB can
+`bin/athena.d.ts`. A custom selection replaces the previous selection;
+dependencies and required modules are added automatically, but the default
+modules are not. Use lowercase module ids in this command and the exported
+names (such as `Scene3D` or `Audio3D`) in JavaScript. Rebuild the ELF after
+configuring; changing the declarations alone does not enable a module.
+
+For example, a USB build for the procedural world example is:
+
+```shell
+node tools/modules.js configure --modules=screen,loop,meshbuilder,lod,nav,triggers3d,sky,debug3d,usbmass
+docker compose run --rm build
+# Set default_script=world_systems_example.js in bin/athena.ini.
+```
+
+Boot devices are modules too: a build that runs from USB can
 drop `memcard` and `cdrom` to save RAM, while builds booting from SD card
 adapters or internal storage include `mx4sio`, `hdd` or `ilink`. A build without
 the driver of its boot device cannot read its own scripts.
 
 Local builds with a ps2dev toolchain, build options and the C library are
 described in [docs/BUILDING_ATHENA.md](docs/BUILDING_ATHENA.md).
+
+The module picker in [public/index.html](public/index.html) shows the catalog
+and generates configuration commands. An optional build server can produce
+selected QuickJS builds or native SDKs; see
+[docs/BUILD_SERVER.md](docs/BUILD_SERVER.md) for its dedicated checkout,
+configuration and API. `node tools/modules.js catalog` updates the published
+catalogs and combined declarations for all available modules; these differ
+from `bin/athena.d.ts`, which describes only the configured build.
 
 ### Adding a module
 
@@ -880,7 +1151,10 @@ src/modules/<id>/
 └── <id>.d.ts          # TypeScript declaration
 ```
 
-The native part never depends on QuickJS, so every module is usable from C.
+The native part never depends on QuickJS and is usable from C. Modules
+implemented entirely in JavaScript have no C API; hybrid modules expose
+their native functionality through public headers, while their JavaScript
+helpers require the QuickJS runtime.
 
 #### JavaScript modules
 
@@ -921,6 +1195,7 @@ runtime.
 ```shell
 make RUNTIME=native APP_SRCS=samples/native/hello/main.c   # bin/athena_native.elf
 make lib RUNTIME=native                                    # lib/libathena.a for other projects
+make sdk RUNTIME=native                                    # dist/athena-sdk.tar.gz: library, headers and samples
 ```
 
 See `samples/native/` (`camera/` follows a square with the Camera2D C API)
@@ -976,6 +1251,15 @@ as the first script after boot. Key test suites in `bin/tests/` include
 `stack_test.js` (recursion and stack limits), `font_async_test.js` (font
 rasterization and async jobs), `memcard_test.js` (synchronous and async saves)
 and `memory_stats.js`.
+
+Additional suites cover the optional modules: `input_test.js`,
+`replay_test.js`, `savegame_test.js`, `assets3d_test.js`, `profiler_test.js`,
+`debug3d_test.js`, `meshbuilder_test.js`, `voxel_test.js`, `lod_test.js`,
+`nav_test.js`, `triggers3d_test.js`, `audio3d_test.js`, `sky_test.js` and
+`bench_test.js`.
+Include the modules a suite uses when running it on the PS2. Host runners
+stub hardware services, so they check APIs and algorithms; GS output, SPU2
+playback and device behavior still need emulator or console verification.
 
 `soak_test.js` checks that switching scripts does not leak or hang: it runs
 the heavy scripts of `bin/tests/soak/` (fonts, sound, ImageList, video, jobs,

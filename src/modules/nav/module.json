@@ -1,0 +1,18 @@
+{
+  "id": "nav",
+  "name": "Nav",
+  "description": "Navigation on an XZ grid in C: per-cell costs, A* with a binary heap and no allocation per search, 8-way moves without corner cutting, line-of-sight path smoothing, and crowds of agents that follow paths with arrival and separation, driving Scene3D nodes.",
+  "category": "Game",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/nav.c"],
+  "dependencies": { "modules": ["scene3d"], "iop": [], "ee_libs": [] },
+  "quickjs": {
+    "sources": ["quickjs/ath_nav.c"],
+    "module_name": "Nav",
+    "global_alias": "Nav",
+    "init_func": "athena_nav_js_init"
+  },
+  "types": "nav.d.ts"
+}

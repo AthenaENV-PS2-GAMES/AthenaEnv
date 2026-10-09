@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-09T14:39:11.469Z",
+  "generatedAt": "2026-10-09T16:07:35.943Z",
   "modules": [
     {
       "id": "animation3d",
@@ -69,6 +69,52 @@
         "ee_libs": []
       },
       "global_alias": "Assets3D",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "audio3d",
+      "name": "Audio3D",
+      "description": "Positional sound: sources in the world (or on Scene3D nodes) and a listener camera; distance attenuation (inverse or linear) and stereo pan applied in C to the playing SPU2 voices every frame.",
+      "category": "Audio",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "sound",
+          "camera3d",
+          "scene3d",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Audio3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "bench",
+      "name": "Bench",
+      "description": "Frame-paced benchmark tasks with warmup, repeated batches timed by the native Profiler clock, average/p95/peak, cleanup, cancellation and JSON checkpoints. Written in JavaScript.",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "profiler"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Bench",
       "api": {
         "native": false,
         "quickjs": true
@@ -637,6 +683,31 @@
       }
     },
     {
+      "id": "lod",
+      "name": "LOD",
+      "description": "Distance-based level of detail for Scene3D nodes: mesh levels with hysteresis, a global draw distance with matching fog and a quality bias, selected in C by a Loop system before the scene updates.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d",
+          "model3d",
+          "camera3d",
+          "lights",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "LOD",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "loop",
       "name": "Loop",
       "description": "Game loop driven by the runtime: clears the screen, calls a per-frame callback with the native delta time and flips.",
@@ -791,6 +862,27 @@
       "api": {
         "native": true,
         "quickjs": false
+      }
+    },
+    {
+      "id": "nav",
+      "name": "Nav",
+      "description": "Navigation on an XZ grid in C: per-cell costs, A* with a binary heap and no allocation per search, 8-way moves without corner cutting, line-of-sight path smoothing, and crowds of agents that follow paths with arrival and separation, driving Scene3D nodes.",
+      "category": "Game",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Nav",
+      "api": {
+        "native": true,
+        "quickjs": true
       }
     },
     {
@@ -1103,6 +1195,29 @@
       }
     },
     {
+      "id": "sky",
+      "name": "Sky",
+      "description": "Sky and time of day: a screen-space gradient (zenith, horizon, ground) by camera ray elevation with a sun disc, and built-in keyframes for night, dawn, day and dusk that drive the colors, the sun and a Lights set (ambient, sun or moon light, fog colour).",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "camera3d",
+          "lights"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Sky",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "sound",
       "name": "Sound",
       "description": "Audio through audsrv: ADPCM sound effects on the 24 SPU2 voices and a streamed WAV/OGG music track. audsrv is loaded on the IOP on first use.",
@@ -1232,6 +1347,27 @@
         "ee_libs": []
       },
       "global_alias": "Timer",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "triggers3d",
+      "name": "Triggers3D",
+      "description": "Trigger volumes: box and sphere zones that report bodies entering and leaving them, with layer masks and Scene3D node following. Pairs are tested in C; JavaScript runs only for the events.",
+      "category": "Game",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Triggers3D",
       "api": {
         "native": true,
         "quickjs": true

@@ -128,3 +128,7 @@ $CC $FLAGS -Isrc/core/include -Isrc/modules/particles3d/include -Isrc/modules/lo
     src/modules/camera3d/native/camera3d.c src/modules/matrix4/native/matrix4.c \
     src/modules/loop/native/loop_systems.c -lm
 "$OUT/particles3d_test"
+$CC $FLAGS $INC -Isrc/modules/nav/include -Wall -Wextra -Werror \
+    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
+    -o "$OUT/nav_test" tests/host/nav_test.c src/modules/nav/native/nav.c -lm
+"$OUT/nav_test"
