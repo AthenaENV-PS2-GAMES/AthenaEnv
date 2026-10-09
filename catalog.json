@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-08T22:29:25.119Z",
+  "generatedAt": "2026-10-09T00:51:26.028Z",
   "modules": [
     {
       "id": "archive",
