@@ -277,7 +277,10 @@ int athena_mesh3d_create(const AthenaGeometry3D *g,AthenaMesh3D **out) {
             m->weights8[i*4+largest]=(uint8_t)(m->weights8[i*4+largest]+255-total);
         }
         const float *c=g->colors?&g->colors[source*4]:NULL;
-        uint8_t baked[4]; for(unsigned j=0;j<4;j++) baked[j]=lroundf((c?c[j]:1)*m->material.base_color[j]*255);
+        /* Validated: the product is in [0, 255]. Adding .5 and truncating rounds
+         * like lroundf() for these non-negative values, without its library
+         * call per channel (the R5900 FPU has no rounding instruction). */
+        uint8_t baked[4]; for(unsigned j=0;j<4;j++) baked[j]=(uint8_t)((c?c[j]:1)*m->material.base_color[j]*255.0f+.5f);
         m->colors[i]=(AthenaColor3D){baked[0],baked[1],baked[2],baked[3]};
         if(g->normals) {
             const float *n=&g->normals[source*3]; normalize(&m->normals[i],n[0],n[1],n[2]);

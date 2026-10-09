@@ -19,7 +19,7 @@ ASAN="-fsanitize=address"
 UBSAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
 INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include \
     -Isrc/modules/random/include -Isrc/modules/noise/include \
-    -Isrc/modules/debug/include -Isrc/modules/color/include -Isrc/modules/profiler/include -Isrc/modules/debug3d/include -Isrc/modules/savegame/include \
+    -Isrc/modules/debug/include -Isrc/modules/color/include -Isrc/modules/profiler/include -Isrc/modules/debug3d/include -Isrc/modules/savegame/include -Isrc/modules/meshbuilder/include -Isrc/modules/voxel/include \
     -Isrc/modules/graphics/include -Isrc/modules/camera2d/include -Isrc/modules/loop/include \
     -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include \
     -Isrc/modules/collision/include -Isrc/runtime/quickjs/include \
@@ -92,6 +92,8 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
     src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
     src/modules/savegame/native/savegame_codec.c src/modules/savegame/quickjs/ath_savegame.c \
+    src/modules/meshbuilder/native/meshbuilder.c src/modules/meshbuilder/quickjs/ath_meshbuilder.c \
+    src/modules/voxel/native/voxel.c src/modules/voxel/quickjs/ath_voxel.c \
     src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
     "$OUT"/obj/*.o -lm -lpthread
 
@@ -112,6 +114,8 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
     src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
     src/modules/savegame/native/savegame_codec.c src/modules/savegame/quickjs/ath_savegame.c \
+    src/modules/meshbuilder/native/meshbuilder.c src/modules/meshbuilder/quickjs/ath_meshbuilder.c \
+    src/modules/voxel/native/voxel.c src/modules/voxel/quickjs/ath_voxel.c \
     src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
     src/modules/font/quickjs/ath_font.c tests/js/font_host.c \
     "$OUT"/obj/*.o -lm -lpthread
@@ -192,6 +196,10 @@ echo "== tests/savegame_test.js"
 check "$OUT/runner" tests/savegame_test.js "SaveGame module test passed"
 echo "== tests/assets3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/assets3d_test.js "Assets3D module test passed"
+echo "== tests/meshbuilder_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/meshbuilder_test.js "MeshBuilder module test passed"
+echo "== tests/voxel_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/voxel_test.js "Voxel module test passed"
 echo "== tests/random_noise_test.js"
 check "$OUT/runner" tests/random_noise_test.js "Random and Noise module test passed"
 echo "== tests/camera2d_test.js"

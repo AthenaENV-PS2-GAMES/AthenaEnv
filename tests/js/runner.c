@@ -57,6 +57,9 @@ JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_profiler_js_init(JSContext *ctx);
 JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
 JSModuleDef *athena_savegame_js_init(JSContext *ctx);
+JSModuleDef *athena_meshbuilder_js_init(JSContext *ctx);
+JSModuleDef *athena_voxel_js_init(JSContext *ctx);
+void athena_voxel_js_cleanup(JSContext *ctx);
 void athena_debug3d_js_cleanup(JSContext *ctx);
 void athena_profiler_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
@@ -571,6 +574,8 @@ static int run_script(int argc, char **argv) {
     athena_profiler_js_init(ctx);
     athena_debug3d_js_init(ctx);
     athena_savegame_js_init(ctx);
+    athena_meshbuilder_js_init(ctx);
+    athena_voxel_js_init(ctx);
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);
@@ -612,6 +617,7 @@ static int run_script(int argc, char **argv) {
     athena_camera3d_js_cleanup(ctx);
     athena_profiler_js_cleanup(ctx);
     athena_debug3d_js_cleanup(ctx);
+    athena_voxel_js_cleanup(ctx);
     athena_animation3d_js_cleanup(ctx);
     athena_camerarig3d_js_cleanup(ctx);
     athena_tween3d_js_cleanup(ctx);

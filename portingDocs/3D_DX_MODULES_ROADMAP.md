@@ -1,9 +1,9 @@
 # Roadmap de novos modulos para jogos 3D (developer experience e voxel)
 
 Proposta de modulos novos que aumentam a produtividade de quem faz jogos 3D
-com o AthenaEnv, incluindo um modulo nativo de voxel. As Fases 1 e 2
-foram implementadas em 2026-10-09 (registros nas secoes 3 e 4); os demais
-itens seguem propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
+com o AthenaEnv, incluindo um modulo nativo de voxel. As Fases 1, 2 e 3
+foram implementadas em 2026-10-09 (registros nas secoes 3, 4 e 5); os
+demais itens seguem propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
 **aditivos** (diretorio novo em `src/modules/<id>/` com `module.json`), salvo
 quando marcado como "extensao de modulo existente".
 
@@ -366,7 +366,68 @@ Proximo passo do `input`, se 217 us por frame pesar: o nucleo do
 
 ## 5. Fase 3: desempenho (onde o JS e o gargalo)
 
-### 5.1 `voxel`: mundo de blocos nativo (PROPOSTO)
+### Registro da Fase 3 (2026-10-09)
+
+Dois modulos nativos novos, `meshbuilder` e `voxel` (que usa a API C do
+`meshbuilder`), mais uma micro-otimizacao em `model3d.c` (cores das malhas
+arredondadas sem `lroundf`, ~10% da criacao de malhas). O spike de 2-3 dias
+sugerido abaixo nao foi feito como etapa separada: o modulo foi
+implementado direto, medido contra os numeros JS do estudo de viabilidade.
+
+Validacao:
+
+- testes host (Docker `js-tests`, ASan/UBSan): `meshbuilder_test.js` (24) e
+  `voxel_test.js` (42), dois runtimes cada, com o resto da suite verde;
+- PCSX2 2.8.2: os dois testes passam; `bin/voxel_example.js` roda a 60 FPS
+  (mundo 96x48x96 gerado com cavernas, voo com `Input`, cavar/colocar com
+  raycast); winding (CULL_BACK), AO e camadas conferidos em screenshot;
+- PS2 real: **pendente**.
+
+Numeros MEDIDOS no PCSX2 (mundo 64x48x64, chunks 16^3, 32 chunks com
+faces; `Date.now()` e contador de ciclos do EE):
+
+| Medida | Valor | JS no estudo |
+|---|---|---|
+| `generate` 64x48x64 (colinas) / com cavernas | 27 / 75 ms | 3,9 s so uma coluna 16x16x64 com cavernas |
+| Chunk 16^3 com faces, naive + AO: geracao das faces | ~6,5 ms | ~80 ms (sem AO) |
+| O mesmo chunk: criacao das malhas Model3D | ~10 ms | ~6 ms (`fromGeometry`) |
+| Editar um bloco + `rebuild` do chunk | 9 ms | ~80 ms |
+| Greedy: 4x menos faces (26.566 -> 6.659) | ~10 ms por chunk | ~630 ms |
+| `draw` da visao geral (53k triangulos, 32 malhas), CPU | 6,0 ms | - |
+| Memoria das malhas | ~70 B por face | 90-138 B por quad |
+| `MeshBuilder`: 4.000 caixas (48k triangulos) em 3 malhas | 210 ms | - |
+
+Leitura: a geracao de faces em C ficou ~12x mais rapida que o JS; o chunk
+completo, ~5x, porque a criacao das malhas no `model3d` (validacao, plano
+de lotes indexados para o VU1, copia das streams) passou a ser ~60% do
+custo. Otimizacoes feitas no caminho: copia local do chunk com borda (sem
+bounds check por vizinho), caminho "unchecked" no builder, weld de vertices
+iguais no `build()` (menos vertices: draw 7,5 -> 6,0 ms) e nada de
+`memcpy`/`memcmp` pequenos em lacos quentes (nao sao inline no EE). O
+criterio de saida (chunk completo <= 15 ms no PS2 real) fica no limite no
+PCSX2 e precisa de medicao no console.
+
+### 5.1 `voxel`: mundo de blocos nativo (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/voxel/`. API final: `new
+> Voxel.World({size, chunk})`, `setMaterial(type, {solid, visible, color,
+> tile})` (cor ou tile por grupo de face top/bottom/side), `setStyle({meshing
+> "naive" | "greedy", ambientOcclusion, bakedLight, shading, atlas,
+> tileSize})`, `get`/`set`/`fill`, `read`/`write` (regioes em Uint8Array,
+> para o SaveGame), `generate({seed, baseHeight, amplitude, frequency,
+> octaves, top, filler, stone, fillerDepth, caves, caveFrequency, water,
+> waterLevel})` (ruido gradiente fBm; cavernas em tunel com o ruido 3D numa
+> grade grossa interpolada), `surface`, `rebuild(budgetMs, x, y, z)` (chunks
+> sujos mais proximos primeiro; bordas marcam vizinhos, inclusive por AO),
+> `stats` (com `lastMeshMs`/`lastBuildMs`), `raycast` (DDA; aceita o `Ray`
+> do Camera3D), `moveBox` (AABB por eixo Y, X, Z com `onGround`),
+> `boxSolid`, `draw(camera, cull, lights, stats | null, distance)` (culling
+> por distancia e frustum, passe compartilhado, totais no
+> `Render3D.frameStats()`), `clearMeshes`, `dispose`. Diferencas do esboco:
+> sem biomas nem `collide` com velocidade (o `moveBox` cobre o caso); agua
+> e um tipo comum (sem translucidez: o `render3d` nao tem blending);
+> chunks que envolvem a camera ainda caem no clipper em C (a doc recomenda
+> `chunk: 8` em primeira pessoa).
 
 - **Objetivo:** armazenamento de blocos, geracao de terreno, meshing,
   raycast, colisao e desenho de chunks em C, com o jogo em JS.
@@ -414,7 +475,16 @@ Proximo passo do `input`, se 217 us por frame pesar: o nucleo do
   com o meshing ingenuo em C, medido com `docs/minecraft-feasibility/benchmarks/voxel_bench.js`
   lado a lado com a versao JS. Seguir se o ganho for >= 10x.
 
-### 5.2 `meshbuilder`: geracao de geometria nativa (PROPOSTO)
+### 5.2 `meshbuilder`: geracao de geometria nativa (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/meshbuilder/` (nativo, com API C para
+> outros modulos). `new MeshBuilder.Builder()` com estado de caneta
+> (`color`, `transform`, `uvRect`, `uvTile`), `vertex`/`triangle`, `quad`,
+> `box`, `sphere`, `cylinder`, `plane`, `heightmap` (normais por diferenca
+> central, cor por altura), `merge(mesh | instance)` (static batching),
+> `build(material)` -> `Model3D.Mesh[]` (divide no limite de 65.532
+> indices/vertices e solda vertices iguais), contadores e `dispose`. Sem
+> extrusao e sem greedy generico nesta versao (o greedy vive no `voxel`).
 
 - **Objetivo:** construir e combinar geometria em C: primitivas (caixa,
   esfera, cilindro, grade, quad), extrusao, merge de malhas estaticas e

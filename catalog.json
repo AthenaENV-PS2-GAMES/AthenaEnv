@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-09T13:27:47.160Z",
+  "generatedAt": "2026-10-09T14:39:11.469Z",
   "modules": [
     {
       "id": "animation3d",
@@ -707,6 +707,28 @@
       }
     },
     {
+      "id": "meshbuilder",
+      "name": "MeshBuilder",
+      "description": "Geometry built in C: vertices and triangles, quads, boxes, spheres, cylinders, planes, heightmaps and mesh merging (static batching) with a color/transform/UV-rect state, turned into as many Model3D meshes as the limits need.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "model3d",
+          "matrix4"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "MeshBuilder",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "model3d",
       "name": "Model3D",
       "description": "Immutable meshes with copied materials, normals, UVs, procedural skin/morph streams and retained textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
@@ -1323,6 +1345,31 @@
         "ee_libs": []
       },
       "global_alias": "Video",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "voxel",
+      "name": "Voxel",
+      "description": "Block worlds in C: one byte per block, terrain generation (fBm hills, tunnel caves, water), chunk meshing with ambient occlusion or greedy merging, texture atlas tiles, budgeted rebuilds near the player, DDA raycast, AABB collision and culled per-chunk drawing.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "meshbuilder",
+          "model3d",
+          "camera3d",
+          "lights",
+          "render3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Voxel",
       "api": {
         "native": true,
         "quickjs": true

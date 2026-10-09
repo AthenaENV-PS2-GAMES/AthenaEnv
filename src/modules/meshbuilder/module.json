@@ -1,0 +1,29 @@
+{
+  "id": "meshbuilder",
+  "name": "MeshBuilder",
+  "description": "Geometry built in C: vertices and triangles, quads, boxes, spheres, cylinders, planes, heightmaps and mesh merging (static batching) with a color/transform/UV-rect state, turned into as many Model3D meshes as the limits need.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/meshbuilder.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "model3d",
+      "matrix4"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_meshbuilder.c"
+    ],
+    "module_name": "MeshBuilder",
+    "global_alias": "MeshBuilder",
+    "init_func": "athena_meshbuilder_js_init"
+  },
+  "types": "meshbuilder.d.ts"
+}

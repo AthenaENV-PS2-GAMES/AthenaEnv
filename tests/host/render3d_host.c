@@ -31,9 +31,12 @@ int athena_render3d_draw_lit(AthenaInstance3D *i,AthenaCamera3D *c,
 AthenaMesh3DView host_last_view;
 static AthenaPosition3D recorded_positions[4096],recorded_normals[4096];
 static AthenaColor3D recorded_colors[4096];
-/* Tests observe original triangle order, independently of compact storage. */
+/* Tests observe original triangle order, independently of compact storage.
+ * Only small meshes are recorded (the skinning tests'); larger ones, such as
+ * voxel chunks, leave the last record as it was. */
 static void record_view(const AthenaMesh3DView *v) {
-    assert(v->vertex_count<=4096);host_last_view=*v;
+    if(v->vertex_count>4096) return;
+    host_last_view=*v;
     for(uint32_t i=0;i<v->vertex_count;i++) {
         uint32_t j=athena_mesh3d_corner(v,i);recorded_positions[i]=v->positions[j];recorded_colors[i]=v->colors[j];
         if(v->normals)recorded_normals[i]=v->normals[j];
