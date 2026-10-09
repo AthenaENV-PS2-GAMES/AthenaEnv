@@ -139,8 +139,8 @@ static int put_uints(JSContext *ctx,JSValueConst obj,int define,unsigned first,c
 }
 static int out_argument(JSContext *ctx,int argc,JSValueConst *argv,int index,JSValueConst *out) {
     *out=argc>index?argv[index]:JS_UNDEFINED;
-    if(JS_IsUndefined(*out)||JS_IsObject(*out)) return 1;
-    JS_ThrowTypeError(ctx,"stats must be an object"); return 0;
+    if(JS_IsUndefined(*out)||JS_IsNull(*out)||JS_IsObject(*out)) return 1;
+    JS_ThrowTypeError(ctx,"stats must be an object or null"); return 0;
 }
 static JSValue scene_advance(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Scene.advance")) return JS_EXCEPTION;
@@ -156,6 +156,7 @@ static JSValue scene_update(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     AthenaScene3D *s=get_scene(ctx,self); if(!s) return JS_EXCEPTION;
     AthenaScene3DUpdateStats stats; int code=athena_scene3d_update(s,&stats);
     if(code<0) return throw_code(ctx,code);
+    if(JS_IsNull(out)) return JS_UNDEFINED;
     JSValue obj; int define;
     if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
     const uint32_t values[]={stats.visited_nodes,stats.world_updates,stats.bounds_updates};
@@ -181,6 +182,8 @@ static JSValue scene_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     int code=athena_scene3d_draw(s,camera,lights,cull,&stats,&render);
     if(code==ATHENA_SCENE3D_ERENDER) return athena_render3d_js_throw(ctx,render);
     if(code<0) return throw_code(ctx,code);
+    athena_render3d_stats_add(&stats.render);
+    if(JS_IsNull(out)) return JS_UNDEFINED;
     JSValue obj; int define;
     if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
     const uint32_t values[]={stats.culled_subtrees,stats.queued_objects};
@@ -367,11 +370,96 @@ static JSValue node_bounds(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     if(JS_SetPropertyStr(ctx,obj,"max",hi)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
     return obj;
 }
+static const char *const query_names[]={"x","y","z","dx","dy","dz","node","distance","nx","ny","nz","triangle","precise"};
+static JSAtom query_atoms[countof(query_names)];
+static AthenaJSAtoms query_table={query_names,countof(query_names),query_atoms,NULL};
+static JSValue query_get(JSContext *ctx,JSValueConst obj,unsigned index) {
+    athena_js_atoms_fill(ctx,&query_table);
+    if(query_table.runtime==JS_GetRuntime(ctx)) return JS_GetProperty(ctx,obj,query_atoms[index]);
+    return JS_GetPropertyStr(ctx,obj,query_names[index]);
+}
+/* A Camera3D.Ray-like object: origin x, y, z and direction dx, dy, dz. */
+static int read_ray(JSContext *ctx,JSValueConst ray,float origin[3],float direction[3]) {
+    if(!JS_IsObject(ray)) { JS_ThrowTypeError(ctx,"ray must be an object with x, y, z, dx, dy, dz"); return 0; }
+    for(unsigned i=0;i<6;i++) {
+        JSValue v=query_get(ctx,ray,i); if(JS_IsException(v)) return 0;
+        int ok=athena_js_float(ctx,v,i<3?&origin[i]:&direction[i-3],query_names[i]);
+        JS_FreeValue(ctx,v); if(!ok) return 0;
+    }
+    return 1;
+}
+/* scene.raycast(ray, maxDistance?, options?, out?): the nearest hit or null. */
+static JSValue scene_raycast(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,1,4,"Scene.raycast")) return JS_EXCEPTION;
+    float origin[3],direction[3],max_distance=3.0e38f; int precise=1;
+    if(!read_ray(ctx,argv[0],origin,direction)) return JS_EXCEPTION;
+    if(argc>=2&&!JS_IsUndefined(argv[1])) {
+        if(!athena_js_float(ctx,argv[1],&max_distance,"maxDistance")) return JS_EXCEPTION;
+        if(max_distance<0) return JS_ThrowRangeError(ctx,"maxDistance must not be negative");
+    }
+    if(argc>=3&&!JS_IsUndefined(argv[2])) {
+        if(!JS_IsObject(argv[2])) return JS_ThrowTypeError(ctx,"options must be an object");
+        JSValue v=query_get(ctx,argv[2],12); if(JS_IsException(v)) return v;
+        if(!JS_IsUndefined(v)&&!JS_IsBool(v)) { JS_FreeValue(ctx,v); return JS_ThrowTypeError(ctx,"precise must be a boolean"); }
+        if(JS_IsBool(v)) precise=JS_ToBool(ctx,v);
+        JS_FreeValue(ctx,v);
+    }
+    JSValueConst out=argc==4?argv[3]:JS_UNDEFINED;
+    if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"out must be an object");
+    AthenaScene3D *s=get_scene(ctx,self); if(!s) return JS_EXCEPTION;
+    AthenaScene3DHit hit;
+    int code=athena_scene3d_raycast(s,origin,direction,max_distance,precise,&hit);
+    if(code<0) return code==ATHENA_SCENE3D_EINVAL?JS_ThrowRangeError(ctx,"ray direction must not be zero"):throw_code(ctx,code);
+    if(!code) return JS_NULL;
+    JSValue node=wrap_node(ctx,hit.node); if(JS_IsException(node)) return node;
+    JSValue obj; int define;
+    if(!athena_js_out_object(ctx,out,&obj,&define,"out")) { JS_FreeValue(ctx,node); return JS_EXCEPTION; }
+    const float values[]={hit.point[0],hit.point[1],hit.point[2],hit.distance,hit.normal[0],hit.normal[1],hit.normal[2]};
+    static const unsigned fields[]={0,1,2,7,8,9,10};
+    int failed=athena_js_put(ctx,&query_table,obj,define,6,node)<0;
+    for(unsigned i=0;!failed&&i<countof(fields);i++)
+        failed=athena_js_put(ctx,&query_table,obj,define,fields[i],JS_NewFloat64(ctx,values[i]))<0;
+    if(!failed) failed=athena_js_put(ctx,&query_table,obj,define,11,JS_NewInt32(ctx,hit.triangle))<0;
+    if(failed) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
+    return obj;
+}
+/* scene.queryBox(minX, minY, minZ, maxX, maxY, maxZ, out?): nodes whose mesh
+ * world AABB overlaps the box; out (an Array) is cleared and refilled. */
+static JSValue scene_query_box(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,6,7,"Scene.queryBox")) return JS_EXCEPTION;
+    float lo[3],hi[3];
+    for(int i=0;i<3;i++)
+        if(!athena_js_float(ctx,argv[i],&lo[i],"minimum")||!athena_js_float(ctx,argv[i+3],&hi[i],"maximum")) return JS_EXCEPTION;
+    for(int i=0;i<3;i++) if(lo[i]>hi[i]) return JS_ThrowRangeError(ctx,"minimum must not exceed maximum");
+    JSValueConst out=argc==7?argv[6]:JS_UNDEFINED;
+    if(!JS_IsUndefined(out)&&!JS_IsArray(ctx,out)) return JS_ThrowTypeError(ctx,"out must be an Array");
+    AthenaScene3D *s=get_scene(ctx,self); if(!s) return JS_EXCEPTION;
+    AthenaNode3D *local[64],**nodes=local;
+    int count=athena_scene3d_query_box(s,lo,hi,local,countof(local));
+    if(count<0) return throw_code(ctx,count);
+    if((uint32_t)count>countof(local)) {
+        nodes=js_malloc(ctx,(size_t)count*sizeof(*nodes)); if(!nodes) return JS_EXCEPTION;
+        count=athena_scene3d_query_box(s,lo,hi,nodes,(uint32_t)count);
+    }
+    /* Pin the borrowed nodes: wrapping allocates and may run finalizers. */
+    for(int i=0;i<count;i++) athena_node3d_retain(nodes[i]);
+    JSValue array=JS_IsUndefined(out)?JS_NewArray(ctx):JS_DupValue(ctx,out);
+    int failed=JS_IsException(array)||(!JS_IsUndefined(out)&&JS_SetPropertyStr(ctx,array,"length",JS_NewUint32(ctx,0))<0);
+    for(int i=0;!failed&&i<count;i++) {
+        JSValue node=wrap_node(ctx,nodes[i]);
+        failed=JS_IsException(node)||JS_SetPropertyUint32(ctx,array,(uint32_t)i,node)<0;
+    }
+    for(int i=0;i<count;i++) athena_node3d_release(nodes[i]);
+    if(nodes!=local) js_free(ctx,nodes);
+    if(failed) { JS_FreeValue(ctx,array); return JS_EXCEPTION; }
+    return array;
+}
 static JSClassDef scene_class={"Scene3D.Scene",.finalizer=scene_finalizer};
 static JSClassDef node_class={"Scene3D.Node",.finalizer=node_finalizer};
 static const JSCFunctionListEntry scene_methods[]={
     JS_CFUNC_DEF("advance",1,scene_advance),JS_CFUNC_DEF("update",0,scene_update),JS_CFUNC_DEF("draw",1,scene_draw),
     JS_CFUNC_DEF("attachLoop",0,scene_attach),JS_CFUNC_DEF("detachLoop",0,scene_detach),
+    JS_CFUNC_DEF("raycast",1,scene_raycast),JS_CFUNC_DEF("queryBox",6,scene_query_box),
     JS_CFUNC_DEF("dispose",0,scene_dispose),JS_CGETSET_DEF("root",scene_root,NULL),
     JS_CGETSET_DEF("stale",scene_stale,NULL),JS_CGETSET_DEF("attached",scene_attached,NULL)};
 static const JSCFunctionListEntry node_methods[]={
@@ -418,4 +506,6 @@ JSModuleDef *athena_scene3d_js_init(JSContext *ctx) {
     return m;
 }
 /* Scenes attached by this context stop updating with it; C attachments stay. */
-void athena_scene3d_js_cleanup(JSContext *ctx) { athena_scene3d_detach_owner(ctx); athena_js_atoms_free(ctx,&stat_table); }
+void athena_scene3d_js_cleanup(JSContext *ctx) {
+    athena_scene3d_detach_owner(ctx); athena_js_atoms_free(ctx,&stat_table); athena_js_atoms_free(ctx,&query_table);
+}

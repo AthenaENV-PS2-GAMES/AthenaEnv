@@ -3,7 +3,7 @@
   "name": "Render3D",
   "description": "Opaque color and perspective-correct textured rendering, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
   "category": "Graphics",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "default": false,
   "sources": [
     "native/render3d.c",

@@ -73,6 +73,7 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *m,AthenaC
     AthenaMatrix4 clip_matrix;
     ath_matrix4_multiply(&clip_matrix,&c->view_projection,m);
     if(!v.material.texture) v.texcoords=NULL;
+    s->cpu_clip_objects++;
     return athena_render3d_clip_mesh_textured(&v,&clip_matrix,&shade,count_chunk,s,s);
 }
 static int draw_mesh(const AthenaMesh3D *mesh,const AthenaMatrix4 *m,AthenaCamera3D *c,

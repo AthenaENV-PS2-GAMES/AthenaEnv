@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-07T18:44:16.758Z",
+  "generatedAt": "2026-10-09T12:52:50.369Z",
   "modules": [
     {
       "id": "animation3d",
@@ -119,9 +119,9 @@
     {
       "id": "camera3d",
       "name": "Camera3D",
-      "description": "Independent 3D cameras, validated right-handed projection, reusable matrix outputs and native frustum tests.",
+      "description": "Independent 3D cameras, validated right-handed projection, reusable matrix outputs, native frustum tests and screen projection/picking rays.",
       "category": "Graphics",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -269,6 +269,31 @@
         "ee_libs": []
       },
       "global_alias": "Debug",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "debug3d",
+      "name": "Debug3D",
+      "description": "World-space debug lines for 3D: lines, boxes, spheres, axes, grids, camera frustums and mesh normals, projected and clipped on the EE and drawn as GS lines over the frame, for one frame or N seconds.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "camera3d",
+          "model3d",
+          "matrix4",
+          "loop"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Debug3D",
       "api": {
         "native": true,
         "quickjs": true
@@ -817,6 +842,28 @@
       }
     },
     {
+      "id": "profiler",
+      "name": "Profiler",
+      "description": "CPU time scopes read from the EE cycle counter in C, per-frame counters, a 120-frame history with average, p95 and peak, Render3D frame totals with a C-clipper warning, and lines in the Debug overlay.",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "loop",
+          "debug"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Profiler",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
       "id": "quaternion",
       "name": "Quaternion",
       "description": "Owned xyzw quaternions, shortest-path slerp and right-handed TRS in native code.",
@@ -861,7 +908,7 @@
       "name": "Render3D",
       "description": "Opaque color and perspective-correct textured rendering, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
       "category": "Graphics",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -909,7 +956,7 @@
       "name": "Scene3D",
       "description": "Native 3D transform hierarchy with rejected cycles, dirty propagation, subtree bounds culling, pipeline-sorted render queue and optional Loop update system.",
       "category": "Graphics",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "required": false,
       "default": false,
       "dependencies": {

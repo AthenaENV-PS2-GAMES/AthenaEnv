@@ -6,6 +6,22 @@ struct AthenaBatch3D { AthenaInstance3D **items; uint32_t count,capacity; };
 static const char *error_detail="";
 const char *athena_render3d_error_detail(void) { return error_detail; }
 void athena_render3d_set_error_detail(const char *detail) { error_detail=detail?detail:""; }
+static AthenaRender3DStats frame_totals;
+void athena_render3d_stats_add(const AthenaRender3DStats *s) {
+    if(!s) return;
+    AthenaRender3DStats *t=&frame_totals;
+    t->submitted_objects+=s->submitted_objects; t->culled_objects+=s->culled_objects;
+    t->draw_passes+=s->draw_passes; t->triangles+=s->triangles; t->vu_batches+=s->vu_batches;
+    t->source_triangles+=s->source_triangles; t->clipped_triangles+=s->clipped_triangles;
+    t->rejected_triangles+=s->rejected_triangles; t->pipeline_passes+=s->pipeline_passes;
+    t->geometry_bytes+=s->geometry_bytes; t->guard_band_objects+=s->guard_band_objects;
+    t->near_clip_objects+=s->near_clip_objects; t->vu_morph_objects+=s->vu_morph_objects;
+    t->cpu_clip_objects+=s->cpu_clip_objects;
+}
+void athena_render3d_frame_stats(AthenaRender3DStats *out,int reset) {
+    if(out) *out=frame_totals;
+    if(reset) memset(&frame_totals,0,sizeof(frame_totals));
+}
 AthenaBatch3D *athena_batch3d_create(void) { return calloc(1,sizeof(AthenaBatch3D)); }
 void athena_batch3d_clear(AthenaBatch3D *b) {
     if(!b) return;

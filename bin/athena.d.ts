@@ -84,6 +84,206 @@ declare namespace std {
 }
 
 
+/* === Module: Vector (vector) === */
+/**
+ * PS2-aligned vector types.
+ *
+ * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
+ * by the `Vector` module. Arithmetic methods return new vectors and do not
+ * mutate their operands. `div()` rejects zero components.
+ *
+ * Example:
+ * ```js
+ * import * as Vector from 'Vector';
+ * const direction = new Vector.Vector3(3, 4, 0);
+ * console.log(direction.norm());
+ * const right = direction.cross(new Vector.Vector3(0, 0, 1));
+ * ```
+ */
+declare class Vector2 {
+    /** Creates a two-component vector. */
+    constructor(x: number, y: number);
+    /** Horizontal component. */
+    x: number;
+    /** Vertical component. */
+    y: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector2): number;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector2): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector2): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector2): Vector2;
+    /** Returns the component-wise difference. */
+    sub(value: Vector2): Vector2;
+    /** Returns the component-wise product. */
+    mul(value: Vector2): Vector2;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector2): Vector2;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector3 {
+    /** Creates a three-component vector. */
+    constructor(x: number, y: number, z: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector3): number;
+    /** Returns the 3D cross product. */
+    cross(value: Vector3): Vector3;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector3): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector3): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector3): Vector3;
+    /** Returns the component-wise difference. */
+    sub(value: Vector3): Vector3;
+    /** Returns the component-wise product. */
+    mul(value: Vector3): Vector3;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector3): Vector3;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector4 {
+    /** Creates a homogeneous four-component vector. */
+    constructor(x: number, y: number, z: number, w: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Homogeneous component: commonly 1 for points and 0 for directions. */
+    w: number;
+    /** Returns four-dimensional Euclidean length. */
+    norm(): number;
+    /** Returns the four-component dot product. */
+    dot(value: Vector4): number;
+    /** Returns the cross product with homogeneous component cleared. */
+    cross(value: Vector4): Vector4;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector4): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector4): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector4): Vector4;
+    /** Returns the component-wise difference. */
+    sub(value: Vector4): Vector4;
+    /** Returns the component-wise product. */
+    mul(value: Vector4): Vector4;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector4): Vector4;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+
+/* === Module: Matrix4 (matrix4) === */
+/**
+ * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
+ *
+ * Values are stored in column-major order. Translation components are at
+ * indices 12, 13 and 14; index 15 is the homogeneous component.
+ *
+ * Example:
+ * ```js
+ * const transform = new Matrix4();
+ * transform.set(12, 10).set(13, 20).set(14, 30);
+ * const inverse = transform.clone().invert();
+ * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
+ * ```
+ */
+declare class Matrix4 {
+    /** Creates identity matrix, or initializes all 16 values when supplied. */
+    constructor();
+    constructor(
+        m00: number, m01: number, m02: number, m03: number,
+        m10: number, m11: number, m12: number, m13: number,
+        m20: number, m21: number, m22: number, m23: number,
+        m30: number, m31: number, m32: number, m33: number
+    );
+    /** Number of scalar components in the matrix. */
+    readonly length: 16;
+    /** Reads a scalar component at index 0..15. */
+    get(index: number): number;
+    /** Writes a scalar component at index 0..15 and returns this matrix. */
+    set(index: number, value: number): this;
+    /** Compares all 16 components exactly. */
+    equals(value: Matrix4): boolean;
+    /** Compares all components using an absolute epsilon tolerance. */
+    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
+    /** Returns the 16 components as a new array. */
+    toArray(): number[];
+    /** Copies 16 values from an array-like object into this matrix. */
+    fromArray(values: ArrayLike<number>): this;
+    /** Returns an independent copy of this matrix. */
+    clone(): Matrix4;
+    /** Copies another matrix into this matrix. */
+    copy(value: Matrix4): this;
+    /** Returns this * value (column vectors); neither operand is mutated. */
+    multiply(value: Matrix4): Matrix4;
+    /** Replaces this matrix with identity. */
+    identity(): this;
+    /** Transposes this matrix in place. */
+    transpose(): this;
+    /** Inverts this matrix in place; throws for a singular matrix. */
+    invert(): this;
+    /** Returns a readable 16-value representation. */
+    toString(): string;
+}
+
+
+/* === Module: Camera3D (camera3d) === */
+/** Independent cameras; right-handed, facing -Z. Projection has reversed depth.
+ * Matrix getters return an owned snapshot, or overwrite and return out. */
+declare namespace Camera3D {
+    interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
+    /** Screen position in viewport pixels (origin top-left, y down) and the
+     * distance in front of the camera along its view axis. */
+    interface ScreenPoint { x: number; y: number; depth: number; }
+    /** World-space ray: origin (x, y, z) and unit direction (dx, dy, dz). */
+    interface Ray { x: number; y: number; z: number; dx: number; dy: number; dz: number; }
+    class Camera {
+        /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
+        constructor(options?: Projection);
+        setProjection(options: Projection): this;
+        setPosition(x: number, y: number, z: number): this;
+        lookAt(x: number, y: number, z: number): this;
+        setUp(x: number, y: number, z: number): this;
+        getView(out?: Matrix4): Matrix4;
+        getProjection(out?: Matrix4): Matrix4;
+        getViewProjection(out?: Matrix4): Matrix4;
+        /** Viewport in pixels used by worldToScreen/screenToRay; default 640x448.
+         * Match the Screen mode, e.g. `camera.setViewport(mode.width, mode.height)`. */
+        setViewport(width: number, height: number): this;
+        /** Projects a world point to the viewport: null when it is behind the
+         * camera. Points outside the screen or beyond near/far still project
+         * (check x/y against the viewport and depth against near/far).
+         * Optional `out` is reused and returned. */
+        worldToScreen<T extends object = ScreenPoint>(x: number, y: number, z: number, out?: T): (T & ScreenPoint) | null;
+        /** The ray from the camera through a viewport pixel, e.g. for
+         * Scene3D.Scene.raycast(). Optional `out` is reused and returned. */
+        screenToRay<T extends object = Ray>(x: number, y: number, out?: T): T & Ray;
+        /** Idempotent; other operations reject a disposed camera. */
+        dispose(): void;
+    }
+}
+
+
 /* === Module: Loop (loop) === */
 /**
  * Game loop driven by the runtime.
@@ -283,820 +483,622 @@ declare namespace Loop {
 }
 
 
-/* === Module: Camera2D (camera2d) === */
-/**
- * 2D cameras, applied in C by every 2D draw: `Draw`, `Image`, `Font` and
- * `TileMap` go through the camera's transform before reaching the GS, so the
- * game draws in world coordinates and never subtracts the camera by hand.
- *
- * `Camera2D.main` is the current camera from the start. It shows the world
- * from (0, 0) at zoom 1, exactly like the screen, so nothing changes until
- * it moves. While `Loop.run()` runs, the current camera is updated after the
- * game's `update` and applied around its `draw`; `Camera2D.screenSpace()`
- * draws the HUD without it. Cameras use the scaled time of the Loop.
- *
- * A camera's position is the world point shown at its anchor (the center of
- * its viewport by default). Zoom is screen pixels per world unit, rotation is
- * in radians (clockwise on screen) and smoothing speeds are rates per second
- * (frame-rate independent: `1 - exp(-rate * dt)` of the distance each frame;
- * 0 means rigid).
- *
- * Example:
- * ```js
- * const cam = Camera2D.main;
- * cam.follow(player, { lerp: 8, deadzone: { w: 64, h: 32 }, lookahead: 40 });
- * cam.setBounds(0, 0, mapWidth, mapHeight);   // centered if the map is smaller
- * cam.zoom = 1.5;
- *
- * Loop.run({
- *     update(dt) { player.update(dt); if (hit) cam.shake(6, 0.3); },
- *     draw() {
- *         cam.draw(() => sky.draw(0, 0), { parallax: 0.3 });   // slower layer
- *         level.render(0, 0);                    // TileMap, in world space
- *         heroImage.draw(player.x, player.y);    // Image, in world space
- *         Camera2D.screenSpace(() => font.print(10, 10, `HP ${hp}`));
- *     },
- * });
- *
- * // Split screen: one camera per viewport, no current camera.
- * const left = new Camera2D.Camera({ viewport: { x: 0, y: 0, w: 320, h: 448 } });
- * const right = new Camera2D.Camera({ viewport: { x: 320, y: 0, w: 320, h: 448 } });
- * left.follow(p1); right.follow(p2);
- * Camera2D.setCurrent(null);
- * // in draw(): left.draw(drawWorld); right.draw(drawWorld);
- * ```
- *
- * Under a rotation, rectangles (images, glyphs, TileMap sprites) are drawn as
- * two triangles (TileMap sprites, on VU1, as triangle strips). While a camera
- * is applied, what lies entirely outside its viewport is skipped in C before
- * reaching the GS: images, rectangles, circles, each sprite of
- * `Image.drawList()`, whole texts, and the cells of `TileMap` grids.
- */
-declare namespace Camera2D {
-    interface Point {
-        x: number;
-        y: number;
+/* === Module: Lights (lights) === */
+/** Independent linear RGB lights. World directions point toward the source.
+ * Point lights (4 slots) light per vertex and fade with the distance as
+ * (1 - d^2 / range^2)^2, reaching 0 at range. */
+declare namespace Lights {
+    const MAX_DIRECTIONAL: 4;
+    const MAX_POINT: 4;
+    class Set {
+        /** Starts with black ambient and all four directional slots disabled. */
+        constructor();
+        /** Changes only when effective state changes; invalid setters are atomic. */
+        readonly revision: number;
+        setAmbient(r: number, g: number, b: number): this;
+        /** Slots 0..3; nonzero direction normalized in native code. RGB in [0,1]. */
+        setDirectional(slot: number, x: number, y: number, z: number, r: number, g: number, b: number): this;
+        disable(slot: number): this;
+        /** Slots 0..3: a world position, RGB in [0,1] and a range > 0. */
+        setPoint(slot: number, x: number, y: number, z: number, r: number, g: number, b: number, range: number): this;
+        disablePoint(slot: number): this;
+        /** Distance fog, applied by the GS to everything drawn with this set:
+         * full colour up to start, the fog colour from end on (view depth).
+         * 0 <= start < end, RGB in [0,1]. Ignored with 32-bit Z buffers. */
+        setFog(start: number, end: number, r: number, g: number, b: number): this;
+        disableFog(): this;
+        clear(): this;
+        dispose(): void;
     }
-
-    interface Rect {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-    }
-
-    /** A number for both axes, `[x, y]`, `{ x, y }` or `{ w, h }`. */
-    type Pair = number | [number, number] | { x: number; y: number } | { w: number; h: number };
-
-    /** Anything with a position in world space: a player, an enemy, a point. */
-    interface Target {
-        x: number;
-        y: number;
-    }
-
-    interface CameraOptions {
-        /** World point at the anchor; defaults to half the viewport (the identity view). */
-        x?: number;
-        y?: number;
-        /** Both axes; `zoomX`/`zoomY` override one. Default 1. */
-        zoom?: number;
-        zoomX?: number;
-        zoomY?: number;
-        /** Radians, clockwise on screen. */
-        rotation?: number;
-        /** Screen rectangle the camera draws into; null (default) is the whole screen. */
-        viewport?: Rect | null;
-        /** Point of the viewport the position is shown at, 0..1. Default [0.5, 0.5]. */
-        anchor?: Pair;
-        /** Round the translation to whole pixels (no shimmer on pixel art). Default true. */
-        pixelSnap?: boolean;
-        /** World bounds the camera never shows past. */
-        bounds?: Rect | null;
-        /** See `Camera.boundsIgnoreRotation`. Default false. */
-        boundsIgnoreRotation?: boolean;
-        /** Make it the current camera. */
-        current?: boolean;
-        /** See `Camera.realTime`. Default false. */
-        realTime?: boolean;
-        /** See `Camera.debug`. Default false. */
-        debug?: boolean;
-    }
-
-    interface FollowOptions {
-        /** Smoothing rate per axis, per second; 0 (default) follows rigidly. Try 5-10. */
-        lerp?: Pair;
-        /**
-         * Screen pixels around the anchor where the target moves without
-         * moving the camera: a box of the screen, whatever the zoom and
-         * rotation. The target may rest anywhere in it, off the center.
-         */
-        deadzone?: Pair;
-        /**
-         * Screen pixels to look ahead of the target's motion, kept once it
-         * stops (so the target rests that far off the center, less the dead
-         * zone). Same distance on screen at any zoom.
-         */
-        lookahead?: Pair;
-        /** How fast the lookahead turns around, per second. Default 4. */
-        lookaheadLerp?: number;
-        /** World offset added to the target (e.g. to look a bit above the player). */
-        offset?: Pair;
-        /**
-         * With several targets: zoom to keep them all in view. `margin` is in
-         * screen pixels (default 32), `min`/`max` limit the zoom (0.5 and 2),
-         * `lerp` smooths it (4 per second).
-         */
-        autoZoom?: boolean | { min?: number; max?: number; margin?: number; lerp?: number };
-        /** Jump to the target now instead of easing from the current position. Default true. */
-        snap?: boolean;
-        /**
-         * For `Loop.run()` with `fixedStep`, when the game draws positions
-         * blended by `alpha`: the camera follows the target blended the
-         * same way (sampled before each step and after the last), so the
-         * target does not jitter against the scenery. Default false.
-         */
-        interpolate?: boolean;
-        /**
-         * Zooms out as the target speeds up: `max` (default 1) at rest,
-         * `min` (0.8) at `speed` world units per second (300) or faster.
-         * In a zone with a zoom, that zoom takes the place of `max`.
-         * `lerp` smooths the zoom (4 per second). `autoZoom` wins over it.
-         */
-        zoomBySpeed?: boolean | { min?: number; max?: number; speed?: number; lerp?: number };
-    }
-
-    interface Zone extends Rect {
-        /** Zoom while the target is in this zone. */
-        zoom?: number;
-        /** Follow smoothing while the target is in this zone. */
-        lerp?: Pair;
-        /** Target offset (world units) while the target is in this zone. */
-        offset?: Pair;
-    }
-
-    interface ZoneOptions {
-        /** Seconds to glide from one zone to the next (0: cut). */
-        transition?: number;
-        /** Called when the target enters a zone: its index and the previous one (-1 for none). */
-        onChange?: (this: Camera, zone: number, previous: number) => void;
-    }
-
-    interface TraumaOptions {
-        /** Pixels at full trauma. Default 16. */
-        intensity?: number;
-        /** Radians at full trauma. Default 0. */
-        rotation?: number;
-        /** Trauma lost per second. Default 1. */
-        decay?: number;
-        /** Oscillations per second. Default 25. */
-        frequency?: number;
-    }
-
-    interface RepeatOptions extends DrawOptions {
-        /** Where one copy sits in the layer. Default (0, 0). */
-        x?: number;
-        y?: number;
-        /** Repeat along each axis. Default true. */
-        repeatX?: boolean;
-        repeatY?: boolean;
-    }
-
-    /** What `state()` returns and `setState()` takes: JSON-friendly. */
-    interface State {
-        x: number;
-        y: number;
-        zoomX: number;
-        zoomY: number;
-        rotation: number;
-        anchor: Point;
-        /** null: the whole screen. */
-        viewport: Rect | null;
-        bounds: Rect | null;
-        boundsIgnoreRotation: boolean;
-        pixelSnap: boolean;
-        realTime: boolean;
-    }
-
-    interface TransitionOptions {
-        /** Maps 0..1 to the blend. Default smoothstep; e.g. `Ease.inOutCubic`. */
-        ease?: (t: number) => number;
-        /** Runs on real time, also while the game is paused. */
-        realTime?: boolean;
-    }
-
-    interface StackOptions extends TransitionOptions {
-        /** Seconds of the transition; 0 (default) cuts. */
-        duration?: number;
-    }
-
-    interface ShakeOptions {
-        /** Oscillations per second. Default 25. */
-        frequency?: number;
-        /** Largest rotation, in radians. Default 0. */
-        rotation?: number;
-    }
-
-    interface DrawOptions {
-        /**
-         * 1 (default) draws the world; 0 draws in the viewport at zoom 1 like
-         * the screen; between them, a background layer that scrolls (and
-         * zooms) slower than the world. Per axis with `[x, y]`.
-         */
-        parallax?: Pair;
-    }
-
-    /** The world-to-screen transform: screen = (xx*x + xy*y + tx, yx*x + yy*y + ty). */
-    interface Matrix {
-        xx: number;
-        xy: number;
-        yx: number;
-        yy: number;
-        tx: number;
-        ty: number;
-    }
-
-    class Camera {
-        constructor(options?: CameraOptions);
-
-        /** World point shown at the anchor. Setting it stops a pan. */
-        x: number;
-        y: number;
-        /** Uniform zoom (reads `zoomX`). Setting it stops a `zoomTo()`. */
-        zoom: number;
-        zoomX: number;
-        zoomY: number;
-        /** Radians, clockwise on screen. */
-        rotation: number;
-        pixelSnap: boolean;
-        /** Reads as `{ x, y }`; set with any `Pair`. */
-        anchor: Point;
-        /** The viewport in screen pixels (the whole screen when none was set); null resets it. */
-        viewport: Rect | null;
-        /** World bounds, or null. */
-        bounds: Rect | null;
-        /**
-         * Bounds and zones clamp the view as if it were not turned: the
-         * camera stays on its target near the edges, and the corners of a
-         * turned view may show past the bounds. Default false: nothing past
-         * the bounds ever shows, so a turned camera is pushed inward.
-         */
-        boundsIgnoreRotation: boolean;
-        /** Index of the zone in force, or -1. */
-        readonly zone: number;
-        readonly following: boolean;
-        readonly shaking: boolean;
-        /** Letterbox bar height, as a fraction of the viewport. */
-        readonly letterboxAmount: number;
-        /** Opacity of the fade overlay, 0..128. */
-        readonly fadeAlpha: number;
-        /** Whether this is `Camera2D.getCurrent()`. */
-        readonly isCurrent: boolean;
-        /**
-         * Runs on the real (unscaled) time of the Loop: follows, shakes and
-         * fades keep going while `Loop.setTimeScale(0)` pauses the game
-         * (pause menus that fade the screen).
-         */
-        realTime: boolean;
-        /**
-         * Draws what drives the camera over its viewport: dead zone (cyan),
-         * anchor (white), target (green), goal (blue), lookahead (orange),
-         * bounds (red) and zones (magenta, the active one brighter).
-         */
-        debug: boolean;
-        /** Current trauma, 0..1 (`addTrauma()`). */
-        readonly trauma: number;
-
-        setPosition(x: number, y: number): this;
-        /** Moves by (dx, dy), within the bounds. */
-        move(dx: number, dy: number): this;
-        setZoom(zoomX: number, zoomY?: number): this;
-        setViewport(x: number, y: number, w: number, h: number): this;
-        setViewport(rect: Rect | null): this;
-        /**
-         * The camera never shows past these bounds; a smaller area is
-         * centered. Turned, the view covers more of the world (its bounding
-         * box), so near an edge a rotation pushes the camera inward and a
-         * followed target rests off the center (see `boundsIgnoreRotation`).
-         */
-        setBounds(x: number, y: number, w: number, h: number): this;
-        setBounds(rect: Rect | null): this;
-
-        /**
-         * Follows a target (read every frame, so moving the object is
-         * enough), or several: their center, with `autoZoom` to fit them all.
-         * A single target needs numeric x and y now (TypeError otherwise); later
-         * frames keep the last position if one goes missing. In an array,
-         * targets whose x or y is not a number are skipped that frame.
-         */
-        follow(target: Target | Target[], options?: FollowOptions): this;
-        unfollow(): this;
-        /** Jumps to the follow target now: no smoothing. */
-        snap(): this;
-
-        /**
-         * Rooms: while the target is inside a zone, that zone is the camera's
-         * bounds (and zoom). The last zone stays in force between zones.
-         * `null` removes them. At most 32.
-         */
-        setZones(zones: Zone[] | null, options?: ZoneOptions): this;
-
-        /** Shakes by up to `intensity` pixels, fading out over `duration` seconds. */
-        shake(intensity: number, duration: number, options?: ShakeOptions): this;
-        /**
-         * Adds trauma (clamped to 0..1): impacts add up, the view shakes by
-         * its square and it decays over time. The options are kept for
-         * later calls.
-         */
-        addTrauma(amount: number, options?: TraumaOptions): this;
-        /** Pushes the view by (dx, dy) screen pixels, springing back (default 0.15 s). */
-        kick(dx: number, dy: number, duration?: number): this;
-        /** Stops the shake, the trauma and the kick. */
-        stopShake(): this;
-
-        /*
-         * Timed changes. Each promise resolves with true when the change ends
-         * and false if another one of the same kind replaced it.
-         */
-        /** Eases the zoom (geometrically: 1 to 4 looks as steady as 4 to 1). */
-        zoomTo(zoom: number, duration: number): Promise<boolean>;
-        /** Eases to a point; suspends the follow until it arrives. */
-        panTo(x: number, y: number, duration: number): Promise<boolean>;
-        /**
-         * Fades the viewport overlay to `color` (its alpha, 0..128, is the
-         * final opacity): `Color.new(0, 0, 0, 128)` fades out to black,
-         * `Color.new(0, 0, 0, 0)` fades back in.
-         */
-        fade(color: number, duration: number): Promise<boolean>;
-        /** Shows `color` over the viewport and fades it out (default 0.2 s). */
-        flash(color: number, duration?: number): Promise<boolean>;
-        /** Black bars, each `amount` (0..0.5) of the viewport's height. */
-        letterbox(amount: number, duration?: number): Promise<boolean>;
-
-        worldToScreen(x: number, y: number): Point;
-        screenToWorld(x: number, y: number): Point;
-        /** World box the viewport shows (its bounding box when rotated), for culling. */
-        visibleRect(): Rect;
-        isVisible(x: number, y: number, w?: number, h?: number): boolean;
-        /**
-         * Culls many boxes in one call: `rects` holds (x, y, w, h) per box;
-         * `out` gets 1 for each visible box and 0 otherwise. Returns how many
-         * are visible.
-         */
-        cull(rects: Float32Array, out?: Uint8Array): number;
-
-        /** Draws in this camera's world space and viewport until `end()`. Pairs nest (8 deep). */
-        begin(options?: DrawOptions): void;
-        /** Draws the camera's fade, flash and letterbox, and restores the previous view. */
-        end(): void;
-        /**
-         * `begin()`, `fn()`, `end()`, even if `fn` throws or leaves pairs of
-         * its own open (they are closed too). Returns what `fn` returns.
-         */
-        draw<T>(fn: () => T, options?: DrawOptions): T;
-        /** Draws with (0, 0) at the viewport's corner, clipped to it: per-player HUDs. */
-        viewportSpace<T>(fn: () => T): T;
-
-        makeCurrent(): this;
-        /** Advances this camera alone (without `Loop.run()`, use `Camera2D.update()`). */
-        update(dt: number): this;
-        getMatrix(options?: DrawOptions): Matrix;
-        /**
-         * Draws `image` repeated to cover what the camera shows of a layer
-         * (`parallax`, as `draw()`): skies, far hills. Returns how many
-         * copies were drawn (at most 1024).
-         */
-        drawRepeat(image: Image, options?: RepeatOptions): number;
-        /** The pose and settings (not targets, zones or running effects), for saves. */
-        state(): State;
-        /** Applies what `state()` returned; missing keys are left as they are. */
-        setState(state: Partial<State>): this;
-    }
-
-    /** The default camera: current from the start, showing the screen as before. */
-    const main: Camera;
-
-    /** The camera applied around `Loop.run()`'s draw, or null for none. */
-    function getCurrent(): Camera | null;
-    /** Changes it at once (null: draw without a camera, e.g. in split screen). */
-    function setCurrent(camera: Camera | null): void;
-    /**
-     * Makes `camera` current, gliding from the current one's position, zoom,
-     * rotation and viewport over `duration` seconds. `ease` maps 0..1 to the
-     * blend (default smoothstep; e.g. `Ease.inOutCubic`).
-     */
-    function transition(camera: Camera, duration: number,
-        options?: TransitionOptions): Promise<boolean>;
-    /**
-     * Makes `camera` current and remembers the one it replaces (or none),
-     * so `pop()` goes back to it: cutscenes, map screens. 8 deep.
-     */
-    function push(camera: Camera, options?: StackOptions): Promise<boolean>;
-    /** Goes back to the camera the last `push()` replaced. */
-    function pop(options?: StackOptions): Promise<boolean>;
-    /**
-     * `culled`: draws skipped by culling in the last frame drawn under
-     * `Loop.run()` (images, rectangles, circles, drawList sprites, texts,
-     * TileMap grid cells); `pushed`: depth of `push()`.
-     */
-    function getStats(): { culled: number; pushed: number };
-
-    /** Draws with no camera and the whole screen: HUD, menus. */
-    function screenSpace<T>(fn: () => T): T;
-    /** Updates every camera: for games that do not use `Loop.run()`. */
-    function update(dt: number): void;
-    /** Drops any open camera: the identity view and the whole screen. */
-    function reset(): void;
 }
 
 
-/* === Module: Collision (collision) === */
+/* === Module: Image (image) === */
 /**
- * Light 2D collision and simple physics, in C. For platformers, top-down
- * games and shooters that want predictable, tile-friendly movement; Box2D
- * remains the choice for rigid bodies, joints and polygons.
+ * Image loading, CPU pixel access and textured 2D drawing.
  *
- * A `World` holds bodies (axis-aligned rectangles and circles) in a spatial
- * hash, and optionally a grid of tiles: solid tiles, one-way platforms and
- * floor slopes. Bodies move with a sweep along x, then along y: they slide
- * along walls, land on floors, walk up and down slopes and never tunnel
- * through thin walls, whatever their speed.
+ * `Image` accepts paths understood by the active PS2 filesystem driver,
+ * including paths relative to the boot directory. A newly loaded image is
+ * CPU-resident; call `lock()` when it must remain resident in VRAM.
  *
- * Body types:
- * - `"static"` (default): moved only by you; blocks others.
- * - `"kinematic"`: moves through everything, by its velocity or when you
- *   set `x`/`y` (a tween, a path): moving platforms, elevators, doors. It
- *   carries the dynamic bodies standing on it and pushes those in its way;
- *   one caught against something solid is `crushed`.
- * - `"dynamic"`: gravity, damping, speed limits and velocity, blocked by
- *   what it collides with; bounces with `bounce`.
+ * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
+ * images, `pixels` contains four bytes per pixel. Palette data is used only
+ * by indexed 4-bit and 8-bit formats.
  *
- * A world steps itself with the Loop's scaled time before the game's
- * `update` (so `Loop.setTimeScale(0)` pauses it); pass `autoStep: false`
- * and call `world.step(dt)` to step it yourself. Any body can also be moved
- * with collisions by `world.move(body, dx, dy)`, like a character
- * controller.
+ * Some Images borrow a texture owned by another object, such as
+ * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
+ * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
+ * `optimize()` returns false.
  *
- * Positions are in world units with y pointing down: a rectangle is placed
- * by its top-left corner, a circle by its center. Velocities are in units
- * per second, gravity in units per second squared.
- *
- * Layers and masks are 32-bit flags: two bodies collide when each one's
- * `mask` has a bit of the other's `layer`. Read back, they are signed
- * integers, like the results of `|` and `<<`.
- *
- * Example:
+ * @example
  * ```js
- * const SOLID = 1, PLAYER = 2, ENEMY = 4, COIN = 8;
- * const world = new Collision.World({ gravity: { x: 0, y: 900 } });
- * world.setGrid({
- *     columns: 40, rows: 15, tileWidth: 16, tileHeight: 16,
- *     tiles: levelIds,                        // the ids given to TileMap.setTiles()
- *     solid: [1, 2, 3], oneWay: [4], slopes: { 5: "45r", 6: "45l" },
- * });
- * const player = world.add({ type: "dynamic", x: 32, y: 32, w: 12, h: 24,
- *     layer: PLAYER, mask: SOLID | ENEMY | COIN });
- * const lift = world.add({ type: "kinematic", x: 200, y: 160, w: 48, h: 8 });
- * Tween.to(lift, { x: 320 }, 2, { yoyo: true, repeat: Infinity });   // carries the player
- * world.add({ x: 300, y: 100, r: 6, sensor: true, layer: COIN });
- * world.onEnter = (sensor, body) => { if (body === player) sensor.remove(); };
- *
- * Loop.run({
- *     update() {
- *         player.vx = pad.pressed(Gamepad.RIGHT) ? 120 : pad.pressed(Gamepad.LEFT) ? -120 : 0;
- *         if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = -330;
- *         player.dropThrough = pad.pressed(Gamepad.DOWN);   // fall through one-way platforms
- *     },
- *     draw() {
- *         hero.draw(player.centerX, player.bottom);        // a sprite with origin [0.5, 1]
- *         world.drawDebug();
- *     },
- * });
+ * const logo = new Image('my_image.png');
+ * if (!logo.ready()) throw new Error('image load failed');
+ * logo.color = Color.new(255, 255, 255, 255);
+ * logo.lock();
+ * logo.draw(100, 80);
+ * Screen.flip();
  * ```
  */
-declare namespace Collision {
-    type BodyType = "static" | "kinematic" | "dynamic";
 
-    /** -1: blocked moving left, 1: moving right, 0: not blocked. */
-    type WallSide = -1 | 0 | 1;
+/** Optional destination, source-rectangle and tint overrides for `draw()`. */
+type ImageDrawOptions = {
+    /** Destination width in pixels; defaults to `width`. */
+    width?: number;
+    /** Destination height in pixels; defaults to `height`. */
+    height?: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx?: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty?: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx?: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy?: number;
+    /** Rotation angle in radians. */
+    angle?: number;
+    /** Packed RGBA tint, normally created with `Color.new()`. */
+    color?: number;
+};
 
-    /** A shape outside a world, or a body. */
-    type Shape = Body | { x: number; y: number; w: number; h: number } |
-        { x: number; y: number; r: number };
+/** Options of `drawList()`. */
+type ImageDrawListOptions = {
+    /** Offset added to every sprite; defaults to 0. */
+    x?: number;
+    y?: number;
+    /** First record to draw; defaults to 0. */
+    first?: number;
+    /** Records to draw; defaults to the rest of the buffer. */
+    count?: number;
+};
 
+/** Options controlling image creation and texture upload behavior. */
+type ImageOptions = {
+    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
+    delayed?: boolean;
+};
+
+declare class Image {
+    /** Loads an image from `path`, or creates an empty image when omitted. */
+    constructor(options?: ImageOptions);
+    constructor(path: string, options?: ImageOptions);
+    /** Linear size in bytes of the current pixel buffer. */
+    readonly size: number;
+    /** Whether texture uploads use the deferred VIF1 path. */
+    readonly delayed: boolean;
+    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
+    pixels: ArrayBuffer;
+    /** CPU palette buffer for indexed images; required for indexed images. */
+    palette: ArrayBuffer;
+    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
+    texWidth: number;
+    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
+    texHeight: number;
+    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
+    bpp: number;
+    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
+    filter: number;
+    /** Whether dimensions and a valid pixel buffer are available for drawing. */
+    renderable: boolean;
+    /** Destination draw width in pixels. */
+    width: number;
+    /** Destination draw height in pixels. */
+    height: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy: number;
+    /** Rotation angle in radians used by `draw()`. */
+    angle: number;
+    /** Packed RGBA tint multiplied with sampled texture color. */
+    color: number;
+
+    /** True when dimensions, pixel data and indexed palette data are valid. */
+    ready(): boolean;
+    /** True while an ImageList request is waiting or being processed. */
+    loading(): boolean;
+    /** True when the most recent ImageList request failed. */
+    failed(): boolean;
     /**
-     * A floor slope: heights of its surface at the tile's left and right
-     * sides, as fractions of the tile height (0 = the tile's bottom, 1 = its
-     * top). Presets: `"45r"` rises to the right ([0, 1]), `"45l"` falls
-     * ([1, 0]); gentle slopes over two tiles: `"22r1"` then `"22r2"` rise
-     * ([0, 0.5], [0.5, 1]), `"22l1"` then `"22l2"` fall.
+     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
+     * has a queued VRAM upload; `ready` is resident in VRAM.
      */
-    type Slope = [number, number] | "45r" | "45l" | "22r1" | "22r2" | "22l1" | "22l2";
-
-    interface WorldOptions {
-        /** Side of the spatial hash cells: about the size of a typical body. Default 64. */
-        cellSize?: number;
-        /** Default { x: 0, y: 0 }. */
-        gravity?: { x: number; y: number } | [number, number];
-        /**
-         * Stepped by the Loop's scaled time before the game's update (default
-         * true on the main script; workers step with `step()`).
-         */
-        autoStep?: boolean;
-    }
-
-    interface BodyOptions {
-        /** Rectangle: top-left corner. Circle: center. Default 0. */
-        x?: number;
-        y?: number;
-        /** A rectangle: its size. */
-        w?: number;
-        h?: number;
-        /** A circle: its radius (instead of w and h). */
-        r?: number;
-        /** Default "static". */
-        type?: BodyType;
-        vx?: number;
-        vy?: number;
-        /** Default 1. */
-        layer?: number;
-        /** Default -1: every layer. */
-        mask?: number;
-        /** Found by queries, pairs and onEnter/onExit, but never blocks nor is blocked. */
-        sensor?: boolean;
-        /** Blocks only bodies coming from above (jump-through platforms). */
-        oneWay?: boolean;
-        /** Dynamic bodies: gravity multiplier (default 1). */
-        gravityScale?: number;
-        /** Dynamic bodies: velocity decay rate in 1/s (default 0). */
-        damping?: number;
-        /** Dynamic bodies: velocity kept after hitting something, 0 to 1 (default 0). */
-        bounce?: number;
-        /** Dynamic bodies: speed limits per axis (0, the default, is none). */
-        maxSpeedX?: number;
-        maxSpeedY?: number;
-    }
-
-    interface GridOptions {
-        /** At most 4096 each, and 1048576 tiles in all (1024 x 1024, 4096 x 256...). */
-        columns: number;
-        rows: number;
-        tileWidth: number;
-        tileHeight: number;
-        /** Top-left corner of the grid. Default 0. */
-        x?: number;
-        y?: number;
-        /**
-         * Row-major tile ids, `columns * rows` long (copied); default all 0.
-         * The same ids as `TileMap.Instance.setTiles()`: a grid instance's
-         * `grid` gives columns, rows and the tile size.
-         */
-        tiles?: Uint16Array | number[];
-        /** Ids of solid tiles. */
-        solid?: number[];
-        /** Ids of one-way platforms (solid from above only). */
-        oneWay?: number[];
-        /** Floor slopes by id. Below the surface the tile is solid; its high side is a wall. */
-        slopes?: { [id: number]: Slope };
-        /** Layer of the tiles, for masks. Default 1. */
-        layer?: number;
-    }
-
+    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
+    /** Returns structured load diagnostics, or undefined when no load failed. */
+    error(): ImageLoadError | undefined;
+    /** Queues a textured sprite at `(x, y)` for the current frame. */
+    draw(x: number, y: number, options?: ImageDrawOptions): void;
     /**
-     * A blocking contact: another body (`tile` is -1) or a tile (`body` is
-     * null), and the normal of the surface hit, pointing away from it:
-     * { normalX: 0, normalY: -1 } for a floor.
+     * Queues many sprites of this image at once: the texture state is sent
+     * once per 128 sprites instead of once per sprite, which makes it several
+     * times cheaper than as many `draw()` calls. `sprites` uses the record
+     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
+     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
+     * buffer serves both; the TileMap module is not required. Records with a
+     * zero width or height are skipped, and so are, under a Camera2D camera,
+     * records outside its viewport.
+     *
+     * @example
+     * ```js
+     * const sprites = new Float32Array(16 * count);        // 64-byte records
+     * const colors = new Uint32Array(sprites.buffer);
+     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
+     * //           colors[16*i + 8..11] = r, g, b, a
+     * image.drawList(sprites, { x: cameraX, y: cameraY });
+     * ```
      */
-    interface Contact {
-        body: Body | null;
-        tile: number;
-        column: number;
-        row: number;
-        normalX: number;
-        normalY: number;
+    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
+    /** Uploads the image synchronously and pins its VRAM allocation. */
+    lock(): boolean;
+    /** Allows the texture manager to evict the image from VRAM. */
+    unlock(): boolean;
+    /** Returns whether the image is currently pinned in VRAM. */
+    locked(): boolean;
+    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
+    optimize(): boolean;
+    /** Releases the native image and its CPU/VRAM resources. */
+    free(): void;
+
+    /** Copies a rectangular VRAM region between two resident images. */
+    static copyVRAMBlock(
+        source: Image,
+        sourceX: number,
+        sourceY: number,
+        destination: Image,
+        destinationX: number,
+        destinationY: number
+    ): void;
+}
+
+/** Structured diagnostics for a failed image load. */
+interface ImageLoadError {
+    /** Path as it was requested. */
+    path: string;
+    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
+    /** `upload` is reported only for ImageList requests with an `upload` option. */
+    stage: "open" | "decode" | "surface" | "upload";
+    /** Human-readable description. */
+    message: string;
+}
+
+
+/* === Module: Quaternion (quaternion) === */
+/** Right-handed, normalized xyzw rotation. Angles are radians.
+ * Mutating methods return this; operands are unchanged; dispose is idempotent. */
+declare namespace Quaternion {
+    class Quaternion {
+        constructor();
+        constructor(x: number, y: number, z: number, w: number);
+        setAxisAngle(x: number, y: number, z: number, radians: number): this;
+        /** Euler radians composed as Rz * Ry * Rx (x applied first). */
+        setEuler(x: number, y: number, z: number): this;
+        /** Sets this = this * other. */
+        multiply(other: Quaternion): this;
+        /** Shortest path toward other, t in [0,1]. */
+        slerp(other: Quaternion, t: number): this;
+        /** Independent snapshot. */
+        toArray(): [number, number, number, number];
+        dispose(): void;
     }
+}
 
-    interface MoveResult {
-        /** Distance actually moved. */
-        dx: number;
-        dy: number;
-        onGround: boolean;
-        hitCeiling: boolean;
-        hitWall: WallSide;
-        /** What stopped the x sweep and the y sweep. */
-        contacts: Contact[];
-    }
 
-    interface RayHit {
-        x: number;
-        y: number;
-        normalX: number;
-        normalY: number;
-        /** Of the segment, 0 to 1. */
-        fraction: number;
-        distance: number;
-        /** The body hit, or null for a tile. */
-        body: Body | null;
-        /** The tile id hit, or -1 for a body. */
-        tile: number;
-        column: number;
-        row: number;
-    }
-
-    interface RaycastOptions {
-        /** Layers hit (bodies, and the grid when its layer is in it). Default -1. */
-        mask?: number;
-        /** A body to skip, such as the one casting the ray. */
-        ignore?: Body | null;
-        /** Also hit sensors. Default false. */
-        sensors?: boolean;
-    }
-
-    class World {
-        constructor(options?: WorldOptions);
-        gravityX: number;
-        gravityY: number;
-        readonly cellSize: number;
-        readonly bodyCount: number;
-        autoStep: boolean;
-        /**
-         * Called after each step when a dynamic body begins a contact: it
-         * lands or steps onto another body, or starts pushing a wall or a
-         * ceiling. Resting contacts (standing, walking along a floor,
-         * pushing the same wall) are not repeated every step. `this` is the
-         * world, which may be changed from it.
-         */
-        onContact: ((this: World, body: Body, contact: Contact) => void) | null;
-        /**
-         * Called after each step when a sensor starts overlapping a body it
-         * collides with (layers and masks): pickups, damage zones, triggers.
-         * Two static bodies are never a pair; two sensors are one pair. The
-         * world may be changed from it (removing the coin, for instance).
-         * Overlaps are only tracked while `onEnter` or `onExit` is set.
-         */
-        onEnter: ((this: World, sensor: Body, other: Body) => void) | null;
-        /** As `onEnter`, when the overlap ends. A removed body gets no exit. */
-        onExit: ((this: World, sensor: Body, other: Body) => void) | null;
-        /** The grid's geometry, or undefined without one. */
-        readonly grid: { columns: number; rows: number; tileWidth: number; tileHeight: number;
-            x: number; y: number; layer: number } | undefined;
-
-        /** Adds a body: `w` and `h` make a rectangle, `r` a circle. */
-        add(options: BodyOptions): Body;
-        /** Removes a body of this world; false when it is not in it. */
-        remove(body: Body): boolean;
-        /** Removes every body. */
-        clear(): void;
-        bodies(): Body[];
-
-        /**
-         * Moves a body by (dx, dy) with collisions: along x, then along y,
-         * each time stopping at the first thing in the way. Walking into a
-         * slope follows its floor; a body that stood on the ground steps up
-         * small ledges and sticks to floors going down, as far as the
-         * steepest slope of the grid needs. Fast bodies move in several
-         * sweeps of at most half a tile, so they never take a wall for a
-         * step. Sensors move freely; kinematic bodies move through
-         * everything, carrying and pushing (as setting `x`/`y` does).
-         * Updates `onGround`, `onCeiling`, `onWall` and `ground`.
-         *
-         * `out`, when given, receives the result instead of a new object
-         * (its `contacts` array is emptied and reused): moving many bodies
-         * every frame then allocates nothing.
-         */
-        move<T extends object = MoveResult>(body: Body, dx: number, dy: number, out?: T): T & MoveResult;
-        /**
-         * Advances the world: kinematic bodies move by their velocity,
-         * carrying their riders and pushing what is in their way, then
-         * dynamic bodies get gravity, damping and speed limits and move; a
-         * blocked axis loses its velocity or bounces. Then `onContact`,
-         * `onEnter` and `onExit` run. With `autoStep` the Loop calls it.
-         */
-        step(dt: number): void;
-
-        /** Uses a grid of tiles, replacing the previous one. */
-        setGrid(options: GridOptions): void;
-        clearGrid(): void;
-        /** Tile id at a cell, or -1 outside the grid. */
-        getTile(column: number, row: number): number;
-        /** Changes a cell (a door opens, a block breaks); false outside the grid. */
-        setTile(column: number, row: number, id: number): boolean;
-        /** The cell holding a point, or null outside the grid. */
-        cellAt(x: number, y: number): { column: number; row: number; tile: number } | null;
-        /**
-         * Whether a point is inside something solid: a solid tile, a slope
-         * below its surface or a body that is not a sensor, on a layer of
-         * `mask` (default -1). One-way platforms are not solid. For ledge
-         * checks and AI ("is there floor ahead?").
-         */
-        solidAt(x: number, y: number, mask?: number): boolean;
-
-        /** Bodies overlapping a rectangle whose layer is in `mask` (default -1). Sensors included. */
-        query(x: number, y: number, w: number, h: number, mask?: number): Body[];
-        queryCircle(x: number, y: number, r: number, mask?: number): Body[];
-        queryPoint(x: number, y: number, mask?: number): Body[];
-        /** Bodies overlapping `body` that it collides with (layers and masks), sensors too. */
-        overlapping(body: Body): Body[];
-        /**
-         * Overlapping pairs [a, b] with `a` on a layer of `layerA` and `b` on
-         * a layer of `layerB`, found in C: bullets against enemies without a
-         * loop over every pair in JavaScript. Masks are not used; each pair
-         * is reported once. More than 65536 pairs throw a RangeError.
-         */
-        pairs(layerA: number, layerB: number): Array<[Body, Body]>;
-        /**
-         * The same pairs, passed to `callback` instead of built into arrays;
-         * returns how many there were. Pairs of a body removed by an earlier
-         * call are skipped.
-         */
-        pairs(layerA: number, layerB: number, callback: (a: Body, b: Body) => void): number;
-        /**
-         * First body or tile hit by the segment from (x1, y1) to (x2, y2).
-         * Shapes and solid tiles holding the start are ignored; one-way tiles
-         * and bodies are only hit from above.
-         */
-        raycast(x1: number, y1: number, x2: number, y2: number,
-            options?: RaycastOptions): RayHit | null;
-
-        /**
-         * Outlines the bodies and tiles in view, through the current camera:
-         * static bodies white, kinematic blue, dynamic green, sensors yellow,
-         * tiles red, one-way platforms orange. Call it in `draw`.
-         */
-        drawDebug(options?: { bodies?: boolean; tiles?: boolean }): void;
-    }
-
-    /**
-     * A body of a world, made by `world.add()`. After `remove()` it is
-     * detached: `valid` is false and other properties throw.
-     */
-    class Body {
+/* === Module: Model3D (model3d) === */
+/** Immutable mesh streams. Geometry and material descriptors are copied;
+ * instances/batches retain native resources, including textures. */
+declare namespace Model3D {
+    const MAX_VERTICES: number;
+    /** Joint indices must be below MAX_JOINTS (256); the VU1 path accepts 24 joints. */
+    const MAX_JOINTS: number;
+    /** At most MAX_TARGETS (8) morph targets per mesh. */
+    const MAX_TARGETS: number;
+    /** UV components must be finite with |u|,|v| <= UV_LIMIT (16): tiled UVs
+     * use repeat addressing within the GS texel precision. */
+    const UV_LIMIT: number;
+    const UNLIT: 0; const DIFFUSE: 1;
+    class Texture {
         private constructor();
-        /** The world, or null once removed. */
-        readonly world: World | null;
-        readonly valid: boolean;
-        readonly shape: "rect" | "circle";
-        type: BodyType;
-        /**
-         * Setting them teleports the body, without collisions, and clears its
-         * contact state. A kinematic body moves instead, carrying its riders
-         * and pushing what is in its way: animate platforms with Tween.
-         */
-        x: number;
-        y: number;
-        /** Size: a circle's is 2 r and read-only. */
-        w: number;
-        h: number;
-        /** Radius of a circle; undefined for a rectangle. */
-        r: number | undefined;
-        /** Center of the body. */
-        readonly centerX: number;
-        readonly centerY: number;
-        /** Right and bottom edges of its bounds: `bottom` is where the feet are. */
-        readonly right: number;
-        readonly bottom: number;
-        vx: number;
-        vy: number;
-        layer: number;
-        mask: number;
-        sensor: boolean;
-        oneWay: boolean;
-        /** Falls through one-way platforms while set. */
-        dropThrough: boolean;
-        gravityScale: number;
-        damping: number;
-        bounce: number;
-        maxSpeedX: number;
-        maxSpeedY: number;
-        /** Contact state after the last move or step of this body. */
-        readonly onGround: boolean;
-        readonly onCeiling: boolean;
-        readonly onWall: WallSide;
-        /** The body stood on, or null (in the air or on a tile). */
-        readonly ground: Body | null;
-        /**
-         * A kinematic body pushed it into something solid during the last
-         * step (or since, by setting its `x`/`y`): it is caught between them.
-         * The game decides what that means; the kinematic body keeps moving.
-         */
-        readonly crushed: boolean;
-
-        /** `world.move(this, dx, dy, out)`. */
-        move<T extends object = MoveResult>(dx: number, dy: number, out?: T): T & MoveResult;
-        /** Teleports the body, without collisions, and clears its contact state. */
-        setPosition(x: number, y: number): void;
-        /** Axis-aligned bounds (a circle's box). */
-        getBounds(): { x: number; y: number; w: number; h: number };
-        /** Removes the body from its world; false if it was already removed. */
-        remove(): boolean;
+        static readonly NEAREST: 0; static readonly LINEAR: 1;
+        /** Addressing per axis: CLAMP (to edge, the default), REPEAT on both
+         * axes, or REPEAT_U / REPEAT_V on one. */
+        static readonly CLAMP: 0; static readonly REPEAT_U: 1; static readonly REPEAT_V: 2; static readonly REPEAT: 3;
+        /** Copies 0xAABBGGRR pixels; alpha (0..255) matters only to alphaCutoff materials. Power-of-two sizes 1..512;
+         * no mipmaps. Honors subarray(); main thread only. */
+        static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1; wrap?: 0 | 1 | 2 | 3}): Texture;
+        /** Synchronous decoding. RGB/RGBA, 16-bit and 4/8-bit palette images
+         * (canonical 32-bit CPU copy). VRAM uses lossless T4/T8 for <=16/256
+         * distinct GS RGBA colors when texture+CLUT is smaller than CT32.
+         * Errors name the path and the reason. */
+        static load(path: string, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
+        readonly width: number; readonly height: number; readonly wrap: 0 | 1 | 2 | 3;
+        /** Makes the texture resident in VRAM now (one synchronous upload and
+         * GS wait), e.g. on a loading screen, instead of at the first draw.
+         * Throws when VRAM is full. */
+        upload(): this;
+        /** Existing meshes retain the texture. Final native release defers VRAM
+         * and pixel cleanup until the GS has finished reading them. */
+        dispose(): void;
     }
+    interface Material {
+        /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
+        shading?: 0 | 1;
+        /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
+         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff. */
+        baseColor?: Float32Array;
+        texture?: Texture;
+        /** Alpha mask (glTF alphaMode MASK): pixels whose alpha (texture
+         * alpha times vertex alpha) is below the cutoff, in [0,1], are
+         * discarded by the GS alpha test; the rest stay opaque. */
+        alphaCutoff?: number;
+    }
+    interface Geometry {
+        positions: Float32Array; colors?: Float32Array;
+        /** Triangle-list corners; copied into compact batches when storage is
+         * smaller. The original triangle order and vertexCount are preserved. */
+        indices?: Uint32Array;
+        /** One nonzero xyz normal per source vertex; normalized during copy.
+         * Missing DIFFUSE normals are generated per face, before expansion. */
+        normals?: Float32Array;
+        /** One finite uv pair per source vertex, |u|,|v| <= UV_LIMIT. Origin
+         * top-left; outside [0,1] the texture's wrap mode applies. */
+        texcoords?: Float32Array;
+        /** Four joint indices and four nonnegative finite weights per source
+         * vertex, supplied together. Each vertex needs a positive weight;
+         * weights are normalized during copy.
+         * Skin data needs a skin/joint palette to deform (e.g. a loaded glTF node). */
+        joints?: Uint16Array;
+        weights?: Float32Array;
+        /** Concatenated xyz position deltas, one complete source-vertex block
+         * per target (1..MAX_TARGETS). Scene3D.Node.setWeights controls the blend. */
+        targetPositions?: Float32Array;
+        /** Matching concatenated xyz normal deltas; requires base normals. */
+        targetNormals?: Float32Array;
+        material?: Material;
+    }
+    class Mesh {
+        private constructor();
+        /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
+        static fromGeometry(geometry: Geometry): Mesh;
+        /** Expanded triangle vertex count, at most MAX_VERTICES. */
+        readonly vertexCount: number;
+        /** Model-space AABB: minX, minY, minZ, maxX, maxY, maxZ. */
+        getBounds(): number[]; getBounds(out: Float32Array): Float32Array;
+        createInstance(): Instance;
+        /** Drops this handle; existing instances retain the native mesh. */
+        dispose(): void;
+    }
+    class Instance {
+        private constructor();
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Owned snapshot, or fills and returns out; never a borrowed matrix. */
+        getTransform(out?: Matrix4): Matrix4;
+        /** Local TRS as set (rotation normalized, xyzw): a new Array, or out
+         * filled and returned (no allocation per frame). */
+        getPosition(): number[]; getPosition(out: Float32Array): Float32Array;
+        getRotation(): number[]; getRotation(out: Float32Array): Float32Array;
+        getScale(): number[]; getScale(out: Float32Array): Float32Array;
+        dispose(): void;
+    }
+    /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset.
+     * Errors name the file and the exact unsupported feature. */
+    function load(path: string, material?: Material): Mesh;
+    /** Bulk setters, one call per frame instead of one per instance: values holds
+     * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any instance changes. Returns the count. */
+    function setPositions(instances: Instance[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Instance.setRotationEuler(). */
+    function setRotationsEuler(instances: Instance[], values: Float32Array): number;
+}
 
-    /** Whether two shapes overlap (touching is not overlapping). */
-    function overlaps(a: Shape, b: Shape): boolean;
-    /** The shortest move that takes `a` out of `b`, or null when they do not overlap. */
-    function resolve(a: Shape, b: Shape): { x: number; y: number } | null;
-    /** Where the segment enters the shape, or null when it misses or starts inside. */
-    function segment(x1: number, y1: number, x2: number, y2: number, shape: Shape):
-        { fraction: number; x: number; y: number; normalX: number; normalY: number } | null;
+
+/* === Module: Render3D (render3d) === */
+/** Native opaque unlit/diffuse and textured triangles with homogeneous clipping in C for
+ * crossing objects; VU1 transforms and lights fully contained objects.
+ * Draw never advances animation/physics. Enable Screen zbuffering. */
+declare namespace Render3D {
+    const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
+    type CullMode = 0 | 1 | -1;
+    interface Stats {
+        submittedObjects: number; culledObjects: number;
+        /** Accepted objects drawn, even when clipping rejects all their triangles. */
+        drawPasses: number;
+        /** GS/VU1 passes emitted. Batch and Scene3D draws share one pass among
+         * consecutive objects with the same camera, program and texture. */
+        pipelinePasses: number;
+        /** Triangle list sent to VU1 after native clipping; not rasterized count. */
+        triangles: number; vuBatches: number;
+        /** Source triangles of objects retained by AABB culling. */
+        sourceTriangles: number;
+        /** Source triangles partially clipped and producing visible polygons. */
+        clippedTriangles: number;
+        /** Source triangles rejected by precise clipping. */
+        rejectedTriangles: number;
+        /** Stream payload sent inline or by DMA_REF, including chunk padding
+         * and skin joints/weights when applicable.
+         * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
+        geometryBytes: number;
+        /** Objects crossing the screen edges drawn by VU1 without clipping,
+         * inside the GS guard band (the scissor trims them). */
+        guardBandObjects: number;
+        /** Objects crossing the near plane clipped on VU1 (inside the guard
+         * band otherwise); their triangles count before clipping. */
+        nearClipObjects: number;
+        /** Meshes with morph targets blended on VU1. */
+        vuMorphObjects: number;
+        /** Objects crossing the frustum beyond the guard band, clipped
+         * triangle by triangle in C on the EE: the expensive path (a large
+         * mesh around the camera costs milliseconds). Split such meshes. */
+        cpuClipObjects: number;
+    }
+    /** Lights are borrowed for this call. Omitted lights mean black ambient and
+     * no directional lights. UNLIT materials ignore lights. Scale 0
+     * draws nothing (counted as culled); other singular DIFFUSE normal
+     * transforms throw, naming the reason; drawing does not update lights or transforms.
+     * Pass `stats` to reuse an object every frame: its fields are assigned and
+     * it is returned, instead of allocating a new Stats per call. Pass `null`
+     * to skip the per-call stats (returns undefined, the cheapest call) and
+     * read the totals once per frame with frameStats(). */
+    function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
+        lights?: Lights.Set, stats?: T): T & Stats;
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode: CullMode | undefined,
+        lights: Lights.Set | undefined, stats: null): undefined;
+    /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
+     * since the last reset (with or without per-call stats). `reset`
+     * (default true) clears them, so call it once per frame. */
+    function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
+    /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
+     * camera, program and texture skip the barrier, program upload, camera
+     * constants and GS state (and unchanged lights). The pass closes when fn
+     * returns or throws; fn's result is returned. Inside fn, draw only 3D:
+     * no 2D drawing, flip or camera change. Groups do not nest. */
+    function group<R>(fn: () => R): R;
+    class Batch {
+        constructor();
+        readonly size: number;
+        /** Retains the native instance, independently of its JS handle. */
+        add(instance: Model3D.Instance): this;
+        clear(): this;
+        /** Optional `stats` is reused and returned, as in Render3D.draw(); null returns undefined. */
+        draw<T extends object = Stats>(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set,
+            stats?: T): T & Stats;
+        draw(camera: Camera3D.Camera, cullMode: CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Scene3D (scene3d) === */
+/** Native transform hierarchy. A Node is the scene-graph instance of a mesh;
+ * world = parent world * local TRS. Setters only mark dirty flags: call
+ * scene.update() (or attachLoop()) before draw and world queries, which throw
+ * while the scene is stale instead of returning outdated data. */
+declare namespace Scene3D {
+    /** Releases reusable CPU skinning/morph buffers after draw returns, for
+     * a level transition or memory pressure. They grow again when needed. */
+    function trimScratch(): void;
+    /** Levels from the root, root included. Deeper hierarchies are rejected. */
+    const MAX_DEPTH: number;
+    /** Bulk setters, one call per frame instead of one per node: values holds
+     * x, y, z for nodes[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any node changes. Returns the count. */
+    function setPositions(nodes: Node[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Node.setRotationEuler(). */
+    function setRotationsEuler(nodes: Node[], values: Float32Array): number;
+    /** 2D physics on 3D nodes: x, y and an angle about Z (radians) per node,
+     * the layout of Box2D's `world.readTransforms()`. Each node keeps its z.
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Scene3D.setTransforms2D(crates, transforms);
+     * ``` */
+    function setTransforms2D(nodes: Node[], values: Float32Array): number;
+    interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    /** Nearest raycast hit: node, distance along the ray, world point
+     * (x, y, z), unit normal facing the ray (nx, ny, nz) and source triangle
+     * index (-1 for an AABB hit). */
+    interface RaycastHit {
+        node: Node; distance: number; x: number; y: number; z: number;
+        nx: number; ny: number; nz: number; triangle: number;
+    }
+    interface RaycastOptions {
+        /** Test triangles (default true) or only the meshes' world AABBs. */
+        precise?: boolean;
+    }
+    interface DrawStats extends Render3D.Stats {
+        /** Subtrees rejected by their world bounds; their meshes count as culled. */
+        culledSubtrees: number;
+        /** Meshes sent to Render3D, sorted by pipeline in traversal order. */
+        queuedObjects: number;
+    }
+    interface Bounds { min: [number, number, number]; max: [number, number, number]; }
+    class Node {
+        /** Retains the optional mesh natively, independently of its handle. */
+        constructor(mesh?: Model3D.Mesh);
+        /** Replaces the retained mesh; null removes it. */
+        setMesh(mesh: Model3D.Mesh | null): this;
+        readonly hasMesh: boolean;
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Native motion, integrated by scene.advance(dt) / attachLoop() without
+         * a JS call per frame. Units per second in the parent space. */
+        setVelocity(x: number, y: number, z: number): this;
+        /** Angular velocity in rad/s about the local axes: direction is the
+         * axis, length the speed. (0, 0, 0) stops the spin. */
+        setSpin(x: number, y: number, z: number): this;
+        /** Hidden nodes and descendants are not drawn nor included in bounds. */
+        visible: boolean;
+        /** Reparents child, keeping its local transform; the parent retains it.
+         * Throws RangeError for cycles, scene roots and MAX_DEPTH overflow. */
+        add(child: Node): this;
+        /** Removes this node from its parent; harmless without one. */
+        detach(): this;
+        /** The same live JS object for this native parent, or null. Wrapper
+         * identity (including subclass/properties) is preserved while live. */
+        getParent(): Node | null;
+        readonly childCount: number;
+        /** The same live JS object for the child at index. */
+        getChild(index: number): Node;
+        /** Always current. Owned snapshot, or fills and returns out. */
+        getLocalTransform(out?: Matrix4): Matrix4;
+        /** Transform of the last update. Throws while stale or outside a scene. */
+        getWorldTransform(out?: Matrix4): Matrix4;
+        /** World AABB of visible meshes in the subtree, or null when empty.
+         * Throws while stale or outside a scene. */
+        getWorldBounds(): Bounds | null;
+        /** Morph target weights (up to 8; missing ones become 0). A mesh with
+         * morph targets is blended in C at draw: base + sum(weight * delta). */
+        setWeights(weights: ArrayLike<number>): this;
+        /** One weight per morph target of the node's mesh (empty without). */
+        getWeights(): number[];
+        /** Invalidates this shared JS wrapper (all aliases). Parents/scenes
+         * retain the native node; later access can create another wrapper.
+         * The wrapper cache is weak and does not keep JS objects alive. */
+        dispose(): void;
+    }
+    class Scene {
+        constructor();
+        /** The same live JS object for the root node owned by the scene. */
+        readonly root: Node;
+        /** True when a node changed after the last update. */
+        readonly stale: boolean;
+        /** True while a Loop POST_UPDATE system updates this scene. */
+        readonly attached: boolean;
+        /** Integrates node motion (setVelocity/setSpin) for dt seconds and
+         * returns the moved node count. attachLoop() does it every frame with
+         * the Loop dt, before update(). */
+        advance(dt: number): number;
+        /** Recomputes dirty world transforms and subtree bounds. Optional
+         * `stats` is reused and returned instead of allocating a new object;
+         * null skips it and returns undefined. */
+        update<T extends object = UpdateStats>(stats?: T): T & UpdateStats;
+        update(stats: null): undefined;
+        /** Culls subtrees, queues meshes and draws them through Render3D.
+         * Never updates the scene; throws while stale. Lights are borrowed.
+         * `stats` as in Render3D.draw(): reused, or null to return undefined;
+         * the render totals feed Render3D.frameStats() either way. */
+        draw<T extends object = DrawStats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
+            stats?: T): T & DrawStats;
+        draw(camera: Camera3D.Camera, cullMode: Render3D.CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        /** Nearest visible mesh hit by the ray (e.g. Camera3D.Camera.screenToRay())
+         * within maxDistance (default unlimited), or null. Uses the transforms of
+         * the last update(); throws while stale. Skinned meshes are skipped and
+         * morphed meshes are tested in their base pose. Optional `out` is reused. */
+        raycast<T extends object = RaycastHit>(ray: Camera3D.Ray, maxDistance?: number, options?: RaycastOptions,
+            out?: T): (T & RaycastHit) | null;
+        /** Nodes whose visible, unskinned mesh world AABB overlaps the box, in
+         * traversal order. Optional `out` array is cleared, refilled and returned. */
+        queryBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+            out?: Node[]): Node[];
+        /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
+        attachLoop(priority?: number): this;
+        detachLoop(): this;
+        /** Also detaches from the Loop; existing node handles stay valid. */
+        dispose(): void;
+    }
+}
+
+
+/* === Module: CameraRig3D (camerarig3d) === */
+/** Native Camera3D controllers. The script configures a rig and feeds input
+ * (rotate/zoom); following, orbiting and smoothing run in C every frame in one
+ * Loop system (attachLoop()) after Scene3D updates world transforms, or
+ * manually with update(dt). A rig keeps its camera alive, also after the
+ * camera handle is disposed, and skips frames whose target node is stale.
+ * Rigs stay active until dispose(), even when no variable holds them. */
+declare namespace CameraRig3D {
+    /** Default attachLoop() priority: after Scene3D.attachLoop() (0). */
+    const LOOP_PRIORITY: number;
+    interface Rig {
+        /** null: Orbit uses its fixed centre; Follow stops moving. */
+        setTarget(target: Scene3D.Node | null): this;
+        /** Exponential smoothing in 1/s for the eye and the look point; 0 is
+         * rigid (default). Frame-rate independent. */
+        setSharpness(eye: number, look: number): this;
+        /** The next update jumps to the goal without smoothing. */
+        snap(): this;
+        enabled: boolean;
+        /** True when it moved the camera. */
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    class Follow implements Rig {
+        constructor(camera: Camera3D.Camera, target: Scene3D.Node);
+        /** Eye offset; local (default) turns and scales with the target,
+         * otherwise it is added to the target's world position. Default 0, 2, 6. */
+        setOffset(x: number, y: number, z: number, local?: boolean): this;
+        /** Look point in the target's local space. Default 0, 0, 0. */
+        setLookOffset(x: number, y: number, z: number): this;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    class Orbit implements Rig {
+        /** Without a target, the centre is the fixed point of setCenter(). */
+        constructor(camera: Camera3D.Camera, target?: Scene3D.Node | null);
+        /** Offset from the target's world position, or the fixed centre. */
+        setCenter(x: number, y: number, z: number): this;
+        /** Radians: yaw about +Y (0 sits on +Z looking down -Z), pitch up. */
+        setAngles(yaw: number, pitch: number): this;
+        /** Input deltas, clamped to the limits. */
+        rotate(yaw: number, pitch: number): this;
+        zoom(delta: number): this;
+        /** Pitch within -1.56..1.56 rad; 0 < distanceMin <= distanceMax.
+         * Defaults -1.5, 1.5, 0.1, 1e6. */
+        setLimits(pitchMin: number, pitchMax: number, distanceMin: number, distanceMax: number): this;
+        readonly yaw: number;
+        readonly pitch: number;
+        /** Default 6. */
+        distance: number;
+        /** Yaw speed in rad/s. */
+        autoRotate: number;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    /** Updates every enabled rig; returns how many moved their camera. */
+    function update(dt: number): number;
+    /** One native POST_UPDATE system for every rig; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 
@@ -1194,98 +1196,6 @@ declare namespace Draw {
     /** Draws a circle outline or filled circle. */
     function circle(x: number, y: number, radius: number,
         color: Color.Value, filled?: boolean): void;
-}
-
-
-/* === Module: Ease (ease) === */
-/**
- * Easing curves and interpolation helpers.
- *
- * A curve maps the progress `t` of an animation to a value, with `f(0) = 0`
- * and `f(1) = 1`; `back` and `elastic` curves overshoot in between. Every
- * curve clamps `t` to [0, 1] first, so a last frame past the end still gives
- * a valid value. Curves have short names (`outBack`) and the long names of
- * easings.net (`easeOutBack`); `Tween` accepts either as a string.
- *
- * @example
- * ```js
- * const y = Ease.lerp(400, 120, Ease.outBack(elapsed / 0.6));
- * camera.x = Ease.damp(camera.x, player.x, 10, dt);   // same speed at 30 and 60 FPS
- * ```
- */
-declare namespace Ease {
-    /** A curve: progress (clamped to 0..1) to eased value. */
-    type Curve = (t: number) => number;
-    /** A curve, or the name of one (`"outBack"`, `"easeOutBack"`). */
-    type Easing = Curve | string;
-
-    /** The three forms of a curve family. */
-    interface Family {
-        in: Curve;
-        out: Curve;
-        inOut: Curve;
-    }
-
-    const linear: Curve;
-    const inQuad: Curve, outQuad: Curve, inOutQuad: Curve;
-    const inCubic: Curve, outCubic: Curve, inOutCubic: Curve;
-    const inQuart: Curve, outQuart: Curve, inOutQuart: Curve;
-    const inQuint: Curve, outQuint: Curve, inOutQuint: Curve;
-    const inSine: Curve, outSine: Curve, inOutSine: Curve;
-    const inExpo: Curve, outExpo: Curve, inOutExpo: Curve;
-    const inCirc: Curve, outCirc: Curve, inOutCirc: Curve;
-    /** Overshoot of 1.70158 (times 1.525 in `inOutBack`, as easings.net); see `back()`. */
-    const inBack: Curve, outBack: Curve, inOutBack: Curve;
-    /** Amplitude 1, period 0.3; see `elastic()`. */
-    const inElastic: Curve, outElastic: Curve, inOutElastic: Curve;
-    const inBounce: Curve, outBounce: Curve, inOutBounce: Curve;
-
-    /** Long names (easings.net), the same functions as the short ones. */
-    const easeInQuad: Curve, easeOutQuad: Curve, easeInOutQuad: Curve;
-    const easeInCubic: Curve, easeOutCubic: Curve, easeInOutCubic: Curve;
-    const easeInQuart: Curve, easeOutQuart: Curve, easeInOutQuart: Curve;
-    const easeInQuint: Curve, easeOutQuint: Curve, easeInOutQuint: Curve;
-    const easeInSine: Curve, easeOutSine: Curve, easeInOutSine: Curve;
-    const easeInExpo: Curve, easeOutExpo: Curve, easeInOutExpo: Curve;
-    const easeInCirc: Curve, easeOutCirc: Curve, easeInOutCirc: Curve;
-    const easeInBack: Curve, easeOutBack: Curve, easeInOutBack: Curve;
-    const easeInElastic: Curve, easeOutElastic: Curve, easeInOutElastic: Curve;
-    const easeInBounce: Curve, easeOutBounce: Curve, easeInOutBounce: Curve;
-
-    /** Every name `get()` accepts. */
-    const names: readonly string[];
-
-    /** Returns the curve named `ease`, or `ease` itself when it is a function. Throws on unknown names. */
-    function get(ease: Easing): Curve;
-
-    /** Back curves with another overshoot (times 1.525 in `inOut`); 0 is a cubic, larger values overshoot more. */
-    function back(overshoot?: number): Family;
-    /** Elastic curves; `amplitude` >= 1 (default 1), `period` > 0 (default 0.3). */
-    function elastic(options?: { amplitude?: number; period?: number }): Family;
-    /** `count` equal jumps, for frame-by-frame motion; reaches 1 only at t = 1. */
-    function steps(count: number): Curve;
-    /** CSS `cubic-bezier(x1, y1, x2, y2)`; `x1` and `x2` within [0, 1]. */
-    function cubicBezier(x1: number, y1: number, x2: number, y2: number): Curve;
-    /** The curve played backwards: `1 - f(1 - t)`. */
-    function reverse(ease: Easing): Curve;
-    /** The curve forward then back: 0 → 1 → 0, for pulses. */
-    function mirror(ease: Easing): Curve;
-
-    /** `a + (b - a) * t`; `t` is not clamped. */
-    function lerp(a: number, b: number, t: number): number;
-    /** The `t` for which `lerp(a, b, t)` is `value`; 0 when `a === b`. */
-    function inverseLerp(a: number, b: number, value: number): number;
-    /** Maps `value` from [inMin, inMax] to [outMin, outMax], without clamping. */
-    function remap(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number;
-    function clamp(value: number, min: number, max: number): number;
-    /** 0 below `edge0`, 1 above `edge1`, a smooth S-curve in between. */
-    function smoothstep(edge0: number, edge1: number, x: number): number;
-    /**
-     * Moves `current` towards `target`, closing the same share of the gap per
-     * second at any frame rate. `lambda` is the speed (about 5 to 15 for a
-     * camera or UI follow); `dt` is the frame delta in seconds.
-     */
-    function damp(current: number, target: number, lambda: number, dt: number): number;
 }
 
 
@@ -1867,176 +1777,523 @@ declare namespace Gamepad {
 }
 
 
-/* === Module: Image (image) === */
+/* === Module: Screen (screen) === */
 /**
- * Image loading, CPU pixel access and textured 2D drawing.
+ * Display, frame synchronization, VRAM statistics and GS state controls.
  *
- * `Image` accepts paths understood by the active PS2 filesystem driver,
- * including paths relative to the boot directory. A newly loaded image is
- * CPU-resident; call `lock()` when it must remain resident in VRAM.
- *
- * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
- * images, `pixels` contains four bytes per pixel. Palette data is used only
- * by indexed 4-bit and 8-bit formats.
- *
- * Some Images borrow a texture owned by another object, such as
- * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
- * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
- * `optimize()` returns false.
- *
- * @example
- * ```js
- * const logo = new Image('my_image.png');
- * if (!logo.ready()) throw new Error('image load failed');
- * logo.color = Color.new(255, 255, 255, 255);
- * logo.lock();
- * logo.draw(100, 80);
- * Screen.flip();
- * ```
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
  */
+declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
+    interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
+        mode: number;
+        /** Visible width in pixels. */
+        width: number;
+        /** Visible height in pixels. */
+        height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
+        psm: number;
+        /** Interlaced/progressive mode. */
+        interlace: number;
+        /** Field/frame timing mode. */
+        field: number;
+        /** Depth-buffer pixel storage format. */
+        psmz: number;
+        /** Enables depth buffering. */
+        zbuffering: boolean;
+        /** Enables double-buffered presentation. */
+        double_buffering: boolean;
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
+        pass_count?: number;
+    }
 
-/** Optional destination, source-rectangle and tint overrides for `draw()`. */
-type ImageDrawOptions = {
-    /** Destination width in pixels; defaults to `width`. */
-    width?: number;
-    /** Destination height in pixels; defaults to `height`. */
-    height?: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx?: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty?: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx?: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy?: number;
-    /** Rotation angle in radians. */
-    angle?: number;
-    /** Packed RGBA tint, normally created with `Color.new()`. */
-    color?: number;
-};
+    /** Arguments for the GS alpha blend equation. */
+    interface AlphaEquation {
+        a: number;
+        b: number;
+        c: number;
+        d: number;
+        fix: number;
+    }
 
-/** Options of `drawList()`. */
-type ImageDrawListOptions = {
-    /** Offset added to every sprite; defaults to 0. */
-    x?: number;
-    y?: number;
-    /** First record to draw; defaults to 0. */
-    first?: number;
-    /** Records to draw; defaults to the rest of the buffer. */
-    count?: number;
-};
+    /** Pixel bounds used by the GS scissor register. */
+    interface ScissorBounds {
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
+    }
 
-/** Options controlling image creation and texture upload behavior. */
-type ImageOptions = {
-    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
-    delayed?: boolean;
-};
+    /** Presents the completed draw buffer and synchronizes the frame. */
+    function flip(): void;
+    /** Clears the current draw buffer using a packed RGBA color. */
+    function clear(color?: number): void;
+    /** Blocks until the next vertical blank starts. */
+    function waitVblankStart(): void;
+    /** Enables or disables synchronization with vertical blank. */
+    function setVSync(enabled: boolean): void;
+    /** Enables or disables the on-screen frame counter. */
+    function setFrameCounter(enabled: boolean): void;
+    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
+    function getMemoryStats(mode?: number): number;
+    /** Returns currently unallocated VRAM in bytes. */
+    function getFreeVRAM(): number;
+    /** Returns the measured FPS over the requested positive frame interval. */
+    function getFPS(interval: number): number;
+    /** Returns the active video configuration. */
+    function getMode(): VideoMode;
+    /** Reconfigures the video mode and render targets; invalid modes throw. */
+    function setMode(mode: VideoMode): void;
+    /** Packs the five GS alpha-equation fields into a register value. */
+    function alphaEquation(a: number, b: number, c: number, d: number,
+        fix: number): bigint;
+    /** Reads a supported GS parameter by its `Screen` constant. */
+    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
+    /** Writes a supported GS parameter by its `Screen` constant. */
+    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
+    /** Switches the active GS context and returns its native result code. */
+    function switchContext(): number;
+    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
+    function flush(): void;
 
-declare class Image {
-    /** Loads an image from `path`, or creates an empty image when omitted. */
-    constructor(options?: ImageOptions);
-    constructor(path: string, options?: ImageOptions);
-    /** Linear size in bytes of the current pixel buffer. */
-    readonly size: number;
-    /** Whether texture uploads use the deferred VIF1 path. */
-    readonly delayed: boolean;
-    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
-    pixels: ArrayBuffer;
-    /** CPU palette buffer for indexed images; required for indexed images. */
-    palette: ArrayBuffer;
-    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
-    texWidth: number;
-    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
-    texHeight: number;
-    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
-    bpp: number;
-    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
-    filter: number;
-    /** Whether dimensions and a valid pixel buffer are available for drawing. */
-    renderable: boolean;
-    /** Destination draw width in pixels. */
-    width: number;
-    /** Destination draw height in pixels. */
-    height: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy: number;
-    /** Rotation angle in radians used by `draw()`. */
-    angle: number;
-    /** Packed RGBA tint multiplied with sampled texture color. */
-    color: number;
-
-    /** True when dimensions, pixel data and indexed palette data are valid. */
-    ready(): boolean;
-    /** True while an ImageList request is waiting or being processed. */
-    loading(): boolean;
-    /** True when the most recent ImageList request failed. */
-    failed(): boolean;
-    /**
-     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
-     * has a queued VRAM upload; `ready` is resident in VRAM.
-     */
-    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
-    /** Returns structured load diagnostics, or undefined when no load failed. */
-    error(): ImageLoadError | undefined;
-    /** Queues a textured sprite at `(x, y)` for the current frame. */
-    draw(x: number, y: number, options?: ImageDrawOptions): void;
-    /**
-     * Queues many sprites of this image at once: the texture state is sent
-     * once per 128 sprites instead of once per sprite, which makes it several
-     * times cheaper than as many `draw()` calls. `sprites` uses the record
-     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
-     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
-     * buffer serves both; the TileMap module is not required. Records with a
-     * zero width or height are skipped, and so are, under a Camera2D camera,
-     * records outside its viewport.
-     *
-     * @example
-     * ```js
-     * const sprites = new Float32Array(16 * count);        // 64-byte records
-     * const colors = new Uint32Array(sprites.buffer);
-     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
-     * //           colors[16*i + 8..11] = r, g, b, a
-     * image.drawList(sprites, { x: cameraX, y: cameraY });
-     * ```
-     */
-    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
-    /** Uploads the image synchronously and pins its VRAM allocation. */
-    lock(): boolean;
-    /** Allows the texture manager to evict the image from VRAM. */
-    unlock(): boolean;
-    /** Returns whether the image is currently pinned in VRAM. */
-    locked(): boolean;
-    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
-    optimize(): boolean;
-    /** Releases the native image and its CPU/VRAM resources. */
-    free(): void;
-
-    /** Copies a rectangular VRAM region between two resident images. */
-    static copyVRAMBlock(
-        source: Image,
-        sourceX: number,
-        sourceY: number,
-        destination: Image,
-        destinationX: number,
-        destinationY: number
-    ): void;
+    const VRAM_SIZE: number;
+    const VRAM_USED_TOTAL: number;
+    const VRAM_USED_STATIC: number;
+    const VRAM_USED_DYNAMIC: number;
+    const ALPHA_TEST_ENABLE: number;
+    const ALPHA_TEST_METHOD: number;
+    const ALPHA_TEST_REF: number;
+    const ALPHA_TEST_FAIL: number;
+    const DST_ALPHA_TEST_ENABLE: number;
+    const DST_ALPHA_TEST_METHOD: number;
+    const DEPTH_TEST_ENABLE: number;
+    const DEPTH_TEST_METHOD: number;
+    const ALPHA_BLEND_EQUATION: number;
+    const SCISSOR_BOUNDS: number;
+    const PIXEL_ALPHA_BLEND_ENABLE: number;
+    const COLOR_CLAMP_MODE: number;
+    const ALPHA_NEVER: number;
+    const ALPHA_ALWAYS: number;
+    const ALPHA_LESS: number;
+    const ALPHA_LEQUAL: number;
+    const ALPHA_EQUAL: number;
+    const ALPHA_GEQUAL: number;
+    const ALPHA_GREATER: number;
+    const ALPHA_NEQUAL: number;
+    const ALPHA_FAIL_NO_UPDATE: number;
+    const ALPHA_FAIL_FB_ONLY: number;
+    const ALPHA_FAIL_ZB_ONLY: number;
+    const ALPHA_FAIL_RGB_ONLY: number;
+    const DST_ALPHA_ZERO: number;
+    const DST_ALPHA_ONE: number;
+    const DEPTH_NEVER: number;
+    const DEPTH_ALWAYS: number;
+    const DEPTH_GEQUAL: number;
+    const DEPTH_GREATER: number;
+    const SRC_RGB: number;
+    const DST_RGB: number;
+    const ZERO_RGB: number;
+    const SRC_ALPHA: number;
+    const DST_ALPHA: number;
+    const ALPHA_FIX: number;
+    const BLEND_DEFAULT: bigint;
+    const BLEND_ADD_NOALPHA: bigint;
+    const BLEND_ADD: bigint;
+    const NTSC: number;
+    const PAL: number;
+    const DTV_480p: number;
+    const DTV_576p: number;
+    const DTV_720p: number;
+    const DTV_1080i: number;
+    const INTERLACED: number;
+    const PROGRESSIVE: number;
+    const FIELD: number;
+    const FRAME: number;
+    const CT32: number;
+    const CT24: number;
+    const CT16: number;
+    const CT16S: number;
+    const Z32: number;
+    const Z24: number;
+    const Z16: number;
+    const Z16S: number;
+    const DRAW_BUFFER: number;
+    const DISPLAY_BUFFER: number;
+    const DEPTH_BUFFER: number;
 }
 
-/** Structured diagnostics for a failed image load. */
-interface ImageLoadError {
-    /** Path as it was requested. */
-    path: string;
-    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
-    /** `upload` is reported only for ImageList requests with an `upload` option. */
-    stage: "open" | "decode" | "surface" | "upload";
-    /** Human-readable description. */
-    message: string;
+
+/* === Module: System Core (system) === */
+/**
+ * PS2 system, filesystem, timing and hardware helpers.
+ *
+ * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
+ * Return values from filesystem and device operations are native result codes;
+ * callers should check them before continuing.
+ *
+ * Example:
+ * ```js
+ * console.log(System.bootPath);
+ * for (const entry of System.listDir('host:/')) {
+ *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
+ * }
+ * System.sleep(16);
+ * ```
+ */
+declare namespace System {
+    /** One directory entry returned by `listDir()`. */
+    interface DirectoryEntry {
+        /** File or directory name. */
+        name: string;
+        /** File size in bytes; directory sizes may be zero. */
+        size: number;
+        /** True when this entry is a directory. */
+        dir: boolean;
+    }
+
+    /** Memory counters returned by `getMemoryStats()`. */
+    interface MemoryStats {
+        /** Core/binary footprint in bytes. */
+        core: number;
+        /** Reserved native stack in bytes. */
+        nativeStack: number;
+        /** Current native allocations in bytes. */
+        allocs: number;
+        /** Highest observed current native allocation total in bytes since startup. */
+        allocsPeak: number;
+        /** Failed nonzero native allocation requests since startup. */
+        allocationFailures: number;
+        /** Total reported usage in bytes. */
+        used: number;
+        /** Total arena and mapped regions requested from the EE heap. */
+        heapReserved: number;
+        /** Bytes in allocator in-use chunks, including chunk overhead. */
+        heapAllocated: number;
+        /** Approximate allocator metadata/alignment overhead in bytes. */
+        heapOverhead: number;
+        /** Bytes in reusable free chunks. */
+        heapFree: number;
+        /** Number of free chunks in the allocator. */
+        heapFreeChunks: number;
+        /** Free bytes in the topmost releasable chunk. */
+        heapTopFree: number;
+        /** Free bytes outside the top chunk; a fragmentation indicator. */
+        heapNonTopFree: number;
+        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
+        jsHeap: number;
+        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
+        jsLimit: number;
+        /** Live JavaScript objects. */
+        jsObjects: number;
+    }
+
+    /** EE CPU information returned by `getCPUInfo()`. */
+    interface CPUInfo {
+        /** EE CPU implementation identifier. */
+        implementation: number;
+        /** EE CPU revision identifier. */
+        revision: number;
+        /** Installed EE RAM size in bytes. */
+        RAMSize: number;
+        /** EE bus clock frequency. */
+        BUSClock: number;
+        /** EE CPU clock frequency. */
+        CPUClock: number;
+        /** PS2 machine type identifier. */
+        MachineType: number;
+    }
+
+    /** Recalculates the QuickJS heap ceiling using current free EE memory and
+     * leaves `bytes` available for native assets at this snapshot. Call at a
+     * phase boundary before loading assets. Native allocations made later can
+     * consume this headroom. At least 64 KiB must remain available for JS.
+     * Returns the resulting QuickJS allocation limit in bytes. */
+    function setNativeMemoryHeadroom(bytes: number): number;
+
+    /** Memory-card status returned by `getMCInfo()`. */
+    interface MemoryCardInfo {
+        /** Memory-card type identifier. */
+        type: number;
+        /** Free memory reported by the card driver. */
+        freemem: number;
+        /** Format/status flag reported by the card driver. */
+        format: number;
+    }
+
+    /** GS GPU information returned by `getGPUInfo()`. */
+    interface GPUInfo {
+        revision: number;
+        id: number;
+    }
+
+    /** One registered filesystem/device entry. */
+    interface DeviceInfo {
+        name: string;
+        desc: string;
+    }
+
+    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
+    const bootPath: string;
+    /** Legacy alias for bootPath. */
+    const boot_path: string;
+
+    /** Lists entries in a directory or path relative to `bootPath`. */
+    function listDir(path?: string): DirectoryEntry[];
+
+    /** Removes an empty directory and returns the underlying system result. */
+    function removeDirectory(path: string): number;
+
+    /** Copies a file and returns zero on success. */
+    function copyFile(source: string, destination: string): number;
+
+    /** Moves or renames a file and returns zero on success. */
+    function moveFile(source: string, destination: string): number;
+    /** Renames a file or directory and returns the native result code. */
+    function rename(source: string, destination: string): number;
+
+    /** Returns raw EE CPU clock ticks. */
+    function getTicks(): number;
+
+    /** Returns high-resolution elapsed time in milliseconds. */
+    function getMilliseconds(): number;
+
+    /** Suspends the current EE thread for the specified milliseconds. */
+    function sleep(ms: number): void;
+
+    /** Returns currently used EE RAM in bytes. */
+    function getUsedMemory(): number;
+
+    /** Returns remaining available EE RAM in bytes. */
+    function getFreeMemory(): number;
+
+    /** Yields briefly to the EE scheduler. */
+    function delay(): void;
+
+    /** Returns memory counters from the legacy System API. */
+    function getMemoryStats(): MemoryStats;
+
+    /** Returns basic EE CPU and memory information. */
+    function getCPUInfo(): CPUInfo;
+
+    /** Returns basic GS GPU information. */
+    function getGPUInfo(): GPUInfo;
+
+    /** Returns the console temperature in Celsius when supported. */
+    function getTemperature(): number | undefined;
+
+    /** Returns memory-card information for a controller port (0 or 1). */
+    function getMCInfo(port?: number): MemoryCardInfo;
+
+    /** Returns information about a mass-storage block device. */
+    function getBDMInfo(device: string): { name: string; index: number } | undefined;
+
+    /** Returns currently registered file-system devices. */
+    function devices(): DeviceInfo[];
+
+    /** Mounts a block device at a file-system mount point. */
+    function mount(mountpoint: string, blockdev: string, mode?: number): number;
+
+    /** Unmounts a file-system device. */
+    function umount(device: string): number;
+
+    /** Loads an ELF using the legacy Athena loader. */
+    function loadELF(path: string, args?: string[]): number;
+
+    /** Enables or disables the legacy dark-mode flag. */
+    function setDarkMode(enabled: boolean): void;
+
+    /** Forces a QuickJS garbage-collection cycle. */
+    function gc(): void;
+
+    /** Exit application to the PS2 browser/OSDSYS */
+    function exit(): void;
+
+    /** Alias for exiting to the PS2 browser/OSDSYS. */
+    function exitToBrowser(): void;
+}
+
+
+/* === Module: Debug (debug) === */
+/**
+ * On-screen diagnostics, for the console where there is no terminal.
+ *
+ * Everything is drawn after the game's draw by a Loop system that exists only
+ * while something is on. Games with their own loop call `Debug.frame(dt)`
+ * after drawing. The overlay text refreshes 4 times per second and is laid
+ * out once per refresh; the frame-time graph, the console tail and the
+ * rects, lines and circles are computed and drawn in C, so a hitbox per
+ * entity per frame allocates nothing. The overlay shows its own cost
+ * ("debug x ms").
+ *
+ * It never takes the game down: arguments are checked at the call (a bad
+ * color throws there), and an error while drawing turns the module off and
+ * is logged once. Shapes are capped at 2048 (texts too); the oldest go and
+ * the overlay counts them.
+ *
+ * The panels stay inside the title-safe area (5% of each edge), which CRT
+ * TVs do not cut, and use the built-in font at 16 px.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=debug,...`
+ *
+ * Example:
+ * ```js
+ * Debug.overlay(true);                          // FPS, CPU, RAM, JS heap, VRAM, graph
+ * Debug.console(true, { lines: 6 });            // last lines of console.log
+ * Debug.watch("player", () => `${player.x | 0},${player.y | 0} ${player.state}`);
+ * Debug.toggleWith(Gamepad.L3 | Gamepad.R3);    // show / hide everything
+ *
+ * // In update(): hitboxes for a second, in world coordinates.
+ * Debug.rect(enemy.x, enemy.y, 16, 16, Color.new(255, 0, 0), { seconds: 1, space: "world" });
+ * Debug.text(enemy.x, enemy.y - 10, "hit!", { seconds: 0.5, space: "world" });
+ * ```
+ */
+declare namespace Debug {
+    interface ShapeOptions {
+        /** How long it stays, in real seconds (default 0: this frame only). */
+        seconds?: number;
+        /** "screen" (default) or "world", through `setView()`. */
+        space?: "screen" | "world";
+        /** Filled instead of an outline (rect and circle). */
+        filled?: boolean;
+    }
+
+    interface TextOptions extends ShapeOptions {
+        /** Text color (default white). */
+        color?: Color.Value;
+    }
+
+    interface ConsoleOptions {
+        /** Screen lines shown, 1 to 40 (default 8). */
+        lines?: number;
+    }
+
+    interface View {
+        /** World point at the top-left corner of the screen (default 0). */
+        x?: number;
+        y?: number;
+        /** Screen pixels per world unit (default 1). */
+        scale?: number;
+    }
+
+    interface Config {
+        /**
+         * Frame budget in milliseconds for the graph colors. 0 (default)
+         * derives it from the video mode (60 Hz, or 50 Hz for PAL and 576p)
+         * and `vsyncInterval`.
+         */
+        budgetMs?: number;
+        /** The `vsyncInterval` given to Loop.run(), 1 to 4 (default 1; 2 for 30 fps). */
+        vsyncInterval?: number;
+        /**
+         * Distance from the screen edges in pixels, one number or { x, y }.
+         * null (default) is the title-safe area, 5% of each side.
+         */
+        margin?: number | { x: number; y: number } | null;
+        /** Font of every text (default the built-in font at 16 px). */
+        font?: Font;
+    }
+
+    /** Figures of the frame-time graph. */
+    interface FrameStats {
+        samples: number;
+        frameAvg: number;
+        frameMax: number;
+        cpuAvg: number;
+        cpuMax: number;
+    }
+
+    /**
+     * Shows or hides the stats panel: FPS, CPU and frame time (average and
+     * peak of the last 60 frames) and the frame budget, RAM, free VRAM, the
+     * module's own cost, the watches, and a frame-time graph: green under 75% of the budget, yellow up to it, red
+     * over it, magenta for a dropped frame. Returns whether it is on.
+     * Measured on the PS2: about 1.1 ms per frame with the console (0.95 ms
+     * compact; the graph is about 0.45 ms of it). The overlay shows its own
+     * cost as "debug x ms".
+     */
+    function overlay(on?: boolean, options?: OverlayOptions): boolean;
+
+    interface OverlayOptions {
+        /** Draw the frame-time graph (default true). */
+        graph?: boolean;
+        /** Only the FPS line and the watches (default false). */
+        compact?: boolean;
+        /**
+         * Adds the JavaScript heap size and object count (default false).
+         * Reading them walks the whole heap: 6.7 ms in one frame on the PS2,
+         * so it happens every 5 seconds, and is off by default because a
+         * busy game would drop a frame each time.
+         */
+        heap?: boolean;
+    }
+
+    /**
+     * Shows or hides the last lines the script printed (console.log, print,
+     * errors), wrapped to the screen; lines that look like errors are red.
+     * Returns whether it is on.
+     */
+    function console(on?: boolean, options?: ConsoleOptions): boolean;
+
+    /**
+     * Adds `name: read()` to the overlay, evaluated 4 times per second;
+     * errors show inline and long values are cut at 48 characters.
+     */
+    function watch(name: string, read: () => unknown): void;
+    /** Removes a watch; returns whether it existed. */
+    function unwatch(name: string): boolean;
+
+    /** Rectangle outline (or filled), for this frame or `seconds`. Default color red. */
+    function rect(x: number, y: number, width: number, height: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function line(x1: number, y1: number, x2: number, y2: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    function circle(x: number, y: number, radius: number,
+        color?: Color.Value, options?: ShapeOptions): void;
+    /**
+     * Many rectangles in one call, from a Float32Array of x, y, width,
+     * height groups (length a multiple of 4), checked and queued in C: for
+     * the hitboxes of many entities, far cheaper than one `rect()` each.
+     * Groups with a value that is not finite are skipped. Returns how many
+     * were queued.
+     */
+    function rects(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    /** Many lines in one call, from x1, y1, x2, y2 groups; see `rects()`. */
+    function lines(values: Float32Array, color?: Color.Value, options?: ShapeOptions): number;
+    function text(x: number, y: number, text: unknown, options?: TextOptions): void;
+    /** Removes every shape and text still on screen. */
+    function clear(): void;
+
+    /**
+     * Shows and hides everything when the `buttons` combination is pressed
+     * on the controller of `port` (0 or 1). The pad is read without
+     * Gamepad.update(), so the game's justPressed() is unaffected. `null`
+     * removes the shortcut.
+     */
+    function toggleWith(buttons: number | null, port?: 0 | 1): void;
+    /** Shows or hides everything, like the shortcut; returns whether shown. */
+    function show(on?: boolean): boolean;
+
+    /**
+     * World space of shapes drawn with `space: "world"`: screen = (world - x/y) * scale.
+     * Used without a camera: while `Camera2D.getCurrent()` has one, world
+     * shapes and texts follow it (zoom and rotation included) instead.
+     */
+    function setView(view: View): void;
+    function configure(options: Config): void;
+
+    /**
+     * For games that do not use Loop.run(): call after drawing, before
+     * Screen.flip(). `dt` is the frame time in seconds; `cpuMs` (optional)
+     * feeds the graph. Not needed with Loop.run(): there it does nothing and
+     * warns once.
+     */
+    function frame(dt: number, cpuMs?: number): void;
+
+    /** Figures of the graph over the last `frames` frames (default 60). */
+    function frameStats(frames?: number): FrameStats;
 }
 
 
@@ -2077,196 +2334,6 @@ declare namespace Mutex {
 
     /** Releases the native mutex. Do not use `mutex` afterwards. */
     function destroy(mutex: Handle): void;
-}
-
-
-/* === Module: ImageList (imagelist) === */
-/**
- * Cooperative asynchronous image loading.
- *
- * ImageList applies decoded images to surfaces and VRAM, and runs callbacks,
- * only on the thread that calls `process()`. By default decoding also happens
- * there; `new ImageList({ workers: 1 })` moves file I/O and decoding to one
- * CPU worker thread. Call `process()` from the frame loop with a small budget
- * to bound the work performed in one frame.
- *
- * @example
- * ```js
- * const images = new ImageList();
- * const logo = images.load("tests/my_image.png", {
- *     onLoad: (image) => image.lock(),
- *     onError: (image, error) => console.log(`Failed: ${error.path}`),
- * });
- *
- * while (true) {
- *     images.process(1);
- *     Screen.clear(0x80182030);
- *     if (logo.ready()) logo.draw(100, 80);
- *     Screen.flip();
- * }
- * ```
- */
-
-/**
- * Options for one queued image request.
- *
- * Callbacks run synchronously inside `process()` on the same thread that
- * called it. The returned `Image` remains valid after the callback and is
- * owned by the caller.
- */
-interface ImageListLoadOptions {
-    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
-    delayed?: boolean;
-    /**
-     * Queue priority; defaults to `ImageList.NORMAL`. Requests with the same
-     * priority keep their submission order.
-     */
-    priority?: number;
-    /**
-     * When the texture becomes resident in VRAM:
-     * - `"draw"` (default): on the first draw, as with any `Image`.
-     * - `"bind"`: inside `process()`, before `onLoad`. The texture manager may
-     *   still evict it later.
-     * - `"lock"`: inside `process()`, and locked until `unlock()`.
-     *
-     * With `"bind"` or `"lock"`, a texture that does not fit in VRAM fails
-     * with `stage: "upload"`; its pixels are released and `onError` runs. The
-     * status is `"ready"` when `onLoad` runs. Duplicate requests use the
-     * strongest mode asked for.
-     */
-    upload?: "draw" | "bind" | "lock";
-    /** Called after the image has been decoded successfully. */
-    onLoad?: (image: Image) => void;
-    /** Called after loading fails with structured diagnostics. */
-    onError?: (image: Image, error: ImageLoadError) => void;
-}
-
-/** Options for an `ImageList` queue. */
-interface ImageListOptions {
-    /**
-     * `1` decodes files on a single CPU worker thread; `0` (the default)
-     * decodes inside `process()`. In both modes surfaces, VRAM and callbacks
-     * are handled only on the thread that calls `process()`.
-     */
-    workers?: 0 | 1;
-    /**
-     * Worker mode only: decoded bytes the worker may keep ready ahead of
-     * `process()`. `0` (the default) keeps at most one decoded image waiting.
-     * The peak is bounded by this limit plus one decoded image.
-     */
-    maxMemory?: number;
-    /**
-     * Number of successfully loaded images kept for reuse, least recently
-     * used first out; `0` (the default) disables the cache. Loading a cached
-     * path returns the same `Image` without decoding it again, and its
-     * callbacks still run inside `process()`. The cache holds a reference to
-     * each `Image` but never locks it, so VRAM residency is unaffected.
-     * Entries leave on eviction, `clearCache()`, `Image.free()` or when the
-     * list is destroyed. At most 1024.
-     */
-    cacheSize?: number;
-}
-
-interface ImageListProcessOptions {
-    /** Maximum number of requests to complete; defaults to one. */
-    maxItems?: number;
-    /**
-     * Stops after the decoded bytes completed in this call reach this value.
-     * The first request always completes; zero means no byte limit.
-     */
-    maxBytes?: number;
-    /**
-     * Stops starting new requests once this many milliseconds have elapsed
-     * in this call. The first request always completes, so one large image
-     * can exceed the limit; zero means no time limit.
-     */
-    maxTime?: number;
-}
-
-interface ImageListStats {
-    /** Requests waiting to be decoded. */
-    queued: number;
-    /** Requests being decoded by the worker or waiting to be applied. */
-    loading: number;
-    completed: number;
-    failed: number;
-    cancelled: number;
-    /** Decoded bytes currently held by the worker and not yet applied. */
-    bufferedBytes: number;
-    /** Largest decoded-but-unapplied CPU memory observed. */
-    peakBufferedBytes: number;
-    /** Worker threads currently running: 0 or 1. */
-    workers: number;
-    /** Images currently held by the cache. */
-    cached: number;
-    /** Requests completed from the cache; also counted in `completed`. */
-    cacheHits: number;
-    /** Total milliseconds spent decoding, on the worker or in `process()`. */
-    decodeTime: number;
-    /** Total milliseconds spent building surfaces from decoded buffers. */
-    applyTime: number;
-    /** Total milliseconds spent on `upload: "bind"` / `"lock"` VRAM uploads. */
-    uploadTime: number;
-}
-
-declare class ImageList {
-    static readonly HIGH: number;
-    static readonly NORMAL: number;
-    static readonly LOW: number;
-
-    /** Creates an empty request queue. */
-    constructor(options?: ImageListOptions);
-
-    /**
-     * Queues an image and returns it immediately in the queued state.
-     *
-     * Requests for the same normalized path that are still pending share one
-     * decode and return the same `Image`; every caller's callbacks run. A more
-     * urgent duplicate promotes a request that has not started loading. The
-     * returned image can be inspected with `status()`, `loading()`, `ready()`
-     * and `failed()` while it is pending.
-     */
-    load(path: string, options?: ImageListLoadOptions): Image;
-    /**
-     * Completes up to `budget` requests and dispatches their callbacks.
-     *
-     * A zero budget performs no work. The default budget is one image.
-     * Returns the number of requests completed, including failures. In worker
-     * mode only requests the worker has already decoded are completed, so
-     * this can return zero while requests are still loading. Cache hits
-     * complete before decoded requests and count toward the budget.
-     */
-    process(budget?: number | ImageListProcessOptions): number;
-    /** Returns the number of requests not completed yet (queued or loading). */
-    pending(): number;
-    /** Returns queue, completion and memory counters. */
-    stats(): ImageListStats;
-    /**
-     * Cancels one pending request. Returns true when a request was
-     * cancelled, or false when it was already completed or not owned by
-     * this list. A request the worker is decoding is discarded when the
-     * decode finishes; its callbacks never run.
-     */
-    cancel(image: Image): boolean;
-    /**
-     * Cancels all pending requests.
-     *
-     * Already returned `Image` objects are not destroyed. Their pending
-     * callbacks are discarded and their `status()` becomes "cancelled".
-     * A request served from the cache only loses its callbacks; its image
-     * keeps its current status.
-     */
-    clear(): void;
-    /** Releases every cached image reference and returns how many were held. */
-    clearCache(): number;
-    /**
-     * Releases the list's resources now instead of waiting for the garbage
-     * collector. Pending requests are cancelled as by `clear()`. The worker
-     * thread is joined and its stack freed, and the cache is emptied.
-     * Afterwards `load()` throws a TypeError. `process()` returns 0, while
-     * `stats()` keeps working. Calling it again does nothing.
-     */
-    close(): void;
 }
 
 
@@ -2604,531 +2671,206 @@ declare namespace MemoryCard {
 }
 
 
-/* === Module: Screen (screen) === */
-/**
- * Display, frame synchronization, VRAM statistics and GS state controls.
- *
- * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
- * Most numeric constants are raw PS2 GS values and are intended to be passed
- * back to this module rather than interpreted as application-level units.
- */
-declare namespace Screen {
-    /** Current video configuration accepted by `getMode()` and `setMode()`. */
-    interface VideoMode {
-        /** Video mode identifier such as `NTSC` or `PAL`. */
-        mode: number;
-        /** Visible width in pixels. */
-        width: number;
-        /** Visible height in pixels. */
-        height: number;
-        /** Color pixel storage format such as `CT32` or `CT24`. */
-        psm: number;
-        /** Interlaced/progressive mode. */
-        interlace: number;
-        /** Field/frame timing mode. */
-        field: number;
-        /** Depth-buffer pixel storage format. */
-        psmz: number;
-        /** Enables depth buffering. */
-        zbuffering: boolean;
-        /** Enables double-buffered presentation. */
-        double_buffering: boolean;
-        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
-        pass_count?: number;
+/* === Module: Particles3D (particles3d) === */
+/** Native 3D particles drawn as camera-facing quads (billboards) by VU1:
+ * emission and integration in C, depth tested against the 3D scene without
+ * writing depth, so transparent particles do not hide each other. Draw after
+ * the opaque scene. Screen zbuffering is required. Emitters advance in one
+ * Loop system (attachLoop(), POST_UPDATE) or with update(dt). */
+declare namespace Particles3D {
+    const MAX_PARTICLES: number;
+    const LOOP_PRIORITY: number;
+    /** A number, or [min, max] picked per particle ([start, end] for size). */
+    type Range = number | [number, number];
+    type Vector3 = [number, number, number];
+    interface Options {
+        /** Pool size, 1..MAX_PARTICLES; default 256. */
+        capacity?: number;
+        /** Particles per second while active; default 0 (bursts only). */
+        rate?: number;
+        /** Seconds; default 1. */
+        life?: Range;
+        speed?: Range;
+        /** Cone axis (normalized); default [0, 1, 0]. */
+        direction?: Vector3;
+        /** Cone half angle in radians, 0..PI; default 0. */
+        spread?: number;
+        gravity?: Vector3;
+        /** velocity *= 1 / (1 + drag * dt). */
+        drag?: number;
+        /** Quad side in world units, [start, end] over life; default 0.5. */
+        size?: Range;
+        /** Color.new() value or [start, end]; alpha 0..128. */
+        color?: number | [number, number];
+        /** Spawn box around the position. */
+        area?: Vector3;
+        /** [u1, v1, u2, v2] in texels; default the whole image. */
+        rect?: [number, number, number, number];
+        seed?: number;
     }
-
-    /** Arguments for the GS alpha blend equation. */
-    interface AlphaEquation {
-        a: number;
-        b: number;
-        c: number;
-        d: number;
-        fix: number;
+    class Emitter {
+        constructor(image: Image, options?: Options);
+        configure(options: Options): this;
+        setPosition(x: number, y: number, z: number): this;
+        emit(count: number): number;
+        clear(): this;
+        update(dt: number): this;
+        /** Draws what camera sees (near/far tested on the EE) and returns how
+         * many particles were sent. Throws without a z-buffer. */
+        draw(camera: Camera3D.Camera): number;
+        readonly count: number;
+        active: boolean;
+        dispose(): void;
     }
-
-    /** Pixel bounds used by the GS scissor register. */
-    interface ScissorBounds {
-        x0: number;
-        y0: number;
-        x1: number;
-        y1: number;
-    }
-
-    /** Presents the completed draw buffer and synchronizes the frame. */
-    function flip(): void;
-    /** Clears the current draw buffer using a packed RGBA color. */
-    function clear(color?: number): void;
-    /** Blocks until the next vertical blank starts. */
-    function waitVblankStart(): void;
-    /** Enables or disables synchronization with vertical blank. */
-    function setVSync(enabled: boolean): void;
-    /** Enables or disables the on-screen frame counter. */
-    function setFrameCounter(enabled: boolean): void;
-    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
-    function getMemoryStats(mode?: number): number;
-    /** Returns currently unallocated VRAM in bytes. */
-    function getFreeVRAM(): number;
-    /** Returns the measured FPS over the requested positive frame interval. */
-    function getFPS(interval: number): number;
-    /** Returns the active video configuration. */
-    function getMode(): VideoMode;
-    /** Reconfigures the video mode and render targets; invalid modes throw. */
-    function setMode(mode: VideoMode): void;
-    /** Packs the five GS alpha-equation fields into a register value. */
-    function alphaEquation(a: number, b: number, c: number, d: number,
-        fix: number): bigint;
-    /** Reads a supported GS parameter by its `Screen` constant. */
-    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
-    /** Writes a supported GS parameter by its `Screen` constant. */
-    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
-    /** Switches the active GS context and returns its native result code. */
-    function switchContext(): number;
-    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
-    function flush(): void;
-
-    const VRAM_SIZE: number;
-    const VRAM_USED_TOTAL: number;
-    const VRAM_USED_STATIC: number;
-    const VRAM_USED_DYNAMIC: number;
-    const ALPHA_TEST_ENABLE: number;
-    const ALPHA_TEST_METHOD: number;
-    const ALPHA_TEST_REF: number;
-    const ALPHA_TEST_FAIL: number;
-    const DST_ALPHA_TEST_ENABLE: number;
-    const DST_ALPHA_TEST_METHOD: number;
-    const DEPTH_TEST_ENABLE: number;
-    const DEPTH_TEST_METHOD: number;
-    const ALPHA_BLEND_EQUATION: number;
-    const SCISSOR_BOUNDS: number;
-    const PIXEL_ALPHA_BLEND_ENABLE: number;
-    const COLOR_CLAMP_MODE: number;
-    const ALPHA_NEVER: number;
-    const ALPHA_ALWAYS: number;
-    const ALPHA_LESS: number;
-    const ALPHA_LEQUAL: number;
-    const ALPHA_EQUAL: number;
-    const ALPHA_GEQUAL: number;
-    const ALPHA_GREATER: number;
-    const ALPHA_NEQUAL: number;
-    const ALPHA_FAIL_NO_UPDATE: number;
-    const ALPHA_FAIL_FB_ONLY: number;
-    const ALPHA_FAIL_ZB_ONLY: number;
-    const ALPHA_FAIL_RGB_ONLY: number;
-    const DST_ALPHA_ZERO: number;
-    const DST_ALPHA_ONE: number;
-    const DEPTH_NEVER: number;
-    const DEPTH_ALWAYS: number;
-    const DEPTH_GEQUAL: number;
-    const DEPTH_GREATER: number;
-    const SRC_RGB: number;
-    const DST_RGB: number;
-    const ZERO_RGB: number;
-    const SRC_ALPHA: number;
-    const DST_ALPHA: number;
-    const ALPHA_FIX: number;
-    const BLEND_DEFAULT: bigint;
-    const BLEND_ADD_NOALPHA: bigint;
-    const BLEND_ADD: bigint;
-    const NTSC: number;
-    const PAL: number;
-    const DTV_480p: number;
-    const DTV_576p: number;
-    const DTV_720p: number;
-    const DTV_1080i: number;
-    const INTERLACED: number;
-    const PROGRESSIVE: number;
-    const FIELD: number;
-    const FRAME: number;
-    const CT32: number;
-    const CT24: number;
-    const CT16: number;
-    const CT16S: number;
-    const Z32: number;
-    const Z24: number;
-    const Z16: number;
-    const Z16S: number;
-    const DRAW_BUFFER: number;
-    const DISPLAY_BUFFER: number;
-    const DEPTH_BUFFER: number;
+    function update(dt: number): void;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 
-/* === Module: Scene (scene) === */
+/* === Module: Random (random) === */
 /**
- * Scenes and their assets.
+ * Seedable pseudo-random numbers (xoshiro128**, computed in C).
  *
- * A scene is a screen of the game (title, level, pause menu): a class that
- * extends `Scene`, names the assets it needs in `static assets`, and gets
- * `enter`, `update`, `draw`, `pause`, `resume` and `exit` calls. The static
- * methods of `Scene` manage a stack of them:
+ * Unlike `Math.random()`, a generator created with a seed always produces the
+ * same sequence: a generated map, a roguelike run or a bug can be
+ * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
+ * bit-exact on every platform; floats with bounds and gaussians may differ in
+ * the last bits between the PS2 and a PC.
  *
- * - `Scene.go(Level)` loads the level's assets in the background (while the
- *   current scene fades out, with `transition: "fade"`), exits the current
- *   scenes, releases what only they used, and enters the level;
- * - `Scene.push(Pause)` puts a scene over the current one, which pauses and
- *   keeps being drawn below; `Scene.pop({ result })` resumes it;
- * - a loading screen shows only when loading outlasts the transition.
+ * The module functions (`Random.int()`, `Random.float()`...) use a generator
+ * of the script (each script and worker has its own) seeded from the clock;
+ * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
+ * (NaN, Infinity) throw a RangeError.
  *
- * Assets are reference counted by kind and path: an asset two scenes use is
- * loaded once and survives going from one to the other (the next scene's
- * assets are acquired before the previous scene's are released). Images load
- * through an ImageList (decoded on a worker), sound effects, fonts and sprite
- * sheets through their background jobs, so frames keep coming while loading.
- *
- * Transitions and loading run on real time: a pause menu that sets
- * `Loop.setTimeScale(0)` can still go to another scene.
- *
- * @example
+ * Example:
  * ```js
- * class Level1 extends Scene {
- *     static root = "assets/level1";
- *     static assets = {
- *         images: { tiles: { path: "tiles.png", upload: "lock" } },
- *         sheets: { hero: "hero.json" },                 // Aseprite / TexturePacker
- *         sfx:    { jump: "jump.adp" },
- *         music:  { theme: { path: "level1.ogg", loop: true } },
- *         fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
- *         data:   { map: "map.json" },
- *     };
- *     enter(assets) {
- *         this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" });
- *         assets.music.theme.play();
- *     }
- *     update(dt) {
- *         if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu);
- *     }
- *     draw() { this.hero.draw(this.x, this.y); }
- *     exit() { this.assets.music.theme.stop(); }
- * }
+ * const rng = new Random.Generator(1234);    // or a string: "level-3"
+ * const die = rng.int(1, 6);
+ * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
+ * const team = rng.sample(players, 3);
+ * rng.shuffle(deck);
  *
- * Scene.run(Title);                                        // starts the Loop
- * // later, from a scene:
- * Scene.go(Level1, { transition: "fade", duration: 0.5 });
+ * // Particles: one call instead of a loop of 500.
+ * rng.fill(speeds, 40, 90);
+ * rng.fillGaussian(spread, 0, 0.3);
+ *
+ * const saved = rng.state();                 // JSON-friendly: save it
+ * rng.setState(saved);                       // and continue later
  * ```
  */
-/**
- * `A` types the loaded assets and `P` the params, for editors:
- * `class Level extends Scene<{ images: { tiles: Image } }, { number: number }>`.
- */
-declare class Scene<A = any, P = any> {
-    /** What `go()`/`push()` passed as `options.params`. */
-    readonly params: P;
-    /** The loaded assets, as the manifest names them; set before `enter()`, null after `exit()`. */
-    assets: A;
+declare namespace Random {
+    /** Seed: a number (integers map one-to-one) or a string (hashed). */
+    type Seed = number | string;
 
-    constructor(params?: P);
+    /** The four 32-bit words of a generator state, as returned by `state()`. */
+    type State = [number, number, number, number];
 
-    /** The assets are loaded; the scene starts. May return a promise (the loading screen stays). */
-    enter(assets: A, params: P): void | Promise<void>;
-    update(dt: number): void;
-    draw(alpha: number): void;
-    /** A scene was pushed over this one. */
-    pause(): void;
-    /** The scene above was popped, with its `pop({ result })`. */
-    resume(result?: any): void;
-    /** The scene leaves; its `defer()` clean-ups run and its assets are released after this. */
-    exit(): void;
+    /** Typed arrays of numbers. */
+    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
+        Int16Array | Uint16Array | Int32Array | Uint32Array |
+        Float32Array | Float64Array;
 
-    /**
-     * Runs `fn` when the scene leaves, after `exit()`, last registered
-     * first: for what the scene started and would outlive it (tweens,
-     * sprites, Loop systems, music). Returns `fn`.
-     */
-    defer<F extends () => void>(fn: F): F;
-    /**
-     * More assets while the scene runs (the next area of a level): a group,
-     * released when the scene leaves. Paths are relative to the class's root
-     * unless `options` gives another (a string is the root).
-     */
-    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
+    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
+    type List<T> = T[] | NumberArray;
 
-    /**
-     * The assets this scene needs: a manifest, or a function of the params
-     * that returns one. Paths are relative to `root`.
-     */
-    static assets?: Scene.Manifest | ((params: any) => Scene.Manifest);
-    /** Directory the manifest's paths are relative to. */
-    static root?: string;
-
-    /**
-     * Replaces every scene with a new one: loads its assets (during the
-     * fade-out), exits the old scenes and releases their assets, then enters
-     * the new one. Resolves with the new scene once it runs. Requests made
-     * meanwhile wait their turn.
-     */
-    static go<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions): Promise<T>;
-    /** A scene over the current one, which pauses: a pause menu, a dialog. */
-    static push<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /** Leaves the top scene; the one below resumes with `options.result`. Resolves with it. */
-    static pop(options?: Scene.PopOptions): Promise<Scene | null>;
-    /**
-     * Replaces only the top scene; the ones below stay (and are not resumed).
-     * `drawBelow`/`updateBelow` default to the replaced scene's. With an
-     * empty stack it is a `go()`.
-     */
-    static replace<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /**
-     * Starts loading a scene's assets now (the level while the title runs),
-     * so `go()`/`push()` find them loaded. The group is released when that
-     * scene class enters, by `reset()`, or with `release()`.
-     */
-    static preload(SceneClass: new (params?: any) => Scene, params?: any): Scene.AssetGroup;
-    /**
-     * Starts `Loop.run()` with the manager's update and draw, and goes to the
-     * first scene. `loopOptions` go to `Loop.run()` (fixedStep, clearColor...).
-     * @throws TypeError when the Loop already runs: call `Scene.update()` and
-     * `Scene.draw()` from its handlers instead.
-     */
-    static run<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions,
-        loopOptions?: Loop.Options): Promise<T>;
-    /**
-     * For a custom loop: updates the running scenes (the top one, and those
-     * below it that asked for `updateBelow`). Throws the error of a scene
-     * that could not load when there is no `onError`. An exception of a
-     * scene's `enter()`, `exit()`, `pause()` or `resume()` during a switch
-     * is thrown too (inside `Loop.run()` it stops the Loop); the switch is
-     * cancelled, a scene whose `enter()` threw leaves without `exit()`, and
-     * the manager goes on with the next request.
-     */
-    static update(dt: number): void;
-    /** For a custom loop: draws the visible scenes, then the transition and loading screen. */
-    static draw(alpha?: number): void;
-    /** Leaves every scene at once and releases their assets and preloads. */
-    static reset(): void;
-    /**
-     * A named transition for go/push/pop/replace: `draw(amount, info)`
-     * covers `amount` (0..1) of the screen, in screen space.
-     */
-    static defineTransition(name: string, draw: Scene.TransitionDraw): void;
-
-    /** The top scene, or null. */
-    static readonly current: Scene | null;
-    /** Every scene, bottom first. */
-    static readonly stack: Scene[];
-    /** A go, push or pop is in progress. */
-    static readonly busy: boolean;
-    /** Loading progress of the scene being loaded, 0..1. */
-    static readonly progress: number;
-    /**
-     * Draws the loading screen in screen space while a scene loads: `null`
-     * shows nothing. The default is a progress bar.
-     */
-    static loadingScreen: ((progress: number, info: Scene.LoadingInfo) => void) | null;
-    /** Seconds of loading before the loading screen shows. Default 0.15. */
-    static loadingDelay: number;
-    /** Seconds a loading screen that showed stays at least. Default 0.3. */
-    static minLoadingTime: number;
-    /**
-     * Seconds of loading after which the scene's pending assets are logged
-     * once, each named: the file that hangs. Default 10; 0 never.
-     */
-    static slowLoadWarning: number;
-    /**
-     * Seconds after which a scene that has not loaded fails like a missing
-     * file (`onError`, or thrown from the next update) with a
-     * `Scene.TimeoutError` listing what was still loading. `timeout` in
-     * the request's options overrides it. Default 0: never.
-     */
-    static loadTimeout: number;
-    /**
-     * Called when a scene cannot load (a missing file): the current scene
-     * stays. The error names the request and scene (`"Scene.go(Level1):
-     * cannot load image 'x.png'"`), with the original as `cause`. Without
-     * it, the error is thrown from the next `update`, which stops the Loop.
-     */
-    static onError: ((error: Error, SceneClass: (new (params?: any) => Scene) | null) => void) | null;
-}
-
-declare namespace Scene {
-    /** A path, or the path with options. */
-    type Spec<T = {}> = string | ({ path: string } & T);
-
-    interface ImageSpec {
-        /** When the texture goes to VRAM: at first draw (default), now, or now and locked. */
-        upload?: "draw" | "bind" | "lock";
-        /** Same as `upload: "lock"`. */
-        lock?: boolean;
-        /** ImageList priority. */
-        priority?: number;
-    }
-
-    /**
-     * What a scene needs, by kind and name: `assets.images.hero` and so on.
-     * Built-in kinds:
-     * - `images`: `Image`, through an ImageList with a decoder thread;
-     * - `sheets`: `Sprite.Sheet`, from a `.json` (Aseprite, TexturePacker)
-     *   or an image with the options of `Sprite.Sheet.fromGrid()`;
-     * - `sfx`: `Sound.Sfx`; `music`: `Sound.Stream` (`{ path, loop }`);
-     * - `fonts`: `Font` (`{ path, size, preload }`);
-     * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
-     *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
-     *   (`data` and `text` fall back to `std.loadFile()` without Thread).
-     *   JSON is parsed on the script thread (objects can only be built
-     *   there): keep data files small, or split a large level.
-     * `Scene.Assets.define()` adds kinds.
-     */
-    interface Manifest {
-        images?: Record<string, Spec<ImageSpec>>;
-        sheets?: Record<string, Spec<Record<string, any>>>;
-        sfx?: Record<string, Spec>;
-        music?: Record<string, Spec<{ loop?: boolean }>>;
-        fonts?: Record<string, Spec<{ size?: number; preload?: boolean | string }>>;
-        data?: Record<string, Spec>;
-        text?: Record<string, Spec>;
-        binary?: Record<string, Spec>;
-        [kind: string]: Record<string, Spec<any>> | undefined;
-    }
-
-    /** What a transition's draw gets, besides the amount of screen to cover (0..1). */
-    interface TransitionInfo {
-        /** "out" while the amount rises, "hold" while loading, "in" while it falls. */
-        phase: "out" | "hold" | "in";
-        color: number;
-        width: number;
-        height: number;
-        direction: "left" | "right" | "up" | "down";
-    }
-
-    type TransitionDraw = (amount: number, info: TransitionInfo) => void;
-
-    interface TransitionOptions {
+    interface Source {
+        /** Restarts the sequence from `seed`; without one, from the clock. */
+        seed(seed?: Seed): void;
+        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
+        int(min: number, max: number): number;
+        /** Float in [0, 1). */
+        float(): number;
+        /** Float in [0, max). */
+        float(max: number): number;
+        /** Float in [min, max). */
+        float(min: number, max: number): number;
+        /** True with probability `p` (default 0.5). */
+        bool(p?: number): boolean;
+        /** Normally distributed number (default mean 0, standard deviation 1). */
+        gaussian(mean?: number, stddev?: number): number;
+        /** Angle in radians, in [0, 2 pi). */
+        angle(): number;
         /**
-         * Default "none". "fade" blends `color` over the switch; "wipe" slides
-         * a band of it across (see `direction`); a name from
-         * `Scene.defineTransition()`, or `{ draw(amount, info) }` drawn in
-         * screen space.
+         * Random element, or `undefined` for an empty array. With `weights`
+         * (one per item), drawn with probability proportional to its weight.
          */
-        transition?: "none" | "fade" | "wipe" | string | { draw: TransitionDraw };
-        /** Seconds of the whole transition, out and in. Default 0.4. */
-        duration?: number;
-        /** Transition color (`Color.new()`); default black. */
-        color?: number;
-        /** The way a wipe's edge moves. Default "left". */
-        direction?: "left" | "right" | "up" | "down";
-    }
-
-    interface RequestOptions {
-        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
-        timeout?: number;
-    }
-
-    interface GoOptions extends TransitionOptions, RequestOptions {
-        /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
-        params?: any;
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        /** `count` different elements in random order, as a new array. */
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        /** Shuffles in place (Fisher-Yates) and returns the same array. */
+        shuffle<A extends List<any>>(items: A): A;
         /**
-         * Exits and releases the old scenes before loading the new one: for
-         * scenes that do not fit in memory together (shared assets reload).
+         * Index drawn with probability proportional to its weight. Weights
+         * must be finite and non-negative, with at least one above zero.
          */
-        unloadFirst?: boolean;
-    }
-
-    interface PushOptions extends TransitionOptions, RequestOptions {
-        params?: any;
-        /** The scenes below keep being drawn. Default true. */
-        drawBelow?: boolean;
-        /** The scenes below keep being updated. Default false. */
-        updateBelow?: boolean;
-    }
-
-    interface PopOptions extends TransitionOptions {
-        /** Given to the `resume()` of the scene below. */
-        result?: any;
-    }
-
-    interface LoadingInfo {
-        scene: (new (params?: any) => Scene) | null;
-        loaded: number;
-        total: number;
-    }
-
-    interface LoadOptions {
-        /** Directory the paths are relative to. */
-        root?: string;
+        weighted(weights: number[] | Float32Array): number;
         /**
-         * Seconds to wait: past it the group fails (or `load()` rejects) with
-         * a `TimeoutError`. The loads themselves go on, and are freed when
-         * they end if nobody holds them.
+         * Fills a typed array in one call and returns it. Float arrays get
+         * floats in [min, max) (default [0, 1); one bound is the max); integer
+         * arrays get integers in [min, max], by default the whole range of
+         * the type (random bytes for a Uint8Array).
          */
-        timeout?: number;
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        /** Fills a float array with normally distributed numbers and returns it. */
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        /** Copy of the current state, for saving. */
+        state(): State;
+        /** Restores a state returned by `state()`. */
+        setState(state: State): void;
     }
 
-    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
-    interface TimeoutError extends Error {
-        code: "TIMEOUT";
-        /** What was still loading. */
-        pending: { kind: string; name: string; path: string; state: string }[];
+    /** Independent generator. */
+    class Generator implements Source {
+        /** Seeded with `seed`, or from the clock without one. */
+        constructor(seed?: Seed);
+        seed(seed?: Seed): void;
+        int(min: number, max: number): number;
+        float(): number;
+        float(max: number): number;
+        float(min: number, max: number): number;
+        bool(p?: number): boolean;
+        gaussian(mean?: number, stddev?: number): number;
+        angle(): number;
+        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+        sample<T>(items: T[], count: number): T[];
+        sample(items: NumberArray, count: number): number[];
+        shuffle<A extends List<any>>(items: A): A;
+        weighted(weights: number[] | Float32Array): number;
+        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+        fillGaussian<A extends Float32Array | Float64Array>(array: A,
+            mean?: number, stddev?: number): A;
+        state(): State;
+        setState(state: State): void;
+        /** New generator at the same point of the sequence. */
+        clone(): Generator;
     }
 
-    /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
-    interface AssetGroup {
-        /** What is still loading. */
-        pending(): { kind: string; name: string; path: string; state: string }[];
-        /** The manifest's names with the loaded values. */
-        readonly assets: any;
-        readonly loaded: number;
-        readonly total: number;
-        /** 0..1. */
-        readonly progress: number;
-        readonly done: boolean;
-        readonly failed: boolean;
-        readonly error: Error | null;
-        /** Resolves with `assets`, or rejects with the first error. */
-        readonly ready: Promise<any>;
-        /** Lets go of every asset; each is freed once nobody else holds it. */
-        release(): void;
-    }
-
-    interface Loader<T = any> {
-        /** Applies what a later holder of a cached asset asks for (images: a lock). */
-        reuse?(asset: T, spec: any): void;
-        /** Loads the asset: the value, or a promise (a Job) of it. */
-        load(path: string, spec: any): T | PromiseLike<T>;
-        /**
-         * Releases it once nobody holds it. Asked for while a frame is being
-         * drawn, it runs at the start of the next frame (the frame's GS
-         * packet may still use the asset).
-         */
-        free(asset: T, spec: any): void;
-        /** Tells apart loads of one path with different options (e.g. a font size). */
-        key?(path: string, spec: any): string;
-    }
-
-    namespace Assets {
-        /** Milliseconds of ImageList work per frame while images load. Default 4. */
-        let budgetMs: number;
-        /**
-         * Seconds without images to load before the ImageList's decoder
-         * thread (and its stack) closes; it opens again when needed. Default 5.
-         */
-        let imageListIdleTime: number;
-        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
-        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
-        /** One asset; release it with `release(asset)`. A string option is the root. */
-        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
-        /**
-         * Releases one hold of an asset from `load()`; false if it is not
-         * held. A load released before it ends keeps running and is reused if
-         * the asset is asked for again (queued images are cancelled).
-         */
-        function release(asset: object): boolean;
-        /** The same, by the kind and spec it was loaded with: for strings (`text`). */
-        function release(kind: string, spec: Spec<any>, root?: string): boolean;
-        /** A new kind of asset for manifests. */
-        function define(kind: string, loader: Loader): void;
-        /**
-         * For `Debug.watch()`: held assets, still loading, holders, by kind,
-         * and frees waiting for the next frame.
-         */
-        function stats(): { entries: number; loading: number; refs: number; byKind: Record<string, number>;
-            pendingFrees: number; imageListOpen: boolean };
-        /** Every held asset, for finding leaks. */
-        function list(): { kind: string; path: string; refs: number; state: string }[];
-        /**
-         * The ImageList work, deferred frees and idle close of a frame `dt`
-         * seconds long, for games without `Loop.run()`.
-         */
-        function update(dt?: number): void;
-    }
+    /** The script's generator: see `Source`. */
+    function seed(seed?: Seed): void;
+    function int(min: number, max: number): number;
+    function float(): number;
+    function float(max: number): number;
+    function float(min: number, max: number): number;
+    function bool(p?: number): boolean;
+    function gaussian(mean?: number, stddev?: number): number;
+    function angle(): number;
+    function pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
+    function pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
+    function sample<T>(items: T[], count: number): T[];
+    function sample(items: NumberArray, count: number): number[];
+    function shuffle<A extends List<any>>(items: A): A;
+    function weighted(weights: number[] | Float32Array): number;
+    function fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
+    function fillGaussian<A extends Float32Array | Float64Array>(array: A,
+        mean?: number, stddev?: number): A;
+    function state(): State;
+    function setState(state: State): void;
 }
 
 
@@ -3413,1294 +3155,57 @@ declare namespace Sound {
 }
 
 
-/* === Module: Random (random) === */
-/**
- * Seedable pseudo-random numbers (xoshiro128**, computed in C).
- *
- * Unlike `Math.random()`, a generator created with a seed always produces the
- * same sequence: a generated map, a roguelike run or a bug can be
- * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
- * bit-exact on every platform; floats with bounds and gaussians may differ in
- * the last bits between the PS2 and a PC.
- *
- * The module functions (`Random.int()`, `Random.float()`...) use a generator
- * of the script (each script and worker has its own) seeded from the clock;
- * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
- * (NaN, Infinity) throw a RangeError.
- *
- * Example:
- * ```js
- * const rng = new Random.Generator(1234);    // or a string: "level-3"
- * const die = rng.int(1, 6);
- * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
- * const team = rng.sample(players, 3);
- * rng.shuffle(deck);
- *
- * // Particles: one call instead of a loop of 500.
- * rng.fill(speeds, 40, 90);
- * rng.fillGaussian(spread, 0, 0.3);
- *
- * const saved = rng.state();                 // JSON-friendly: save it
- * rng.setState(saved);                       // and continue later
- * ```
- */
-declare namespace Random {
-    /** Seed: a number (integers map one-to-one) or a string (hashed). */
-    type Seed = number | string;
-
-    /** The four 32-bit words of a generator state, as returned by `state()`. */
-    type State = [number, number, number, number];
-
-    /** Typed arrays of numbers. */
-    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
-        Int16Array | Uint16Array | Int32Array | Uint32Array |
-        Float32Array | Float64Array;
-
-    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
-    type List<T> = T[] | NumberArray;
-
-    interface Source {
-        /** Restarts the sequence from `seed`; without one, from the clock. */
-        seed(seed?: Seed): void;
-        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
-        int(min: number, max: number): number;
-        /** Float in [0, 1). */
-        float(): number;
-        /** Float in [0, max). */
-        float(max: number): number;
-        /** Float in [min, max). */
-        float(min: number, max: number): number;
-        /** True with probability `p` (default 0.5). */
-        bool(p?: number): boolean;
-        /** Normally distributed number (default mean 0, standard deviation 1). */
-        gaussian(mean?: number, stddev?: number): number;
-        /** Angle in radians, in [0, 2 pi). */
-        angle(): number;
-        /**
-         * Random element, or `undefined` for an empty array. With `weights`
-         * (one per item), drawn with probability proportional to its weight.
-         */
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        /** `count` different elements in random order, as a new array. */
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        /** Shuffles in place (Fisher-Yates) and returns the same array. */
-        shuffle<A extends List<any>>(items: A): A;
-        /**
-         * Index drawn with probability proportional to its weight. Weights
-         * must be finite and non-negative, with at least one above zero.
-         */
-        weighted(weights: number[] | Float32Array): number;
-        /**
-         * Fills a typed array in one call and returns it. Float arrays get
-         * floats in [min, max) (default [0, 1); one bound is the max); integer
-         * arrays get integers in [min, max], by default the whole range of
-         * the type (random bytes for a Uint8Array).
-         */
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        /** Fills a float array with normally distributed numbers and returns it. */
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        /** Copy of the current state, for saving. */
-        state(): State;
-        /** Restores a state returned by `state()`. */
-        setState(state: State): void;
+/* === Module: Tween3D (tween3d) === */
+/** Tweens of native 3D objects advanced in C, with the semantics of Tween:
+ * start values are read when the tween starts (after its delay), the last
+ * frame sets the exact end values, repeat adds cycles and yoyo runs every
+ * other cycle backwards. No JavaScript runs per frame: tweens advance in one
+ * native Loop system (attachLoop(), PRE_UPDATE like Tween) or with advance(dt).
+ * For plain JavaScript objects keep using Tween. */
+declare namespace Tween3D {
+    const LOOP_PRIORITY: number;
+    type Vector3 = ArrayLike<number>;
+    interface Props {
+        /** Node / Instance local position, Camera eye. */
+        position?: Vector3;
+        /** Node / Instance only. */
+        scale?: Vector3;
+        /** Node / Instance only: Euler goal in radians (Rz·Ry·Rx), reached by
+         * slerp on the short arc; overshooting curves extrapolate the arc. */
+        rotation?: Vector3;
+        /** Camera only: look target. */
+        target?: Vector3;
     }
-
-    /** Independent generator. */
-    class Generator implements Source {
-        /** Seeded with `seed`, or from the clock without one. */
-        constructor(seed?: Seed);
-        seed(seed?: Seed): void;
-        int(min: number, max: number): number;
-        float(): number;
-        float(max: number): number;
-        float(min: number, max: number): number;
-        bool(p?: number): boolean;
-        gaussian(mean?: number, stddev?: number): number;
-        angle(): number;
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        shuffle<A extends List<any>>(items: A): A;
-        weighted(weights: number[] | Float32Array): number;
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        state(): State;
-        setState(state: State): void;
-        /** New generator at the same point of the sequence. */
-        clone(): Generator;
-    }
-
-    /** The script's generator: see `Source`. */
-    function seed(seed?: Seed): void;
-    function int(min: number, max: number): number;
-    function float(): number;
-    function float(max: number): number;
-    function float(min: number, max: number): number;
-    function bool(p?: number): boolean;
-    function gaussian(mean?: number, stddev?: number): number;
-    function angle(): number;
-    function pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-    function pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-    function sample<T>(items: T[], count: number): T[];
-    function sample(items: NumberArray, count: number): number[];
-    function shuffle<A extends List<any>>(items: A): A;
-    function weighted(weights: number[] | Float32Array): number;
-    function fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-    function fillGaussian<A extends Float32Array | Float64Array>(array: A,
-        mean?: number, stddev?: number): A;
-    function state(): State;
-    function setState(state: State): void;
-}
-
-
-/* === Module: TileMap (tilemap) === */
-/**
- * VU1-accelerated batched sprite and tilemap rendering.
- *
- * A `Descriptor` holds textures and materials; an `Instance` pairs one with a
- * native sprite buffer. Sprites are streamed to a VU1 microprogram in
- * batches, so thousands of quads cost little EE time. Draws are queued like
- * any other drawing; call `Screen.flip()` to present them.
- *
- * @example
- * ```js
- * const descriptor = new TileMap.Descriptor({
- *     textures: ["tiles.png"],
- *     materials: [{ textureIndex: 0, endOffset: 1 }],
- * });
- * const map = new TileMap.Instance({
- *     descriptor,
- *     spriteBuffer: TileMap.SpriteBuffer.fromObjects([
- *         { x: 0, y: 0, w: 32, h: 32, u2: 32, v2: 32 },
- *         { x: 32, y: 0, w: 32, h: 32, u1: 32, u2: 64, v2: 32 },
- *     ]),
- * });
- *
- * while (true) {
- *     Screen.clear();
- *     map.render(0, 0);
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace TileMap {
-    /**
-     * One draw state for a contiguous run of sprites. Material `i` draws the
-     * sprites after material `i - 1`'s `endOffset` up to and including its
-     * own `endOffset`.
-     */
-    interface Material {
-        /**
-         * Index into the descriptor's textures, or -1 for untextured
-         * sprites. Defaults to 0 when the descriptor has textures, otherwise
-         * -1.
-         */
-        textureIndex?: number;
-        /**
-         * Alpha blend equation from `Screen.alphaEquation()`. Defaults to
-         * the current `Screen` equation at render time.
-         */
-        blendMode?: number;
-        /** Index of the last sprite this material draws. Must not decrease. */
-        endOffset: number;
-    }
-
-    /**
-     * Tileset geometry. Tile `id` is the cell at column `id % columns`, row
-     * `Math.floor(id / columns)` of the atlas texture.
-     */
-    interface Atlas {
-        tileWidth: number;
-        tileHeight: number;
-        columns: number;
-        /** When set, tile ids must be below `columns * rows`. */
-        rows?: number;
-    }
-
-    interface DescriptorOptions {
-        /** Required by `Instance.fromGrid()` and `Instance.setTiles()`. */
-        atlas?: Atlas;
-        /**
-         * Textures by path or `Image`. Paths are loaded synchronously. An
-         * `Image` that is still loading (for example from an `ImageList`) or
-         * was freed skips the sprites of its materials until it is ready.
-         */
-        textures?: Array<string | Image>;
-        /** At least one material, ordered by `endOffset`. */
-        materials: Material[];
-    }
-
-    /** Immutable render description shared by any number of instances. */
-    class Descriptor {
-        constructor(options: DescriptorOptions);
-        readonly materialCount: number;
-        /** The `Image` objects the descriptor keeps alive. */
-        readonly textures: Image[];
-        readonly atlas: Atlas | undefined;
-    }
-
-    /** Tile id that hides a cell: `setTiles`/`fromGrid` give it zero size. */
-    const EMPTY: number;
-
-    /** Tile ids: a `Uint16Array` is used without copying. */
-    type TileIds = Uint16Array | Int16Array | number[];
-
-    interface GridOptions {
-        /** Descriptor with an `atlas`. */
-        descriptor: Descriptor;
-        columns: number;
-        rows: number;
-        /** Row-major tile ids, `columns * rows` long; default all 0. */
-        tiles?: TileIds;
-        /** Cell size on screen; defaults to the atlas tile size. */
-        tileWidth?: number;
-        tileHeight?: number;
-        zindex?: number;
-    }
-
-    interface RenderOptions {
-        /** Draw only sprites [first, first + count). Disables culling. */
-        first?: number;
-        count?: number;
-        /**
-         * Grid instances draw only the cells on screen (plus one cell of
-         * margin) by default; `false` draws every cell.
-         */
-        cull?: boolean;
-    }
-
-    /**
-     * Native sprite storage. Buffers that are rendered must be 16-byte
-     * aligned; `SpriteBuffer.create()` and `fromObjects()` always are. A
-     * plain `new ArrayBuffer()` may not be.
-     */
-    type SpriteStorage = ArrayBuffer | ArrayBufferView;
-
-    interface InstanceOptions {
-        descriptor: Descriptor;
-        /** Sprite records laid out as described by `TileMap.layout`. */
-        spriteBuffer?: SpriteStorage;
-    }
-
-    /** A descriptor plus a sprite buffer that can be rendered. */
-    class Instance {
-        constructor(options: InstanceOptions);
-        /**
-         * Builds a row-major grid in native code: cell (column, row) is
-         * sprite `row * columns + column` at (column * tileWidth,
-         * row * tileHeight). Grid instances cull to what the current camera
-         * shows in `render()` (the screen without one). Culling assumes
-         * cells stay near their position: a
-         * sprite moved more than one cell away may be skipped.
-         */
-        static fromGrid(options: GridOptions): Instance;
-        readonly descriptor: Descriptor;
-        /** Sprites in the current buffer, or 0 without a buffer. */
-        readonly spriteCount: number;
-        /** Sprites queued by the last `render()`, after culling. */
-        readonly lastDrawCount: number;
-        /** Grid geometry for `fromGrid()` instances, else undefined. */
-        readonly grid: { columns: number; rows: number;
-            tileWidth: number; tileHeight: number } | undefined;
-        /**
-         * Queues sprites at (x, y) plus the camera offset, through the current
-         * camera (Camera2D), on VU1: zoomed, and under a rotation each sprite
-         * becomes a triangle strip (in batches of 36). Sprites are read
-         * when the frame is sent, so writes made to the buffer after
-         * `render()` and before `Screen.flip()` may or may not be shown this
-         * frame.
-         */
-        render(x: number, y: number, options?: RenderOptions): void;
-        /** Moves sprites [first, first + count) in native code. */
-        translate(first: number, count: number, dx: number, dy: number): void;
-        /** Sets the color (0-255, 128 = neutral) of a sprite range. */
-        setColor(first: number, count: number, r: number, g: number,
-            b: number, a?: number): void;
-        /**
-         * Points sprites from `first` at atlas tiles, one per id, and sets
-         * their size to the cell (grid) or atlas tile size; `EMPTY` hides a
-         * sprite. All ids are validated before anything is written.
-         */
-        setTiles(first: number, tiles: TileIds): void;
-        /**
-         * Uses another buffer from now on. Waits for queued draws that read
-         * the previous one, so replacing buffers mid-frame stalls briefly.
-         */
-        replaceSpriteBuffer(buffer: SpriteStorage): void;
-        /** Returns the current buffer; edits through a `DataView` are live. */
-        getSpriteBuffer(): SpriteStorage | undefined;
-        /**
-         * Copies `count` sprites (default: all of `source`) into the buffer
-         * starting at sprite `dstOffset`. `source` needs no alignment.
-         */
-        updateSprites(dstOffset: number, source: SpriteStorage,
-            count?: number): void;
-    }
-
-    /** Fields accepted by `SpriteBuffer.fromObjects()`. */
-    interface SpriteObject {
-        x?: number;
-        y?: number;
-        w?: number;
-        h?: number;
-        /** Texture coordinates in texels. */
-        u1?: number;
-        v1?: number;
-        u2?: number;
-        v2?: number;
-        /**
-         * Depth. The VU program passes the raw bits of this float to the
-         * GS, so it orders correctly only for non-negative values and a
-         * 24- or 32-bit Z buffer; with the default 16-bit Z buffer, depth
-         * testing tiles is unreliable.
-         */
-        zindex?: number;
-        /** Color channels 0-255; default 128 (0x80, neutral modulation). */
-        r?: number;
-        g?: number;
-        b?: number;
-        a?: number;
-    }
-
-    namespace SpriteBuffer {
-        /** Allocates `count` zeroed sprites. */
-        function create(count: number): ArrayBuffer;
-        /** Builds a buffer from objects; missing fields are 0 (colors 128). */
-        function fromObjects(sprites: SpriteObject[]): ArrayBuffer;
-    }
-
-    /** Byte layout of one sprite record, for `DataView` access. */
-    const layout: {
-        readonly stride: number;
-        readonly offsets: {
-            readonly x: number;
-            readonly y: number;
-            readonly w: number;
-            readonly h: number;
-            readonly u1: number;
-            readonly v1: number;
-            readonly u2: number;
-            readonly v2: number;
-            /** Colors are 32-bit unsigned integers. */
-            readonly r: number;
-            readonly g: number;
-            readonly b: number;
-            readonly a: number;
-            readonly zindex: number;
-        };
-    };
-
-    /**
-     * Hardware debugging switches, for bisecting problems that appear only
-     * on a real console. They slow rendering; leave them off otherwise.
-     */
-    interface Diagnostics {
-        /** FLUSHA and TEX0/TEX1 before every batch, as the old renderer. */
-        flushEachBatch: boolean;
-        /** Write back the whole data cache instead of the sprite range. */
-        fullCacheFlush: boolean;
-        /** Sprites per VU1 batch, 1-50 (default 50; under a rotating camera at most 36). */
-        batchSize: number;
-        /**
-         * Under a rotating camera, triangles made by the EE instead of the
-         * rotated VU1 program. The EE path ignores zindex.
-         */
-        rotatedOnEE: boolean;
-    }
-
-    /** Changes the given switches; the others keep their current value. */
-    function setDiagnostics(options: Partial<Diagnostics>): void;
-    function getDiagnostics(): Diagnostics;
-
-    /**
-     * Offsets every instance drawn afterwards; defaults to (0, 0). Kept for
-     * existing code: `Camera2D` moves (and zooms and turns) TileMaps along
-     * with every other draw. Both combine: this offset applies first.
-     */
-    function setCamera(x: number, y: number): void;
-    function getCamera(): { x: number; y: number };
-}
-
-
-/* === Module: Sprite (sprite) === */
-/**
- * Spritesheets and animated sprites, advanced in C.
- *
- * A `Sheet` holds frames (rectangles of one texture) and named clips (frame
- * sequences with durations). An `Instance` plays a clip of a sheet and draws
- * its current frame in world space, through the current camera (Camera2D).
- * An `Animator` plays clips on a range of `TileMap` sprites, rewriting their
- * texture coordinates in C, so hundreds of animated sprites cost one
- * `render()` and no JavaScript per sprite.
- *
- * While `Loop.run()` runs, every playing instance and animator advances in C
- * by the Loop's scaled time before the game's `update` (so `setTimeScale`
- * pauses them); without the Loop, call `Sprite.update(dt)`. Events (frame
- * changes, loops, end) are dispatched after that pass, only to instances
- * with listeners.
- *
- * Frame durations are in milliseconds, as Aseprite writes them; `fps` sets
- * one duration for every frame. Rotation is in radians, clockwise on screen.
- *
- * Many instances draw fastest with `Sprite.drawAll(instances, positions)`:
- * one call, and one GS packet per 128 sprites of a texture instead of one
- * per sprite.
- *
- * Example:
- * ```js
- * const sheet = Sprite.Sheet.fromGrid(new Image("hero.png"), {
- *     frameWidth: 32, frameHeight: 32,
- *     clips: {
- *         idle: { frames: "0-3", fps: 6 },
- *         run:  { frames: "4-11", fps: 12 },
- *         hit:  { frames: "12-14", fps: 10, mode: "once", next: "idle" },   // back to idle
- *         die:  { frames: "12-17", durations: [80, 80, 80, 120, 200, 400], mode: "once" },
- *     },
- * });
- * const hero = new Sprite.Instance(sheet, { clip: "idle", origin: [0.5, 1] });
- * hero.on("run:3", () => footstep.play());           // position 3 of the run clip
- * await hero.playAsync("die");                        // true when it ends
- * respawn();
- *
- * Loop.run({
- *     update() {
- *         hero.play(moving ? "run" : "idle");   // no-op while that clip plays
- *         hero.flipX = facingLeft;
- *     },
- *     draw() { hero.draw(player.x, player.y); },
- * });
- *
- * // Aseprite / TexturePacker: tags and animations become clips.
- * const slime = Sprite.Sheet.fromJSON("slime.json");   // loads meta.image
- *
- * // Batches: 200 coins spinning on a TileMap, animated in C.
- * Sprite.Animator.bind(coins, coinSheet, "spin", { randomStart: true });
- * ```
- */
-declare namespace Sprite {
-    /** A frame rectangle, in texels of the sheet's texture. */
-    interface FrameDef {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-        /**
-         * Trim: where the rectangle sits inside the untrimmed frame (packers
-         * cut transparent borders). Default 0.
-         */
-        offsetX?: number;
-        offsetY?: number;
-        /** Untrimmed frame size; default the rectangle plus its offset. */
-        sourceWidth?: number;
-        sourceHeight?: number;
-        /** Milliseconds, used by clips that give no fps nor durations. */
-        duration?: number;
-        /** Unique name, to list the frame in clips by name. */
-        name?: string;
-    }
-
-    interface Frame extends Required<Omit<FrameDef, "name">> {
-        name: string | null;
-        /**
-         * Stored turned 90 degrees clockwise in the atlas (TexturePacker
-         * "rotated"); drawn turned back, as two triangles. Animators refuse it.
-         */
-        rotated: boolean;
-    }
-
-    /**
-     * A row or column of a `fromGrid()` sheet: `{ row: 2 }` takes that row,
-     * `{ row: 2, from: 1, to: 4 }` columns 1 to 4 (`to < from` plays
-     * backwards); `{ column }` takes rows.
-     */
-    type GridLine = { row: number; from?: number; to?: number } |
-        { column: number; from?: number; to?: number };
-
-    /**
-     * The frames of a clip: `"0-3,5"` (indices and inclusive ranges; a
-     * descending range plays backwards), an array of indices or frame names,
-     * or a grid line.
-     */
-    type FrameList = string | Array<number | string> | GridLine;
-
-    interface ClipDef {
-        /** May be left out when the definition is a grid line: `{ row: 2, fps: 8 }`. */
-        frames?: FrameList;
-        row?: number;
-        column?: number;
-        from?: number;
-        to?: number;
-        /** Frames per second for every frame. */
-        fps?: number;
-        /** Milliseconds per frame, one per frame; overrides `fps`. */
-        durations?: number[];
-        /**
-         * `"loop"` (default) repeats, `"once"` stops on the last frame, and
-         * `"pingpong"` goes back and forth without repeating the ends.
-         */
-        mode?: "loop" | "once" | "pingpong";
-        /**
-         * Cycles before the clip ends (a pingpong cycle goes and returns);
-         * 0 plays forever. Default 1 for `"once"`, else 0.
-         */
-        loops?: number;
-        /** Plays the frames in reverse order. */
-        reverse?: boolean;
-        /**
-         * Clip played when this one ends (after its last cycle), with the
-         * time left over: `{ mode: "once", next: "idle" }`. It may be added
-         * later; a missing one just ends.
-         */
-        next?: string | null;
-    }
-
-    /**
-     * Without `fps` nor `durations`, a clip uses its frames' own durations
-     * (sheet files) when every frame has one, else the sheet's default fps.
-     */
-    type Clip = ClipDef | FrameList;
-
-    interface ClipInfo {
-        name: string;
-        frames: number[];
-        /** Milliseconds. */
-        durations: number[];
-        mode: "loop" | "once" | "pingpong";
-        loops: number;
-        /** Milliseconds of one pass from the first frame to the last. */
-        length: number;
-        next: string | null;
-    }
-
-    /** A rectangle: texels of an untrimmed frame, or world units. */
-    interface Rect {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-    }
-
-    interface ClipOptions {
-        /** Clips to add, by name. */
-        clips?: Record<string, Clip>;
-        /** Default frames per second of clips without timing. Default 12. */
-        fps?: number;
-        /** See `Sheet.inset`. Default 0. */
-        inset?: number;
-    }
-
-    interface SheetOptions extends ClipOptions {
-        frames?: FrameDef[];
-    }
-
-    interface GridOptions extends ClipOptions {
-        frameWidth: number;
-        frameHeight: number;
-        /** Texels around the grid. */
-        margin?: number;
-        /** Texels between cells. */
-        spacing?: number;
-        /** Default: as many as fit in the texture. */
-        columns?: number;
-        rows?: number;
-        /** First cell, left to right and top to bottom. */
-        first?: number;
-        /** Cells to take; default all from `first`. */
-        count?: number;
-        /** Texture size, when the image is not loaded yet (or there is none). */
-        textureWidth?: number;
-        textureHeight?: number;
-    }
-
-    interface JSONOptions extends ClipOptions {
-        /**
-         * The texture; by default the file's `meta.image`, loaded relative to
-         * the JSON file.
-         */
-        image?: Image | null;
-    }
-
-    /** Frames and clips of one texture, shared by any number of sprites. */
-    class Sheet {
-        /**
-         * Frames given one by one. `image` may be null for sheets used only
-         * by an `Animator` (the TileMap descriptor has the texture).
-         */
-        constructor(image: Image | null, options?: SheetOptions);
-        /** Equal cells of a grid, numbered left to right and top to bottom. */
-        static fromGrid(image: Image | null, options: GridOptions): Sheet;
-        /**
-         * An Aseprite or TexturePacker file (JSON Hash or Array, up to 2 MB),
-         * by path or already parsed. Frames keep their names, trim and
-         * durations; Aseprite tags (with direction and repeat) and
-         * TexturePacker/Pixi `animations` become clips, and Aseprite slices
-         * (hitboxes) become slices. Frames rotated in the atlas are drawn
-         * turned back.
-         */
-        static fromJSON(source: string | object, options?: JSONOptions): Sheet;
-        /**
-         * `fromJSON()` without stalling frames: the file is read and its
-         * texture (meta.image, unless `options.image` is given) decoded on
-         * a worker; the Sheet is built on the script thread. A Job: await it,
-         * or poll it. Rejects when the file or the texture cannot be loaded.
-         */
-        static fromJSONAsync(path: string, options?: JSONOptions): AthenaJob<Sheet>;
-        /**
-         * `fromGrid()` on an image file decoded on a worker: for sheets
-         * loaded while a loading screen keeps drawing.
-         */
-        static fromGridAsync(imagePath: string, options: GridOptions): AthenaJob<Sheet>;
-        readonly image: Image | null;
-        readonly frameCount: number;
-        readonly clipNames: string[];
-        readonly sliceNames: string[];
-        /**
-         * Texels cut from every side of each frame's texture rectangle when
-         * drawn (instances and animators): 0.5 stops bilinear filtering and
-         * camera zoom from showing the neighbor frames of an atlas packed
-         * without padding. The drawn size does not change. 0 to 16.
-         */
-        inset: number;
-        /** Adds a frame and returns its index. */
-        addFrame(frame: FrameDef): number;
-        /**
-         * Adds a clip, or replaces the one with that name; instances playing
-         * it continue from their position.
-         */
-        addClip(name: string, clip: Clip): this;
-        hasClip(name: string): boolean;
-        /** Index of the frame called `name`, or -1. */
-        findFrame(name: string): number;
-        getFrame(frame: number | string): Frame;
-        getClip(name: string): ClipInfo | null;
-        /**
-         * Sets a named rectangle (a hitbox) in untrimmed frame texels on the
-         * given frames (default all); `null` removes it from them.
-         */
-        setSlice(name: string, rect: Rect | null, frames?: number | FrameList): this;
-        /** The slice's rectangle in a frame, or null when the frame has none. */
-        getSlice(name: string, frame: number | string): Rect | null;
-    }
-
-    interface InstanceOptions {
-        /** Clip to play at once. */
-        clip?: string;
-        /** Still frame shown without a clip; default 0. */
-        frame?: number | string;
-        /** Position used by `draw()`, `getBounds()` and `drawAll()` without one. */
-        x?: number;
-        y?: number;
-        /**
-         * Point of the untrimmed frame placed at the draw position, 0..1:
-         * `[0.5, 1]` is the bottom center. Default `[0, 0]`.
-         */
-        origin?: number | [number, number] | { x: number; y: number };
-        scale?: number | [number, number] | { x: number; y: number };
-        /** Radians, about the origin. */
-        rotation?: number;
-        flipX?: boolean;
-        flipY?: boolean;
-        /** `Color.new()`; 128 per channel is the texture unchanged. */
-        color?: number;
-        /** Playback speed multiplier. Default 1. */
-        speed?: number;
-        /**
-         * Advanced by the Loop (or `Sprite.update()`). False leaves it to
-         * `update(dt)`. Default true.
-         */
-        autoUpdate?: boolean;
-        /** Draws its outline (green), origin (red) and slices (yellow) over it. */
-        debug?: boolean;
-        /**
-         * Plays by the real time, not the Loop's scaled time: menus and HUD
-         * keep animating while `Loop.setTimeScale(0)` pauses the game.
-         */
-        realTime?: boolean;
-    }
-
-    interface PlayOptions {
-        /** Starts over even when this clip is already playing. */
-        restart?: boolean;
-        /** Position in the clip to start from. */
-        position?: number;
-        speed?: number;
-    }
-
-    /**
-     * `"frame"`: every frame change; `"frame:N"`: position N of any clip
-     * becomes current (0 is the first frame, reported when a clip starts);
-     * `"run:N"`: position N of the clip "run"; `"loop"`: a cycle ended and
-     * another starts; `"end"`: the last cycle ended (once per play).
-     * `"loop:run"` and `"end:run"` only for that clip. Clip names must
-     * exist when the listener is added.
-     */
-    type EventName = "frame" | "loop" | "end" | `frame:${number}` | `${string}:${number}` |
-        `loop:${string}` | `end:${string}`;
-
-    /**
-     * Called with `this` being the instance: the clip name, the position in
-     * the clip and the sheet frame shown.
-     */
-    type Listener = (this: Instance, clip: string | null, position: number,
-        frame: number) => void;
-
-    interface Bounds {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-    }
-
-    /** An animated sprite: a sheet, the clip it plays and how it is drawn. */
-    class Instance {
-        constructor(sheet: Sheet, options?: InstanceOptions);
-        readonly sheet: Sheet;
-        /** The clip being played or paused, or null. */
-        readonly clip: string | null;
-        /** Sheet frame shown; setting it shows that frame without a clip. */
-        frame: number;
-        /** Position in the clip; setting it jumps there (and replays a finished clip). */
-        position: number;
-        readonly playing: boolean;
-        /** Paused by `pause()` or `stop()`: `resume()` plays on. */
-        readonly paused: boolean;
-        /** The clip ended; it stays on its last shown frame. */
-        readonly finished: boolean;
-        /** Progress through the whole clip, all cycles when finite, 0..1. */
-        readonly progress: number;
-        /** Cycles completed. */
-        readonly cycles: number;
-        speed: number;
-        /** Position used by `draw()` without arguments and by `drawAll()`. */
-        x: number;
-        y: number;
-        flipX: boolean;
-        flipY: boolean;
-        originX: number;
-        originY: number;
-        scaleX: number;
-        scaleY: number;
-        rotation: number;
-        color: number;
-        autoUpdate: boolean;
-        realTime: boolean;
-        /** See `InstanceOptions.debug`; `Sprite.setDebug()` turns it on for all. */
-        debug: boolean;
-        /** Untrimmed size of the current frame, scaled. */
-        readonly width: number;
-        readonly height: number;
-        /**
-         * Plays a clip from its start. Calling it again for the clip already
-         * playing does nothing, so it can be called every frame.
-         * @throws RangeError when the sheet has no such clip.
-         */
-        play(clip: string, options?: PlayOptions): this;
-        /**
-         * `play()`, and a promise of true when the clip ends, or false when
-         * another play, `stop()` or a still frame replaces it first. A clip
-         * that loops forever only settles by being replaced. The instance
-         * stays alive while the promise is pending.
-         */
-        playAsync(clip: string, options?: PlayOptions): Promise<boolean>;
-        pause(): this;
-        resume(): this;
-        /**
-         * Goes back to the clip's first frame and pauses there, without an
-         * end event; `resume()` plays it again.
-         */
-        stop(): this;
-        /**
-         * Advances this instance by `dt` seconds now and dispatches its
-         * events, for instances with `autoUpdate: false`.
-         */
-        update(dt: number): this;
-        /**
-         * Draws the current frame with its origin at (x, y), or at its own
-         * x and y, in world space. Nothing is drawn while the image is still
-         * loading. For many instances, `Sprite.drawAll()` is much cheaper.
-         */
-        draw(x?: number, y?: number): void;
-        /** Box of the frame drawn at (x, y) (default its own), ignoring rotation. */
-        getBounds(x?: number, y?: number): Bounds;
-        /**
-         * World rectangle of slice `name` in the current frame drawn at
-         * (x, y) (default its own): flipped with the sprite, placed by the
-         * origin and scaled, ignoring rotation. Null when the frame has none.
-         */
-        getSlice(name: string, x?: number, y?: number): Rect | null;
-        setOrigin(x: number, y?: number): this;
-        setScale(x: number, y?: number): this;
-        on(event: EventName, listener: Listener): this;
-        /** A listener removed after its first call. */
-        once(event: EventName, listener: Listener): this;
-        /** No argument removes every listener; no listener, those of the event. */
-        off(event?: EventName, listener?: Listener): this;
-    }
-
-    interface Range {
-        /** First sprite, relative to the animator's range. Default 0. */
-        first?: number;
-        /** Default: up to the end of the range. */
-        count?: number;
-    }
-
-    interface BindOptions {
-        /** First sprite of the TileMap buffer. Default 0. */
-        first?: number;
-        /** Sprites to animate; default up to the end of the buffer. */
-        count?: number;
-        /** Each sprite starts at a random point of the clip. */
-        randomStart?: boolean;
-        /** Seed of `randomStart`, for the same start every run. */
-        seed?: number;
-        speed?: number;
-        flipX?: boolean;
-        flipY?: boolean;
-        /** Plays by the real time (see `InstanceOptions.realTime`). */
-        realTime?: boolean;
-    }
-
-    interface AnimatorPlayOptions extends Range {
-        /** Starts over the sprites already playing this clip. */
-        restart?: boolean;
-        randomStart?: boolean;
-    }
-
-    /**
-     * Clips played on TileMap sprites. Only texture coordinates are
-     * written: position, size, color and depth stay the game's, and trim
-     * offsets are not applied (use untrimmed frames of one size). Sprites
-     * cannot rotate (the VU1 program has no per-sprite rotation), nor show
-     * frames turned in the atlas. Animators send no events: poll
-     * `isFinished()` or `finishedCount`.
-     */
-    class Animator {
-        private constructor();
-        /**
-         * Plays `clip` on sprites [first, first + count) of `instance`'s
-         * buffer until `unbind()`; the animator keeps itself alive until then.
-         * The buffer is looked up every frame, so `replaceSpriteBuffer()` is
-         * followed; sprites past a smaller buffer are skipped.
-         */
-        static bind(instance: TileMap.Instance, sheet: Sheet, clip: string,
-            options?: BindOptions): Animator;
-        readonly instance: TileMap.Instance;
-        readonly sheet: Sheet;
-        readonly first: number;
-        readonly count: number;
-        readonly paused: boolean;
-        /** False after `unbind()`. */
-        readonly bound: boolean;
-        readonly realTime: boolean;
-        /** Sprites whose clip ended, counted in C. */
-        readonly finishedCount: number;
-        /** Speed of every sprite. */
-        speed: number;
-        play(clip: string, options?: AnimatorPlayOptions): this;
-        setFlip(flipX: boolean, flipY: boolean, range?: Range): this;
-        pause(): this;
-        resume(): this;
-        /** Stops animating; the sprites keep their last frame. */
-        unbind(): void;
-        /** Sheet frame shown by sprite `first + index`. */
-        frameAt(index: number): number;
-        /** Whether sprite `first + index` is playing. */
-        isPlaying(index: number): boolean;
-        /** Whether the clip of sprite `first + index` ended. */
-        isFinished(index: number): boolean;
-    }
-
-    /**
-     * Advances every playing instance and bound animator by `dt` seconds and
-     * dispatches their events: for games without `Loop.run()`. Inside
-     * `Loop.run()` it would advance them twice.
-     * @throws RangeError when listeners nest advances more than 8 levels deep.
-     */
-    function update(dt: number): void;
-
-    /**
-     * Draws instances in order, in few GS packets: consecutive instances of
-     * one texture share a packet (128 per chunk), and those outside the
-     * current camera's viewport are skipped. `positions[2 * i]` and
-     * `positions[2 * i + 1]` place instance i (and become its x and y);
-     * without positions each draws at its own x and y. Rotated instances are
-     * drawn one by one, keeping the order.
-     *
-     * With `{ stride: 3 }` the values are x, y and rotation per instance: the
-     * layout of Box2D's `world.readTransforms()`, so physics sprites need no
-     * loop in JavaScript:
-     * ```js
-     * world.readTransforms(bodies, transforms);
-     * Sprite.drawAll(crates, transforms, { stride: 3 });
-     * ```
-     */
-    function drawAll(instances: Instance[], positions?: Float32Array | number[],
-        options?: { stride?: 2 | 3 }): void;
-
-    /**
-     * Draws the outline, origin and slices of every instance drawn from
-     * now on (`instance.debug` does it for one). Returns the previous state.
-     */
-    function setDebug(on: boolean): boolean;
-
-    function getStats(): {
-        /** Instances advanced automatically. */
-        playing: number;
-        animators: number;
-        /** TileMap sprites the animators drive. */
-        animatedSprites: number;
-        /** Sprites the last `drawAll()` sent and skipped outside the camera. */
-        drawn: number;
-        culled: number;
-    };
-}
-
-
-/* === Module: System Core (system) === */
-/**
- * PS2 system, filesystem, timing and hardware helpers.
- *
- * Paths use the PS2 device syntax such as `host:/`, `mass:/` or `mc0:/`.
- * Return values from filesystem and device operations are native result codes;
- * callers should check them before continuing.
- *
- * Example:
- * ```js
- * console.log(System.bootPath);
- * for (const entry of System.listDir('host:/')) {
- *     console.log(entry.dir ? '[DIR]' : entry.size, entry.name);
- * }
- * System.sleep(16);
- * ```
- */
-declare namespace System {
-    /** One directory entry returned by `listDir()`. */
-    interface DirectoryEntry {
-        /** File or directory name. */
-        name: string;
-        /** File size in bytes; directory sizes may be zero. */
-        size: number;
-        /** True when this entry is a directory. */
-        dir: boolean;
-    }
-
-    /** Memory counters returned by `getMemoryStats()`. */
-    interface MemoryStats {
-        /** Core/binary footprint in bytes. */
-        core: number;
-        /** Reserved native stack in bytes. */
-        nativeStack: number;
-        /** Current native allocations in bytes. */
-        allocs: number;
-        /** Highest observed current native allocation total in bytes since startup. */
-        allocsPeak: number;
-        /** Failed nonzero native allocation requests since startup. */
-        allocationFailures: number;
-        /** Total reported usage in bytes. */
-        used: number;
-        /** Total arena and mapped regions requested from the EE heap. */
-        heapReserved: number;
-        /** Bytes in allocator in-use chunks, including chunk overhead. */
-        heapAllocated: number;
-        /** Approximate allocator metadata/alignment overhead in bytes. */
-        heapOverhead: number;
-        /** Bytes in reusable free chunks. */
-        heapFree: number;
-        /** Number of free chunks in the allocator. */
-        heapFreeChunks: number;
-        /** Free bytes in the topmost releasable chunk. */
-        heapTopFree: number;
-        /** Free bytes outside the top chunk; a fragmentation indicator. */
-        heapNonTopFree: number;
-        /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
-        jsHeap: number;
-        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
-        jsLimit: number;
-        /** Live JavaScript objects. */
-        jsObjects: number;
-    }
-
-    /** EE CPU information returned by `getCPUInfo()`. */
-    interface CPUInfo {
-        /** EE CPU implementation identifier. */
-        implementation: number;
-        /** EE CPU revision identifier. */
-        revision: number;
-        /** Installed EE RAM size in bytes. */
-        RAMSize: number;
-        /** EE bus clock frequency. */
-        BUSClock: number;
-        /** EE CPU clock frequency. */
-        CPUClock: number;
-        /** PS2 machine type identifier. */
-        MachineType: number;
-    }
-
-    /** Recalculates the QuickJS heap ceiling using current free EE memory and
-     * leaves `bytes` available for native assets at this snapshot. Call at a
-     * phase boundary before loading assets. Native allocations made later can
-     * consume this headroom. At least 64 KiB must remain available for JS.
-     * Returns the resulting QuickJS allocation limit in bytes. */
-    function setNativeMemoryHeadroom(bytes: number): number;
-
-    /** Memory-card status returned by `getMCInfo()`. */
-    interface MemoryCardInfo {
-        /** Memory-card type identifier. */
-        type: number;
-        /** Free memory reported by the card driver. */
-        freemem: number;
-        /** Format/status flag reported by the card driver. */
-        format: number;
-    }
-
-    /** GS GPU information returned by `getGPUInfo()`. */
-    interface GPUInfo {
-        revision: number;
-        id: number;
-    }
-
-    /** One registered filesystem/device entry. */
-    interface DeviceInfo {
-        name: string;
-        desc: string;
-    }
-
-    /** The path from which the application booted (e.g. "mass0:/", "cdfs:/") */
-    const bootPath: string;
-    /** Legacy alias for bootPath. */
-    const boot_path: string;
-
-    /** Lists entries in a directory or path relative to `bootPath`. */
-    function listDir(path?: string): DirectoryEntry[];
-
-    /** Removes an empty directory and returns the underlying system result. */
-    function removeDirectory(path: string): number;
-
-    /** Copies a file and returns zero on success. */
-    function copyFile(source: string, destination: string): number;
-
-    /** Moves or renames a file and returns zero on success. */
-    function moveFile(source: string, destination: string): number;
-    /** Renames a file or directory and returns the native result code. */
-    function rename(source: string, destination: string): number;
-
-    /** Returns raw EE CPU clock ticks. */
-    function getTicks(): number;
-
-    /** Returns high-resolution elapsed time in milliseconds. */
-    function getMilliseconds(): number;
-
-    /** Suspends the current EE thread for the specified milliseconds. */
-    function sleep(ms: number): void;
-
-    /** Returns currently used EE RAM in bytes. */
-    function getUsedMemory(): number;
-
-    /** Returns remaining available EE RAM in bytes. */
-    function getFreeMemory(): number;
-
-    /** Yields briefly to the EE scheduler. */
-    function delay(): void;
-
-    /** Returns memory counters from the legacy System API. */
-    function getMemoryStats(): MemoryStats;
-
-    /** Returns basic EE CPU and memory information. */
-    function getCPUInfo(): CPUInfo;
-
-    /** Returns basic GS GPU information. */
-    function getGPUInfo(): GPUInfo;
-
-    /** Returns the console temperature in Celsius when supported. */
-    function getTemperature(): number | undefined;
-
-    /** Returns memory-card information for a controller port (0 or 1). */
-    function getMCInfo(port?: number): MemoryCardInfo;
-
-    /** Returns information about a mass-storage block device. */
-    function getBDMInfo(device: string): { name: string; index: number } | undefined;
-
-    /** Returns currently registered file-system devices. */
-    function devices(): DeviceInfo[];
-
-    /** Mounts a block device at a file-system mount point. */
-    function mount(mountpoint: string, blockdev: string, mode?: number): number;
-
-    /** Unmounts a file-system device. */
-    function umount(device: string): number;
-
-    /** Loads an ELF using the legacy Athena loader. */
-    function loadELF(path: string, args?: string[]): number;
-
-    /** Enables or disables the legacy dark-mode flag. */
-    function setDarkMode(enabled: boolean): void;
-
-    /** Forces a QuickJS garbage-collection cycle. */
-    function gc(): void;
-
-    /** Exit application to the PS2 browser/OSDSYS */
-    function exit(): void;
-
-    /** Alias for exiting to the PS2 browser/OSDSYS. */
-    function exitToBrowser(): void;
-}
-
-
-/* === Module: Timer (timer) === */
-/**
- * Manual native timer objects.
- *
- * Timer values are represented in the module's native clock-tick units.
- * These timers are distinct from the global event-loop functions such as
- * `setTimeout`.
- *
- * Example:
- * ```js
- * const timer = Timer.new();
- * Timer.pause(timer);
- * Timer.setTime(timer, 0);
- * Timer.resume(timer);
- * console.log(Timer.isPlaying(timer));
- * Timer.destroy(timer);
- * ```
- */
-declare namespace Timer {
-    /** Opaque handle returned by `Timer.new()`. */
-    interface Handle {
-        readonly __brand: 'Timer';
-    }
-
-    /** Creates a running timer. */
-    function new(): Handle;
-
-    /** Returns elapsed native clock ticks, frozen while paused. */
-    function getTime(timer: Handle): number;
-
-    /** Replaces the elapsed time in native clock ticks. */
-    function setTime(timer: Handle, value: number): void;
-
-    /** Pauses without resetting the elapsed time. */
-    function pause(timer: Handle): void;
-
-    /** Resumes a paused timer. */
-    function resume(timer: Handle): void;
-
-    /** Sets elapsed time to zero while preserving the timer object. */
-    function reset(timer: Handle): void;
-
-    /** Returns true when the timer is actively advancing. */
-    function isPlaying(timer: Handle): boolean;
-
-    /** Releases the native timer. Do not use `timer` afterwards. */
-    function destroy(timer: Handle): void;
-}
-
-
-/* === Module: Tween (tween) === */
-/**
- * Tweens: animate numeric properties of any object over time.
- *
- * Tweens advance by themselves while `Loop.run()` runs, before the game's
- * `update` and `draw` (a Loop system named `"tween"`, present while tweens
- * are active). They follow `Loop.setTimeScale()` unless `realTime` is set.
- * A tween reads the start values when it starts (after its delay), and its
- * last frame sets the exact end values.
- *
- * Tweens are awaitable: `await tween` resolves with `true` when it completes,
- * `false` when it is killed.
- *
- * @example
- * ```js
- * const logo = { x: 320, y: -100, alpha: 0 };
- * async function intro() {   // no top-level await in this QuickJS
- *     await Tween.to(logo, { y: 120, alpha: 128 }, 0.6, { ease: "outBack" });
- *     Tween.to(logo, { y: 130 }, 0.8, { ease: "inOutSine", yoyo: true, repeat: Infinity });
- * }
- * intro();
- *
- * const tint = { color: Color.new(255, 255, 255) };
- * Tween.to(tint, { color: Color.new(255, 0, 0) }, 0.2, { colors: ["color"] });
- *
- * Loop.run(() => {
- *     image.color = tint.color;
- *     image.draw(logo.x, logo.y);
- * });
- * ```
- */
-declare namespace Tween {
     interface Options {
-        /** Curve or its name; defaults to `"outQuad"`. See `Ease`. */
-        ease?: Ease.Easing;
-        /** Seconds before the tween starts; defaults to 0. */
+        /** Curve name, short or long (`"outBack"`, `"easeOutBack"`); default `"outQuad"`. */
+        ease?: string;
         delay?: number;
-        /** Extra cycles after the first: an integer, or `Infinity`. Defaults to 0. */
+        /** Extra cycles: an integer or Infinity. */
         repeat?: number;
-        /** Every other cycle runs backwards, so the tween ends where it started. */
         yoyo?: boolean;
-        /** Ignores `Loop.setTimeScale()`: for menus and transitions while paused. */
-        realTime?: boolean;
         /** Kills the other tweens of the same target when this one starts. */
         overwrite?: boolean;
-        /** Properties holding packed colors (`Color.new()`), interpolated per channel. */
-        colors?: string[];
-        onStart?(target: any): void;
-        /** After every frame of the tween; `progress` is 0..1 within the cycle. */
-        onUpdate?(target: any, progress: number): void;
-        /** When a new cycle starts; `cycle` counts from 1. */
-        onRepeat?(target: any, cycle: number): void;
-        onComplete?(target: any): void;
     }
-
+    /** Awaitable: resolves with true when the tween completes, false when killed. */
     interface Handle extends PromiseLike<boolean> {
-        readonly target: any;
-        readonly duration: number;
-        readonly realTime: boolean;
-        /** Resolves with true when the tween completes, false when it is killed. */
-        readonly finished: Promise<boolean>;
-        /** False once completed or killed. */
         readonly active: boolean;
         readonly paused: boolean;
         /** Progress of the current cycle, 0..1. */
         readonly progress: number;
+        readonly finished: Promise<boolean>;
         pause(): this;
         resume(): this;
-        /** Stops the tween. With `complete`, sets its end values and runs `onComplete`. */
+        /** Stops it; with complete, sets the end values first. */
         kill(complete?: boolean): void;
     }
-
-    /** Animates `props` of `target` from their current values to these ones. */
-    function to<T extends object>(target: T, props: { [K in keyof T]?: number },
-        duration: number, options?: Options): Handle;
-    /**
-     * Animates `props` of `target` from these values back to the current ones.
-     * The start values are applied immediately.
-     */
-    function from<T extends object>(target: T, props: { [K in keyof T]?: number },
-        duration: number, options?: Options): Handle;
-    /** A tween without properties, to wait: `await Tween.delay(0.5)`. */
-    function delay(seconds: number, options?: Options): Handle;
-    /**
-     * Calls the functions one after the other, awaiting what each returns.
-     * For tweens in parallel, use `Promise.all([...])`.
-     */
-    function sequence(steps: Array<() => unknown>): Promise<void>;
-    /** Active tweens of `target`. */
-    function getTweensOf(target: object): Handle[];
-    /** Kills the tweens of `target` and returns how many there were. */
-    function killTweensOf(target: object, complete?: boolean): number;
-    /** Kills every tween and returns how many there were. */
-    function killAll(complete?: boolean): number;
-    /** Number of active tweens. */
-    function count(): number;
-    /**
-     * Advances the tweens by `dt` seconds (`realDt` for `realTime` tweens).
-     * Only for manual `while (true)` loops: under `Loop.run()` this would
-     * advance them twice.
-     */
-    function update(dt: number, realDt?: number): void;
+    type Target = Scene3D.Node | Model3D.Instance | Camera3D.Camera;
+    /** The tween retains its target (cameras too, after dispose). */
+    function to(target: Target, props: Props, duration: number, options?: Options): Handle;
+    function killTweensOf(target: Target, complete?: boolean): number;
+    function isTweening(target: Target): boolean;
+    /** Advances every tween; returns how many ended. */
+    function advance(dt: number): number;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }

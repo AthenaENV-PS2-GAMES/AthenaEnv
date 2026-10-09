@@ -474,6 +474,11 @@ declare namespace Quaternion {
  * Matrix getters return an owned snapshot, or overwrite and return out. */
 declare namespace Camera3D {
     interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
+    /** Screen position in viewport pixels (origin top-left, y down) and the
+     * distance in front of the camera along its view axis. */
+    interface ScreenPoint { x: number; y: number; depth: number; }
+    /** World-space ray: origin (x, y, z) and unit direction (dx, dy, dz). */
+    interface Ray { x: number; y: number; z: number; dx: number; dy: number; dz: number; }
     class Camera {
         /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
         constructor(options?: Projection);
@@ -484,6 +489,17 @@ declare namespace Camera3D {
         getView(out?: Matrix4): Matrix4;
         getProjection(out?: Matrix4): Matrix4;
         getViewProjection(out?: Matrix4): Matrix4;
+        /** Viewport in pixels used by worldToScreen/screenToRay; default 640x448.
+         * Match the Screen mode, e.g. `camera.setViewport(mode.width, mode.height)`. */
+        setViewport(width: number, height: number): this;
+        /** Projects a world point to the viewport: null when it is behind the
+         * camera. Points outside the screen or beyond near/far still project
+         * (check x/y against the viewport and depth against near/far).
+         * Optional `out` is reused and returned. */
+        worldToScreen<T extends object = ScreenPoint>(x: number, y: number, z: number, out?: T): (T & ScreenPoint) | null;
+        /** The ray from the camera through a viewport pixel, e.g. for
+         * Scene3D.Scene.raycast(). Optional `out` is reused and returned. */
+        screenToRay<T extends object = Ray>(x: number, y: number, out?: T): T & Ray;
         /** Idempotent; other operations reject a disposed camera. */
         dispose(): void;
     }
@@ -842,15 +858,27 @@ declare namespace Render3D {
         nearClipObjects: number;
         /** Meshes with morph targets blended on VU1. */
         vuMorphObjects: number;
+        /** Objects crossing the frustum beyond the guard band, clipped
+         * triangle by triangle in C on the EE: the expensive path (a large
+         * mesh around the camera costs milliseconds). Split such meshes. */
+        cpuClipObjects: number;
     }
     /** Lights are borrowed for this call. Omitted lights mean black ambient and
      * no directional lights. UNLIT materials ignore lights. Scale 0
      * draws nothing (counted as culled); other singular DIFFUSE normal
      * transforms throw, naming the reason; drawing does not update lights or transforms.
      * Pass `stats` to reuse an object every frame: its fields are assigned and
-     * it is returned, instead of allocating a new Stats per call. */
+     * it is returned, instead of allocating a new Stats per call. Pass `null`
+     * to skip the per-call stats (returns undefined, the cheapest call) and
+     * read the totals once per frame with frameStats(). */
     function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
         lights?: Lights.Set, stats?: T): T & Stats;
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode: CullMode | undefined,
+        lights: Lights.Set | undefined, stats: null): undefined;
+    /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
+     * since the last reset (with or without per-call stats). `reset`
+     * (default true) clears them, so call it once per frame. */
+    function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
     /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
      * camera, program and texture skip the barrier, program upload, camera
      * constants and GS state (and unchanged lights). The pass closes when fn
@@ -863,9 +891,11 @@ declare namespace Render3D {
         /** Retains the native instance, independently of its JS handle. */
         add(instance: Model3D.Instance): this;
         clear(): this;
-        /** Optional `stats` is reused and returned, as in Render3D.draw(). */
+        /** Optional `stats` is reused and returned, as in Render3D.draw(); null returns undefined. */
         draw<T extends object = Stats>(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set,
             stats?: T): T & Stats;
+        draw(camera: Camera3D.Camera, cullMode: CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
         dispose(): void;
     }
 }
@@ -878,6 +908,9 @@ declare namespace Render3D {
  * scene.update() (or attachLoop()) before draw and world queries, which throw
  * while the scene is stale instead of returning outdated data. */
 declare namespace Scene3D {
+    /** Releases reusable CPU skinning/morph buffers after draw returns, for
+     * a level transition or memory pressure. They grow again when needed. */
+    function trimScratch(): void;
     /** Levels from the root, root included. Deeper hierarchies are rejected. */
     const MAX_DEPTH: number;
     /** Bulk setters, one call per frame instead of one per node: values holds
@@ -894,6 +927,17 @@ declare namespace Scene3D {
      * ``` */
     function setTransforms2D(nodes: Node[], values: Float32Array): number;
     interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    /** Nearest raycast hit: node, distance along the ray, world point
+     * (x, y, z), unit normal facing the ray (nx, ny, nz) and source triangle
+     * index (-1 for an AABB hit). */
+    interface RaycastHit {
+        node: Node; distance: number; x: number; y: number; z: number;
+        nx: number; ny: number; nz: number; triangle: number;
+    }
+    interface RaycastOptions {
+        /** Test triangles (default true) or only the meshes' world AABBs. */
+        precise?: boolean;
+    }
     interface DrawStats extends Render3D.Stats {
         /** Subtrees rejected by their world bounds; their meshes count as culled. */
         culledSubtrees: number;
@@ -961,12 +1005,28 @@ declare namespace Scene3D {
          * the Loop dt, before update(). */
         advance(dt: number): number;
         /** Recomputes dirty world transforms and subtree bounds. Optional
-         * `stats` is reused and returned instead of allocating a new object. */
+         * `stats` is reused and returned instead of allocating a new object;
+         * null skips it and returns undefined. */
         update<T extends object = UpdateStats>(stats?: T): T & UpdateStats;
+        update(stats: null): undefined;
         /** Culls subtrees, queues meshes and draws them through Render3D.
-         * Never updates the scene; throws while stale. Lights are borrowed. */
+         * Never updates the scene; throws while stale. Lights are borrowed.
+         * `stats` as in Render3D.draw(): reused, or null to return undefined;
+         * the render totals feed Render3D.frameStats() either way. */
         draw<T extends object = DrawStats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
             stats?: T): T & DrawStats;
+        draw(camera: Camera3D.Camera, cullMode: Render3D.CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        /** Nearest visible mesh hit by the ray (e.g. Camera3D.Camera.screenToRay())
+         * within maxDistance (default unlimited), or null. Uses the transforms of
+         * the last update(); throws while stale. Skinned meshes are skipped and
+         * morphed meshes are tested in their base pose. Optional `out` is reused. */
+        raycast<T extends object = RaycastHit>(ray: Camera3D.Ray, maxDistance?: number, options?: RaycastOptions,
+            out?: T): (T & RaycastHit) | null;
+        /** Nodes whose visible, unskinned mesh world AABB overlaps the box, in
+         * traversal order. Optional `out` array is cleared, refilled and returned. */
+        queryBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+            out?: Node[]): Node[];
         /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
         attachLoop(priority?: number): this;
         detachLoop(): this;
@@ -4190,6 +4250,10 @@ declare namespace System {
         nativeStack: number;
         /** Current native allocations in bytes. */
         allocs: number;
+        /** Highest observed current native allocation total in bytes since startup. */
+        allocsPeak: number;
+        /** Failed nonzero native allocation requests since startup. */
+        allocationFailures: number;
         /** Total reported usage in bytes. */
         used: number;
         /** Total arena and mapped regions requested from the EE heap. */
@@ -4519,6 +4583,78 @@ declare namespace Debug {
 
     /** Figures of the graph over the last `frames` frames (default 60). */
     function frameStats(frames?: number): FrameStats;
+}
+
+
+/* === Module: Debug3D (debug3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=debug3d,... */
+/**
+ * World-space debug lines for 3D games: AABBs, rays, hitboxes, AI paths, a
+ * second camera's frustum, mesh normals, chunk borders.
+ *
+ * Shapes become line segments queued in C; each frame they are projected
+ * with a Camera3D and clipped (near plane and screen edges) on the EE, then
+ * drawn as GS lines over the frame, without depth test (always on top). A
+ * segment lasts one frame (`seconds` omitted or 0) or `seconds` of real
+ * time. At most MAX_LINES segments are queued; more are dropped and counted
+ * by dropped(). Colors are Color.new() values (default green).
+ *
+ * With Loop.run(), setCamera() draws the queue after every draw (before
+ * the Debug overlay). Games with their own loop call draw(camera, dt) after
+ * drawing the scene.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=debug3d,...`
+ *
+ * Example:
+ * ```js
+ * Debug3D.setCamera(camera);
+ * Debug3D.grid(0, 0, 0, 10, 1, Color.new(60, 60, 60));
+ * const b = node.getWorldBounds();
+ * if (b) Debug3D.box(b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]);
+ * Debug3D.line(ray.x, ray.y, ray.z, ray.x + ray.dx * 20, ray.y + ray.dy * 20, ray.z + ray.dz * 20,
+ *     Color.new(255, 0, 0), 1);         // stays one second
+ * ```
+ */
+declare namespace Debug3D {
+    const MAX_LINES: number;
+    /** Queues a segment; returns false when the queue is full. */
+    function line(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number,
+        color?: Color.Value, seconds?: number): boolean;
+    /** Many segments from a Float32Array of x1, y1, z1, x2, y2, z2 groups; returns how many were queued. */
+    function lines(values: Float32Array, color?: Color.Value, seconds?: number): number;
+    /** Box edges (12 segments), in world space or under `matrix` (an oriented box). Returns segments queued. */
+    function box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+        color?: Color.Value, seconds?: number, matrix?: Matrix4): number;
+    /** Three great circles of `segments` (3 to 64, default 16) segments each. */
+    function sphere(x: number, y: number, z: number, radius: number, color?: Color.Value, seconds?: number,
+        segments?: number): number;
+    /** X (red), Y (green) and Z (blue) axes of a transform, `size` units long (default 1). */
+    function axes(matrix: Matrix4, size?: number, seconds?: number): number;
+    /** Grid on the XZ plane around (x, y, z): halfExtent units each way, a line every step (128 per side at most). */
+    function grid(x: number, y: number, z: number, halfExtent: number, step: number, color?: Color.Value,
+        seconds?: number): number;
+    /** The view volume of another camera. */
+    function frustum(camera: Camera3D.Camera, color?: Color.Value, seconds?: number): number;
+    /**
+     * Normals of a mesh, `length` units long (default 0.25), from each
+     * vertex: an Instance uses its transform unless `matrix` is given.
+     * Meshes without normals queue nothing.
+     */
+    function normals(target: Model3D.Instance | Model3D.Mesh, length?: number, color?: Color.Value,
+        seconds?: number, matrix?: Matrix4): number;
+    /** Draws the queue with `camera` after every Loop draw; null stops. The camera is retained. */
+    function setCamera(camera: Camera3D.Camera | null): void;
+    /** Draws the queue now (games without Loop.run()), then ages it by dt seconds; returns segments drawn. */
+    function draw(camera: Camera3D.Camera, dt?: number): number;
+    /** Ages the queue by dt seconds, removing expired segments already drawn (setCamera() does it each frame). */
+    function age(dt: number): void;
+    function clear(): void;
+    /** Segments queued. */
+    function count(): number;
+    /** Segments dropped because the queue was full, since the last clear(). */
+    function dropped(): number;
+    /** Turns the module on or off (off: queueing does nothing and the queue is emptied). Returns whether on. */
+    function show(on?: boolean): boolean;
 }
 
 
@@ -5802,6 +5938,104 @@ declare namespace Physics3D {
         /** remove(), and drops this handle. */
         dispose(): void;
     }
+}
+
+
+/* === Module: Profiler (profiler) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=profiler,... */
+/**
+ * Where the frame time goes, measured in C.
+ *
+ * Timer scopes read the EE cycle counter (COP0 Count) in C, so a begin/end
+ * pair costs far less than two System.getMilliseconds() calls; counters sum
+ * values per frame. Each frame closes into a ring of the last `HISTORY`
+ * frames, from which `stats()` gives the last value, average, 95th
+ * percentile and peak. Timers are inclusive: nested scopes count in their
+ * parents too. A single begin/end span must be shorter than about 14 s (the
+ * counter wraps).
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=profiler,...`
+ * (brings Loop and Debug).
+ *
+ * Example:
+ * ```js
+ * import * as Render3D from "Render3D";
+ * Profiler.auto();                       // close frames after every Loop draw
+ * Profiler.attachRender3D(Render3D);     // 3d.* counters + C clipper warning
+ * Profiler.overlay(true);                // one line per scope in Debug
+ *
+ * const AI = Profiler.scope("ai");       // ids skip the name lookup
+ * Profiler.begin(AI); updateAI(); Profiler.end(AI);
+ * Profiler.measure("physics", () => world.step(dt));
+ * Profiler.count("chunks.rebuilt", rebuilt);
+ * ```
+ */
+declare namespace Profiler {
+    /** Frames kept per scope (120). */
+    const HISTORY: number;
+    const MAX_SCOPES: number;
+    /** Open scopes at once. */
+    const MAX_DEPTH: number;
+    /** A scope id from scope()/counter(), or its name (1 to 31 printable characters). */
+    type Scope = number | string;
+
+    interface Stats {
+        name: string;
+        kind: "timer" | "counter";
+        /** Frames in the window. */
+        samples: number;
+        /** Per frame: milliseconds for timers, summed values for counters. */
+        last: number;
+        average: number;
+        p95: number;
+        peak: number;
+        /** begin() (or count()) calls in the last frame and on average. */
+        lastCalls: number;
+        averageCalls: number;
+    }
+
+    /** Id of a timer scope, registered on first use. Scope 0 is "frame". */
+    function scope(name: string): number;
+    /** Id of a counter, registered on first use. */
+    function counter(name: string): number;
+    /** Opens a timer scope; a name is registered on first use. */
+    function begin(scope: Scope): void;
+    /** Closes the innermost scope; when given, it must be that scope (throws otherwise). */
+    function end(scope?: Scope): void;
+    /** Runs fn inside a timer scope and returns its result; closes on throw too. */
+    function measure<R>(scope: Scope, fn: () => R): R;
+    /** Adds value (default 1) to a counter for this frame. */
+    function count(scope: Scope, value?: number): void;
+    /**
+     * Closes the frame and returns its length in ms. Not needed with auto().
+     * Open scopes are split: their time so far goes to this frame.
+     */
+    function frame(): number;
+    /** Closes the frames after every draw of Loop.run(). Returns whether on. */
+    function auto(on?: boolean): boolean;
+    /** Stats over the last `frames` frames (default the whole history). Optional `out` is reused. */
+    function stats<T extends object = Stats>(scope: Scope, frames?: number, out?: T): T & Stats;
+    /** Registered scope names, by id. */
+    function names(): string[];
+    /** Unmatched end() calls and begin() beyond MAX_DEPTH since the reset. */
+    function errors(): number;
+    /**
+     * Records Render3D.frameStats() at each frame() as the counters
+     * 3d.triangles, 3d.objects, 3d.passes, 3d.culled and 3d.cpuClip, and
+     * logs (at most every 5 s, unless `warn: false`) when objects are
+     * clipped in C on the EE. Pass the Render3D namespace, or null to stop.
+     */
+    function attachRender3D(render3d: typeof Render3D | null, options?: { warn?: boolean }): void;
+    /** Shows a line per scope in the Debug overlay (turning it on), over `frames` frames (default 60). */
+    function overlay(on?: boolean, options?: { frames?: number }): boolean;
+    /** The overlay line of a scope, e.g. "1.23 ms p95 2.10 max 3.40". */
+    function describe(scope: Scope, frames?: number): string;
+    /** Stats of every scope (allocates; for logs and tests). */
+    function report(frames?: number): Stats[];
+    /** Prints report() with console.log. */
+    function log(frames?: number): void;
+    /** Clears the history; forget = true also drops the names (ids become invalid). */
+    function reset(forget?: boolean): void;
 }
 
 

@@ -22,6 +22,17 @@ declare namespace Scene3D {
      * ``` */
     function setTransforms2D(nodes: Node[], values: Float32Array): number;
     interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    /** Nearest raycast hit: node, distance along the ray, world point
+     * (x, y, z), unit normal facing the ray (nx, ny, nz) and source triangle
+     * index (-1 for an AABB hit). */
+    interface RaycastHit {
+        node: Node; distance: number; x: number; y: number; z: number;
+        nx: number; ny: number; nz: number; triangle: number;
+    }
+    interface RaycastOptions {
+        /** Test triangles (default true) or only the meshes' world AABBs. */
+        precise?: boolean;
+    }
     interface DrawStats extends Render3D.Stats {
         /** Subtrees rejected by their world bounds; their meshes count as culled. */
         culledSubtrees: number;
@@ -89,12 +100,28 @@ declare namespace Scene3D {
          * the Loop dt, before update(). */
         advance(dt: number): number;
         /** Recomputes dirty world transforms and subtree bounds. Optional
-         * `stats` is reused and returned instead of allocating a new object. */
+         * `stats` is reused and returned instead of allocating a new object;
+         * null skips it and returns undefined. */
         update<T extends object = UpdateStats>(stats?: T): T & UpdateStats;
+        update(stats: null): undefined;
         /** Culls subtrees, queues meshes and draws them through Render3D.
-         * Never updates the scene; throws while stale. Lights are borrowed. */
+         * Never updates the scene; throws while stale. Lights are borrowed.
+         * `stats` as in Render3D.draw(): reused, or null to return undefined;
+         * the render totals feed Render3D.frameStats() either way. */
         draw<T extends object = DrawStats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
             stats?: T): T & DrawStats;
+        draw(camera: Camera3D.Camera, cullMode: Render3D.CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        /** Nearest visible mesh hit by the ray (e.g. Camera3D.Camera.screenToRay())
+         * within maxDistance (default unlimited), or null. Uses the transforms of
+         * the last update(); throws while stale. Skinned meshes are skipped and
+         * morphed meshes are tested in their base pose. Optional `out` is reused. */
+        raycast<T extends object = RaycastHit>(ray: Camera3D.Ray, maxDistance?: number, options?: RaycastOptions,
+            out?: T): (T & RaycastHit) | null;
+        /** Nodes whose visible, unskinned mesh world AABB overlaps the box, in
+         * traversal order. Optional `out` array is cleared, refilled and returned. */
+        queryBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+            out?: Node[]): Node[];
         /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
         attachLoop(priority?: number): this;
         detachLoop(): this;

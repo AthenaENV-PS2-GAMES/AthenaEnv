@@ -24,7 +24,17 @@ typedef struct {
     uint32_t near_clip_objects;
     /* Meshes with morph targets blended on VU1 (vu1/draw_3D_morph.vcl). */
     uint32_t vu_morph_objects;
+    /* Objects crossing the frustum beyond the guard band, clipped triangle by
+     * triangle in C on the EE (render3d_clip.c): the expensive path, e.g. a
+     * large mesh around the camera. Split such meshes into smaller ones. */
+    uint32_t cpu_clip_objects;
 } AthenaRender3DStats;
+/* Frame totals: the JS draw entry points (Render3D.draw, Batch.draw,
+ * Scene3D draw) add each call's stats with stats_add(); frame_stats() copies
+ * the totals since the last reset and, when reset is nonzero, clears them.
+ * Main thread only. */
+void athena_render3d_stats_add(const AthenaRender3DStats *stats);
+void athena_render3d_frame_stats(AthenaRender3DStats *out,int reset);
 /* The guard band factor of the current screen mode: how far beyond the
  * screen (in screen widths/heights from the centre, at least 1) primitives
  * still fit the GS's coordinate range with a margin. 1 without a GS. */

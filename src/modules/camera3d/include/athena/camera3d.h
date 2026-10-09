@@ -53,4 +53,16 @@ int athena_camera3d_box_near_guard(AthenaCamera3D *camera,const AthenaMatrix4 *m
  * Returns -1 for nonfinite computation, 0 outside, 1 potentially visible. */
 int athena_camera3d_box_visible(AthenaCamera3D *camera, const AthenaMatrix4 *model,
     const float minimum[3], const float maximum[3]);
+/* Projection to a width x height viewport in pixels (origin top-left, y
+ * down, as Render3D maps the screen). out = screen x, screen y and the
+ * distance in front of the camera along its view axis. Returns 1 for a point
+ * in front of the camera (beyond the near plane or not), 0 behind it or on
+ * the camera plane (out untouched), -1 for invalid input. Updates the camera. */
+int athena_camera3d_world_to_screen(AthenaCamera3D *camera,const float point[3],
+    float width,float height,float out[3]);
+/* The ray through the viewport point (sx, sy) in pixels: origin at the camera
+ * position, direction a world unit vector. Points outside the viewport give
+ * rays outside the frustum. Returns 1, or -1 for invalid input. */
+int athena_camera3d_screen_to_ray(AthenaCamera3D *camera,float sx,float sy,
+    float width,float height,float origin[3],float direction[3]);
 #endif

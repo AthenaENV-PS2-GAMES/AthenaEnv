@@ -730,3 +730,119 @@ void athena_scene3d_detach_owner(void *owner) {
     }
 }
 int athena_scene3d_loop_system(const AthenaScene3D *s) { return s&&s->attachment?s->attachment->id:0; }
+
+/* Ray against an AABB (slab test). On a hit with entry distance in
+ * [0, limit], returns 1 with *t and the entry axis (-1 when the origin is
+ * inside). Axis-parallel rays test the slab directly: no 0 * inf. */
+static int ray_box(const float o[3],const float d[3],const float lo[3],const float hi[3],
+    float limit,float *t,int *axis) {
+    float near=0,far=limit; int entry=-1;
+    for(int i=0;i<3;i++) {
+        if(fabsf(d[i])<1e-20f) { if(o[i]<lo[i]||o[i]>hi[i]) return 0; continue; }
+        float inv=1/d[i],a=(lo[i]-o[i])*inv,b=(hi[i]-o[i])*inv;
+        if(a>b) { float x=a; a=b; b=x; }
+        if(a>near) { near=a; entry=i; }
+        if(b<far) far=b;
+        if(near>far) return 0;
+    }
+    *t=near; *axis=entry; return 1;
+}
+typedef struct {
+    float origin[3],direction[3];
+    int precise,found;
+    AthenaScene3DHit *hit;
+} Ray;
+static void world_point(const float *m,const AthenaPosition3D *p,float out[3]) {
+    for(int r=0;r<3;r++) out[r]=m[r]*p->x+m[4+r]*p->y+m[8+r]*p->z+m[12+r];
+}
+static void sub3(float out[3],const float a[3],const float b[3]) { for(int i=0;i<3;i++) out[i]=a[i]-b[i]; }
+static void cross3(float out[3],const float a[3],const float b[3]) {
+    out[0]=a[1]*b[2]-a[2]*b[1]; out[1]=a[2]*b[0]-a[0]*b[2]; out[2]=a[0]*b[1]-a[1]*b[0];
+}
+static float dot3(const float a[3],const float b[3]) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+static void record(Ray *r,AthenaNode3D *n,float t,const float normal[3],int32_t triangle) {
+    AthenaScene3DHit *h=r->hit;
+    h->node=n; h->distance=t; h->triangle=triangle;
+    for(int i=0;i<3;i++) { h->point[i]=r->origin[i]+r->direction[i]*t; h->normal[i]=normal[i]; }
+    r->found=1;
+}
+/* Moller-Trumbore on the world-space triangles, both faces. */
+static void ray_mesh(Ray *r,AthenaNode3D *n) {
+    AthenaMesh3DView v; athena_mesh3d_view(n->mesh,&v);
+    const float *m=n->world.value;
+    for(uint32_t tri=0;tri*3+2<v.vertex_count;tri++) {
+        float a[3],b[3],c[3],e1[3],e2[3],p[3],q[3],s[3];
+        world_point(m,&v.positions[athena_mesh3d_corner(&v,tri*3)],a);
+        world_point(m,&v.positions[athena_mesh3d_corner(&v,tri*3+1)],b);
+        world_point(m,&v.positions[athena_mesh3d_corner(&v,tri*3+2)],c);
+        sub3(e1,b,a); sub3(e2,c,a); cross3(p,r->direction,e2);
+        float det=dot3(e1,p);
+        if(fabsf(det)<1e-12f) continue;
+        float inv=1/det; sub3(s,r->origin,a);
+        float u=dot3(s,p)*inv; if(u<0||u>1) continue;
+        cross3(q,s,e1);
+        float w=dot3(r->direction,q)*inv; if(w<0||u+w>1) continue;
+        float t=dot3(e2,q)*inv;
+        if(t<0||t>r->hit->distance||!athena_float_isfinite(t)) continue;
+        float normal[3]; cross3(normal,e1,e2);
+        float len=sqrtf(dot3(normal,normal)); if(!(len>0)||!athena_float_isfinite(len)) continue;
+        float sign=dot3(normal,r->direction)>0?-1/len:1/len;
+        for(int i=0;i<3;i++) normal[i]*=sign;
+        record(r,n,t,normal,(int32_t)tri);
+    }
+}
+static void ray_node(Ray *r,AthenaNode3D *n) {
+    float t; int axis;
+    if(!n->visible||!n->has_bounds||!ray_box(r->origin,r->direction,n->minimum,n->maximum,r->hit->distance,&t,&axis)) return;
+    if(n->mesh&&!n->skin) {
+        float lo[3],hi[3];
+        if(mesh_bounds(n,lo,hi)&&ray_box(r->origin,r->direction,lo,hi,r->hit->distance,&t,&axis)) {
+            if(r->precise) ray_mesh(r,n);
+            else {
+                float normal[3]={0,0,0};
+                if(axis<0) for(int i=0;i<3;i++) normal[i]=-r->direction[i];
+                else normal[axis]=r->direction[axis]>0?-1:1;
+                record(r,n,t,normal,-1);
+            }
+        }
+    }
+    for(uint32_t i=0;i<n->child_count;i++) ray_node(r,n->children[i]);
+}
+int athena_scene3d_raycast(const AthenaScene3D *s,const float origin[3],const float direction[3],
+    float max_distance,int precise,AthenaScene3DHit *hit) {
+    if(!s||!origin||!direction||!hit||!athena_float_isfinite(max_distance)||max_distance<0) return ATHENA_SCENE3D_EINVAL;
+    Ray r={{origin[0],origin[1],origin[2]},{direction[0],direction[1],direction[2]},precise,0,hit};
+    if(!finite3(r.origin[0],r.origin[1],r.origin[2])||!finite3(r.direction[0],r.direction[1],r.direction[2]))
+        return ATHENA_SCENE3D_EINVAL;
+    float len=sqrtf(dot3(r.direction,r.direction));
+    if(!(len>1e-20f)||!athena_float_isfinite(len)) return ATHENA_SCENE3D_EINVAL;
+    for(int i=0;i<3;i++) r.direction[i]/=len;
+    if(athena_scene3d_stale(s)) return ATHENA_SCENE3D_ESTALE;
+    memset(hit,0,sizeof(*hit)); hit->distance=max_distance; hit->triangle=-1;
+    ray_node(&r,s->root);
+    return r.found;
+}
+typedef struct { const float *lo,*hi; AthenaNode3D **out; uint32_t capacity,count; } BoxQuery;
+static int overlaps(const float alo[3],const float ahi[3],const float blo[3],const float bhi[3]) {
+    for(int i=0;i<3;i++) if(alo[i]>bhi[i]||ahi[i]<blo[i]) return 0;
+    return 1;
+}
+static void box_node(BoxQuery *q,AthenaNode3D *n) {
+    if(!n->visible||!n->has_bounds||!overlaps(n->minimum,n->maximum,q->lo,q->hi)) return;
+    float lo[3],hi[3];
+    if(n->mesh&&!n->skin&&mesh_bounds(n,lo,hi)&&overlaps(lo,hi,q->lo,q->hi)) {
+        if(q->count<q->capacity) q->out[q->count]=n;
+        q->count++;
+    }
+    for(uint32_t i=0;i<n->child_count;i++) box_node(q,n->children[i]);
+}
+int athena_scene3d_query_box(const AthenaScene3D *s,const float minimum[3],const float maximum[3],
+    AthenaNode3D **out,uint32_t capacity) {
+    if(!s||!minimum||!maximum||(capacity&&!out)) return ATHENA_SCENE3D_EINVAL;
+    for(int i=0;i<3;i++)
+        if(!athena_float_isfinite(minimum[i])||!athena_float_isfinite(maximum[i])||minimum[i]>maximum[i]) return ATHENA_SCENE3D_EINVAL;
+    if(athena_scene3d_stale(s)) return ATHENA_SCENE3D_ESTALE;
+    BoxQuery q={minimum,maximum,out,capacity,0};
+    box_node(&q,s->root);
+    return q.count>INT32_MAX?INT32_MAX:(int)q.count;
+}

@@ -30,6 +30,7 @@ JSModuleDef *athena_random_init(JSContext *ctx);
 JSModuleDef *athena_matrix4_init(JSContext *ctx);
 JSModuleDef *athena_quaternion_js_init(JSContext *ctx);
 JSModuleDef *athena_camera3d_js_init(JSContext *ctx);
+void athena_camera3d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_model3d_js_init(JSContext *ctx);
 JSModuleDef *athena_render3d_js_init(JSContext *ctx);
 JSModuleDef *athena_lights_js_init(JSContext *ctx);
@@ -53,6 +54,10 @@ JSModuleDef *athena_particles3d_js_init(JSContext *ctx);
 void athena_particles3d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
+JSModuleDef *athena_profiler_js_init(JSContext *ctx);
+JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
+void athena_debug3d_js_cleanup(JSContext *ctx);
+void athena_profiler_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
 void athena_camera2d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_sprite_js_init(JSContext *ctx);
@@ -377,6 +382,7 @@ static const struct {
     { "Tween", "../src/modules/tween/js/tween.js" },
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },
+    { "Profiler", "../src/modules/profiler/js/profiler.js" },
     { "Scene", "../src/modules/scene/js/scene.js" },
     { "Draw", "../tests/js/stub/Draw.js" },
 #ifndef RUNNER_REAL_FONT
@@ -557,6 +563,8 @@ static int run_script(int argc, char **argv) {
     athena_particles3d_js_init(ctx);
     athena_noise_init(ctx);
     athena_debug_init(ctx);
+    athena_profiler_js_init(ctx);
+    athena_debug3d_js_init(ctx);
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);
@@ -595,6 +603,9 @@ static int run_script(int argc, char **argv) {
     athena_camera2d_js_cleanup(ctx);
     athena_scene3d_js_cleanup(ctx);
     athena_render3d_js_cleanup(ctx);
+    athena_camera3d_js_cleanup(ctx);
+    athena_profiler_js_cleanup(ctx);
+    athena_debug3d_js_cleanup(ctx);
     athena_animation3d_js_cleanup(ctx);
     athena_camerarig3d_js_cleanup(ctx);
     athena_tween3d_js_cleanup(ctx);

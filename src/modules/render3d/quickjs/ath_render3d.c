@@ -46,7 +46,7 @@ static JSValue size(JSContext *ctx,JSValueConst self) {
     AthenaBatch3D *b=get_batch(ctx,self); return b?JS_NewUint32(ctx,athena_batch3d_size(b)):JS_EXCEPTION;
 }
 static const char *const stat_names[]={"submittedObjects","culledObjects","drawPasses","pipelinePasses",
-    "triangles","vuBatches","sourceTriangles","clippedTriangles","rejectedTriangles","geometryBytes","guardBandObjects","nearClipObjects","vuMorphObjects"};
+    "triangles","vuBatches","sourceTriangles","clippedTriangles","rejectedTriangles","geometryBytes","guardBandObjects","nearClipObjects","vuMorphObjects","cpuClipObjects"};
 static JSAtom stat_atoms[countof(stat_names)];
 static AthenaJSAtoms stat_table={stat_names,countof(stat_names),stat_atoms,NULL};
 int athena_render3d_js_put_stats(JSContext *ctx,JSValueConst obj,int define,const AthenaRender3DStats *s) {
@@ -57,7 +57,8 @@ int athena_render3d_js_put_stats(JSContext *ctx,JSValueConst obj,int define,cons
     if(athena_js_put(ctx,&stat_table,obj,define,9,JS_NewFloat64(ctx,(double)s->geometry_bytes))<0) return -1;
     if(athena_js_put(ctx,&stat_table,obj,define,10,JS_NewUint32(ctx,s->guard_band_objects))<0) return -1;
     if(athena_js_put(ctx,&stat_table,obj,define,11,JS_NewUint32(ctx,s->near_clip_objects))<0) return -1;
-    return athena_js_put(ctx,&stat_table,obj,define,12,JS_NewUint32(ctx,s->vu_morph_objects));
+    if(athena_js_put(ctx,&stat_table,obj,define,12,JS_NewUint32(ctx,s->vu_morph_objects))<0) return -1;
+    return athena_js_put(ctx,&stat_table,obj,define,13,JS_NewUint32(ctx,s->cpu_clip_objects));
 }
 /* The failure of a draw, with the native reason when one was recorded. */
 JSValue athena_render3d_js_throw(JSContext *ctx,int code) {
@@ -68,9 +69,13 @@ JSValue athena_render3d_js_throw(JSContext *ctx,int code) {
     if(detail[0]) return JS_ThrowRangeError(ctx,"Render3D: %s",detail);
     return JS_ThrowRangeError(ctx,"Invalid or overflowing 3D transform");
 }
-/* out: optional object to reuse, so a draw per frame allocates nothing. */
+/* out: optional object to reuse, so a draw per frame allocates nothing;
+ * null skips the per-call stats (undefined is returned). Successful draws
+ * add to the frame totals either way. */
 static JSValue stats_value(JSContext *ctx,int code,const AthenaRender3DStats *s,JSValueConst out) {
     if(code<0) return athena_render3d_js_throw(ctx,code);
+    athena_render3d_stats_add(s);
+    if(JS_IsNull(out)) return JS_UNDEFINED;
     JSValue obj; int define;
     if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
     if(athena_render3d_js_put_stats(ctx,obj,define,s)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
@@ -95,7 +100,7 @@ static JSValue draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv
     AthenaLights *lights=NULL;
     if(argc>=4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
     JSValueConst out=argc==5?argv[4]:JS_UNDEFINED;
-    if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    if(!JS_IsUndefined(out)&&!JS_IsNull(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object or null");
     athena_render3d_set_error_detail(NULL);
     AthenaRender3DStats s={0}; int result=athena_render3d_draw_lit(i,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
 }
@@ -113,7 +118,7 @@ static JSValue batch_draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     AthenaLights *lights=NULL;
     if(argc>=3&&!JS_IsUndefined(argv[2])) { lights=athena_lights_from_value(ctx,argv[2]); if(!lights) return JS_EXCEPTION; }
     JSValueConst out=argc==4?argv[3]:JS_UNDEFINED;
-    if(!JS_IsUndefined(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object");
+    if(!JS_IsUndefined(out)&&!JS_IsNull(out)&&!JS_IsObject(out)) return JS_ThrowTypeError(ctx,"stats must be an object or null");
     athena_render3d_set_error_detail(NULL);
     AthenaRender3DStats s={0}; int result=athena_batch3d_draw_lit(b,c,lights,cull,&s); return stats_value(ctx,result,&s,out);
 }
@@ -129,11 +134,29 @@ static JSValue group(JSContext *ctx,JSValueConst self,int argc,JSValueConst *arg
     athena_render3d_group_end();
     return result;
 }
+/* Render3D.frameStats(out?, reset = true): totals of the draws since the
+ * last reset, e.g. once per frame after drawing with stats = null. */
+static JSValue frame_stats(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,0,2,"Render3D.frameStats")) return JS_EXCEPTION;
+    JSValueConst out=argc>=1?argv[0]:JS_UNDEFINED;
+    int reset=1;
+    if(argc==2&&!JS_IsUndefined(argv[1])) {
+        if(!JS_IsBool(argv[1])) return JS_ThrowTypeError(ctx,"reset must be a boolean");
+        reset=JS_ToBool(ctx,argv[1]);
+    }
+    JSValue obj; int define;
+    if(!athena_js_out_object(ctx,out,&obj,&define,"stats")) return JS_EXCEPTION;
+    AthenaRender3DStats s; athena_render3d_frame_stats(&s,reset);
+    if(athena_render3d_js_put_stats(ctx,obj,define,&s)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
+    return obj;
+}
 static JSClassDef class_def={"Render3D.Batch",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("add",1,add),JS_CFUNC_DEF("clear",0,clear),JS_CFUNC_DEF("draw",1,batch_draw),
     JS_CFUNC_DEF("dispose",0,dispose),JS_CGETSET_DEF("size",size,NULL)};
 static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("draw",2,draw),JS_CFUNC_DEF("group",1,group),
+    JS_CFUNC_DEF("frameStats",0,frame_stats),
     JS_PROP_INT32_DEF("CULL_NONE",0,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("CULL_BACK",1,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("CULL_FRONT",-1,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {

@@ -102,6 +102,16 @@ reused.triangles = -1;
 assert(batch.draw(camera, Render3D.CULL_NONE, undefined, reused).triangles === 1, "reused stats are overwritten");
 throws(() => batch.draw(camera, Render3D.CULL_NONE, undefined, 3), "stats must be an object");
 assert(batch.draw(camera, Render3D.CULL_NONE, undefined, undefined).submittedObjects === 2, "undefined stats allocate");
+Render3D.frameStats();
+assert(batch.draw(camera, Render3D.CULL_NONE, undefined, null) === undefined, "null stats return undefined");
+assert(batch.draw(camera, Render3D.CULL_NONE, undefined, null) === undefined, "null stats twice");
+const frame = Render3D.frameStats({tag: 1}, false);
+assert(frame.tag === 1 && frame.submittedObjects === 4 && frame.triangles === 2 && frame.cpuClipObjects === 0,
+    "frameStats totals draws without per-call stats");
+assert(Render3D.frameStats().submittedObjects === 4 && Render3D.frameStats().submittedObjects === 0,
+    "frameStats resets by default");
+throws(() => Render3D.frameStats(undefined, 1), "frameStats reset must be a boolean");
+throws(() => Render3D.frameStats(5), "frameStats stats must be an object");
 const clipCamera = new Camera({near: 1, far: 10, aspect: 1});
 clipCamera.lookAt(0, 0, -1).setPosition(0, 0, 0);
 const clipMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([-.1,-.1,.5, .3,-.1,-2, -.1,.3,-2])});
@@ -110,6 +120,8 @@ const clipStats = Render3D.draw(clipInstance, clipCamera, Render3D.CULL_NONE);
 assert(clipStats.sourceTriangles === 1 && clipStats.triangles === 2 && clipStats.clippedTriangles === 1 &&
     clipStats.rejectedTriangles === 0 && clipStats.vuBatches === 1, "near-plane clipping expands a triangle natively");
 assert(clipStats.geometryBytes === 160, "clipped DMA payload uses xyzw and padding");
+assert(clipStats.cpuClipObjects === 1, "C clipping is counted per object");
+assert(Render3D.draw(clipInstance, clipCamera, Render3D.CULL_NONE, undefined, null) === undefined, "Render3D.draw null stats");
 clipInstance.dispose(); clipCamera.dispose();
 const rejectMesh = Model3D.Mesh.fromGeometry({positions: new Float32Array([
     -100,-.5,0, -100,.5,0, -101,0,0, 100,-.5,0, 100,.5,0, 101,0,0

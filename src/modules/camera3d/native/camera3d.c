@@ -20,6 +20,9 @@ static int normalize3(float v[3]) {
     if(m*n<=1e-12f) return 0;
     v[0]=x/n; v[1]=y/n; v[2]=z/n; return 1;
 }
+static int finite_point(const float p[3]) {
+    return athena_float_isfinite(p[0])&&athena_float_isfinite(p[1])&&athena_float_isfinite(p[2]);
+}
 static int view_matrix(AthenaMatrix4 *out, const AthenaVector4 *p,
     const AthenaVector4 *target, const AthenaVector4 *up) {
     float z[3]={p->x-target->x, p->y-target->y, p->z-target->z};
@@ -231,4 +234,35 @@ int athena_camera3d_box_relation_guard(AthenaCamera3D *c,const AthenaMatrix4 *mo
 int athena_camera3d_box_visible(AthenaCamera3D *c,const AthenaMatrix4 *model,const float min[3],const float max[3]) {
     int relation=athena_camera3d_box_relation(c,model,min,max);
     return relation<0?-1:relation!=ATHENA_FRUSTUM3D_OUTSIDE;
+}
+
+static int viewport_valid(float width,float height) {
+    return athena_float_isfinite(width)&&athena_float_isfinite(height)&&width>0&&height>0;
+}
+int athena_camera3d_world_to_screen(AthenaCamera3D *c,const float p[3],float width,float height,float out[3]) {
+    if(!c||!p||!out||!viewport_valid(width,height)||!finite_point(p)||!athena_camera3d_update(c)) return -1;
+    const float *m=c->view_projection.value;
+    float x=m[0]*p[0]+m[4]*p[1]+m[8]*p[2]+m[12];
+    float y=m[1]*p[0]+m[5]*p[1]+m[9]*p[2]+m[13];
+    float w=m[3]*p[0]+m[7]*p[1]+m[11]*p[2]+m[15];
+    /* The projection's w row is (0,0,-1,0): w is -z in view space, the
+     * distance in front of the camera along its axis. */
+    if(!athena_float_isfinite(w)||!(w>0)) return 0;
+    float sx=(x/w+1)*.5f*width,sy=(1-y/w)*.5f*height;
+    if(!athena_float_isfinite(sx)||!athena_float_isfinite(sy)) return -1;
+    out[0]=sx; out[1]=sy; out[2]=w; return 1;
+}
+int athena_camera3d_screen_to_ray(AthenaCamera3D *c,float sx,float sy,float width,float height,
+    float origin[3],float direction[3]) {
+    if(!c||!origin||!direction||!viewport_valid(width,height)||
+        !athena_float_isfinite(sx)||!athena_float_isfinite(sy)) return -1;
+    /* Without inverting a matrix: the view direction from the projection
+     * scale factors, then the camera basis (the rows of the view rotation). */
+    const float *pr=c->projection.value,*v=c->view.value;
+    float nx=2*sx/width-1,ny=1-2*sy/height;
+    float vx=nx/pr[0],vy=ny/pr[5];
+    float d[3]={vx*v[0]+vy*v[1]-v[2], vx*v[4]+vy*v[5]-v[6], vx*v[8]+vy*v[9]-v[10]};
+    if(!normalize3(d)) return -1;
+    origin[0]=c->position.x; origin[1]=c->position.y; origin[2]=c->position.z;
+    direction[0]=d[0]; direction[1]=d[1]; direction[2]=d[2]; return 1;
 }

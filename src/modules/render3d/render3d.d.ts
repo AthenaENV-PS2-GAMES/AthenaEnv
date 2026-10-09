@@ -31,15 +31,27 @@ declare namespace Render3D {
         nearClipObjects: number;
         /** Meshes with morph targets blended on VU1. */
         vuMorphObjects: number;
+        /** Objects crossing the frustum beyond the guard band, clipped
+         * triangle by triangle in C on the EE: the expensive path (a large
+         * mesh around the camera costs milliseconds). Split such meshes. */
+        cpuClipObjects: number;
     }
     /** Lights are borrowed for this call. Omitted lights mean black ambient and
      * no directional lights. UNLIT materials ignore lights. Scale 0
      * draws nothing (counted as culled); other singular DIFFUSE normal
      * transforms throw, naming the reason; drawing does not update lights or transforms.
      * Pass `stats` to reuse an object every frame: its fields are assigned and
-     * it is returned, instead of allocating a new Stats per call. */
+     * it is returned, instead of allocating a new Stats per call. Pass `null`
+     * to skip the per-call stats (returns undefined, the cheapest call) and
+     * read the totals once per frame with frameStats(). */
     function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
         lights?: Lights.Set, stats?: T): T & Stats;
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode: CullMode | undefined,
+        lights: Lights.Set | undefined, stats: null): undefined;
+    /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
+     * since the last reset (with or without per-call stats). `reset`
+     * (default true) clears them, so call it once per frame. */
+    function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
     /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
      * camera, program and texture skip the barrier, program upload, camera
      * constants and GS state (and unchanged lights). The pass closes when fn
@@ -52,9 +64,11 @@ declare namespace Render3D {
         /** Retains the native instance, independently of its JS handle. */
         add(instance: Model3D.Instance): this;
         clear(): this;
-        /** Optional `stats` is reused and returned, as in Render3D.draw(). */
+        /** Optional `stats` is reused and returned, as in Render3D.draw(); null returns undefined. */
         draw<T extends object = Stats>(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set,
             stats?: T): T & Stats;
+        draw(camera: Camera3D.Camera, cullMode: CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
         dispose(): void;
     }
 }

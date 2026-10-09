@@ -126,4 +126,29 @@ int athena_scene3d_attach_loop(AthenaScene3D *scene,int priority,void *owner);
 int athena_scene3d_detach_loop(AthenaScene3D *scene);
 void athena_scene3d_detach_owner(void *owner);
 int athena_scene3d_loop_system(const AthenaScene3D *scene);
+
+/* Spatial queries over the world data of the last update (ESTALE before
+ * update, as draw). They see visible, unskinned meshes: skinned meshes move
+ * with their joints and have no bounds; morphed meshes are tested in their
+ * base pose. Results are borrowed nodes. */
+typedef struct {
+    AthenaNode3D *node;
+    /* Distance along the unit ray direction, world hit point and unit normal
+     * facing the ray. triangle is the source triangle index, or -1 for an
+     * AABB hit (precise = 0); an AABB hit from inside the box is at
+     * distance 0 with normal = -direction. */
+    float distance,point[3],normal[3];
+    int32_t triangle;
+} AthenaScene3DHit;
+/* Nearest hit along origin + t * direction (direction need not be unit
+ * length) with 0 <= t <= max_distance. precise = 0 tests the meshes' world
+ * AABBs; otherwise their triangles, both faces. Returns 1 with *hit, 0 for
+ * no hit, EINVAL or ESTALE. Subtrees whose bounds miss the ray are skipped. */
+int athena_scene3d_raycast(const AthenaScene3D *scene,const float origin[3],const float direction[3],
+    float max_distance,int precise,AthenaScene3DHit *hit);
+/* Nodes whose mesh world AABB overlaps [minimum, maximum], in traversal
+ * order: stores up to capacity in out and returns the total count, or
+ * EINVAL/ESTALE. */
+int athena_scene3d_query_box(const AthenaScene3D *scene,const float minimum[3],const float maximum[3],
+    AthenaNode3D **out,uint32_t capacity);
 #endif

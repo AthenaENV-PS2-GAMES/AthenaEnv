@@ -1,6 +1,6 @@
 {
   "id": "scene3d", "name": "Scene3D", "description": "Native 3D transform hierarchy with rejected cycles, dirty propagation, subtree bounds culling, pipeline-sorted render queue and optional Loop update system.",
-  "category": "Graphics", "version": "1.1.0", "default": false,
+  "category": "Graphics", "version": "1.2.0", "default": false,
   "sources": ["native/scene3d.c"],
   "dependencies": {"modules": ["render3d", "model3d", "camera3d", "lights", "loop"], "iop": [], "ee_libs": []},
   "native": {"shutdown": "athena_scene3d_module_shutdown"},

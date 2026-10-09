@@ -3,6 +3,7 @@ import {Camera} from "Camera3D";
 import * as Model3D from "Model3D";
 import * as Scene3D from "Scene3D";
 import * as Lights from "Lights";
+import * as Render3D from "Render3D";
 let checks = 0;
 function assert(ok, label) { checks++; if (!ok) throw new Error(label); }
 function throws(fn, type, label) {
@@ -77,6 +78,10 @@ const drawOut = {};
 assert(scene.draw(camera, 0, lights, drawOut) === drawOut && drawOut.queuedObjects === 2 && drawOut.pipelinePasses === 1 &&
     drawOut.geometryBytes === s.geometryBytes, "draw stats reuse an object");
 throws(() => scene.draw(camera, 0, lights, "x"), TypeError, "draw stats must be an object");
+Render3D.frameStats();
+assert(scene.draw(camera, 0, lights, null) === undefined, "null draw stats return undefined");
+assert(Render3D.frameStats().triangles === 2, "scene draws feed Render3D.frameStats");
+assert(scene.update(null) === undefined, "null update stats return undefined");
 const updateOut = {};
 assert(scene.update(updateOut) === updateOut && updateOut.worldUpdates === 0 && updateOut.visitedNodes === 0,
     "update stats reuse an object");
@@ -195,5 +200,70 @@ scene.update(); lights.dispose(); camera.dispose();
         return t[key];
     }});
     throws(()=>Reflect.construct(Scene3D.Node,[m],target),TypeError,"prototype getter disposes mesh safely");
+}
+// Picking: Camera3D projection and Scene3D raycast/queryBox.
+{
+    const cam = new Camera({fovYDegrees: 90, aspect: 1, near: 1, far: 100});
+    cam.setPosition(0, 0, 10).lookAt(0, 0, 0);
+    assert(cam.setViewport(200, 200) === cam, "setViewport chains");
+    const p = cam.worldToScreen(0, 0, 0);
+    assert(close(p.x, 100) && close(p.y, 100) && close(p.depth, 10), "centre projects to the viewport centre");
+    const reuse = {k: 1};
+    assert(cam.worldToScreen(10, 10, 0, reuse) === reuse && close(reuse.x, 200) && close(reuse.y, 0) && reuse.k === 1,
+        "fov 90: x = depth reaches the right edge, +y is up");
+    assert(cam.worldToScreen(0, 0, 20) === null, "points behind the camera do not project");
+    const ray = cam.screenToRay(100, 100);
+    assert(close(ray.x, 0) && close(ray.z, 10) && close(ray.dz, -1) && close(ray.dx, 0), "centre ray looks forward");
+    const corner = cam.screenToRay(200, 0, {});
+    assert(close(corner.dx * corner.dx + corner.dy * corner.dy + corner.dz * corner.dz, 1) && corner.dx > 0 && corner.dy > 0,
+        "rays are unit length; the top-right pixel looks right and up");
+    const back = cam.worldToScreen(10 * corner.dx + corner.x, 10 * corner.dy + corner.y, 10 * corner.dz + corner.z);
+    assert(close(back.x, 200) && close(back.y, 0), "screenToRay inverts worldToScreen");
+    throws(() => cam.setViewport(0, 10), RangeError, "viewport must be positive");
+    throws(() => cam.worldToScreen(0, 0), TypeError, "worldToScreen needs xyz");
+    throws(() => cam.screenToRay(0, 0, 5), TypeError, "ray out must be an object");
+
+    const quad = Model3D.Mesh.fromGeometry({positions: new Float32Array([-1,-1,0, 1,-1,0, 1,1,0, -1,-1,0, 1,1,0, -1,1,0])});
+    const world = new Scene3D.Scene();
+    const near = new Scene3D.Node(quad).setPosition(.3, -.4, 2), far = new Scene3D.Node(quad).setPosition(.3, -.4, -2);
+    // Offsets keep the rays off the quads' shared diagonal.
+    const tilted = new Scene3D.Node(quad).setPosition(5, 0, 0).setRotationEuler(0, Math.PI / 4, 0);
+    world.root.add(near).add(far).add(tilted); quad.dispose();
+    throws(() => world.raycast(ray), InternalError, "raycast throws while stale");
+    world.update();
+    let hit = world.raycast(ray);
+    assert(hit && hit.node === near && close(hit.distance, 8) && close(hit.z, 2) && close(hit.nz, 1) && hit.triangle >= 0,
+        "nearest triangle hit, normal facing the ray");
+    near.visible = false; world.update();
+    hit = world.raycast(ray, undefined, undefined, reuse);
+    assert(hit === reuse && hit.node === far && close(hit.distance, 12), "hidden nodes are skipped, out reused");
+    assert(world.raycast(ray, 11) === null, "maxDistance limits hits");
+    near.visible = true; world.update();
+    const offAxis = {x: .5, y: .4, z: 10, dx: 0, dy: 0, dz: -1};
+    assert(world.raycast(offAxis).node === near, "inside the quad, upper triangle");
+    const gap = {x: 1.5, y: 0, z: 10, dx: 0, dy: 0, dz: -1};
+    assert(world.raycast(gap) === null, "precise rays miss outside the triangles");
+    const side = {x: 5, y: .5, z: 10, dx: 0, dy: 0, dz: -2};
+    hit = world.raycast(side);
+    assert(hit.node === tilted && close(hit.distance, 10) && close(hit.nz, Math.SQRT1_2) && close(hit.nx, Math.SQRT1_2),
+        "world transform applies to triangles and normals");
+    hit = world.raycast(side, undefined, {precise: false});
+    assert(hit.node === tilted && hit.triangle === -1 && hit.distance < 10 && close(hit.nz, 1), "AABB mode");
+    throws(() => world.raycast({x: 0, y: 0, z: 0, dx: 0, dy: 0, dz: 0}), RangeError, "zero direction");
+    throws(() => world.raycast({x: 0, y: 0}), TypeError, "ray needs all fields");
+    throws(() => world.raycast(ray, -1), RangeError, "negative maxDistance");
+    throws(() => world.raycast(ray, 1, {precise: 1}), TypeError, "precise must be a boolean");
+    let found = world.queryBox(-2, -2, -3, 2, 2, 3);
+    assert(found.length === 2 && found[0] === near && found[1] === far, "queryBox in traversal order");
+    const list = [tilted, tilted, tilted];
+    assert(world.queryBox(4, -1, -1, 6, 1, 1, list) === list && list.length === 1 && list[0] === tilted, "queryBox refills out");
+    assert(world.queryBox(50, 50, 50, 60, 60, 60).length === 0, "empty box query");
+    throws(() => world.queryBox(1, 0, 0, 0, 1, 1), RangeError, "inverted box");
+    throws(() => world.queryBox(0, 0, 0, 1, 1, 1, {}), TypeError, "queryBox out must be an Array");
+    const many = new Scene3D.Node(), tri = Model3D.Mesh.fromGeometry({positions: new Float32Array([0,0,0, .1,0,0, 0,.1,0])});
+    for (let i = 0; i < 100; i++) many.add(new Scene3D.Node(tri).setPosition(i * .01, 0, 30));
+    world.root.add(many); tri.dispose(); world.update();
+    assert(world.queryBox(-1, -1, 29, 2, 1, 31).length === 100, "queryBox beyond the stack buffer");
+    world.dispose(); cam.dispose();
 }
 console.log("Scene3D tests passed (" + checks + " checks)");

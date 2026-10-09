@@ -532,6 +532,7 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *model,
         AthenaMatrix4 gpu_view=camera->view_projection,clip_matrix;
         for(int i=1;i<16;i+=4) gpu_view.value[i]=-gpu_view.value[i];
         ath_matrix4_multiply(&clip_matrix,&gpu_view,model);
+        stats->cpu_clip_objects++;
         result=athena_render3d_clip_mesh_textured(mesh,&clip_matrix,&shade,submit_clipped,&submission,stats);
         if(result<0) athena_render3d_set_error_detail("clipping failed: non-finite clip coordinates or UVs beyond Model3D.UV_LIMIT");
     }
@@ -673,6 +674,7 @@ int athena_render3d_draw(AthenaInstance3D *instance,AthenaCamera3D *camera,
 }
 void athena_render3d_module_shutdown(void) {
     athena_render3d_group_end();
+    athena_render3d_frame_stats(NULL,1);
     owl_wait_generation(owl_flush_generation());
     dma_drain(1); free(retained); retained=NULL; retained_capacity=0;
     if(program) { vu_mpg_unload(program); program=NULL; }

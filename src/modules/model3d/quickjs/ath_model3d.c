@@ -33,6 +33,11 @@ static JSValue wrap_mesh(JSContext *ctx,AthenaMesh3D *m) {
     if(JS_IsException(obj)) { athena_mesh3d_release(m); return obj; }
     JS_SetOpaque(obj,m); return obj;
 }
+JSValue athena_mesh3d_js_wrap(JSContext *ctx,AthenaMesh3D *m) {
+    if(!m) return JS_ThrowTypeError(ctx,"Expected a native mesh");
+    if(!mesh_id) { athena_mesh3d_release(m); return JS_ThrowInternalError(ctx,"Model3D is not initialized"); }
+    return wrap_mesh(ctx,m);
+}
 /* path: the file being loaded, or NULL. The loader's detail names the
  * exact cause (e.g. "material 'Glass': alphaMode BLEND is not supported"). */
 static JSValue throw_load(JSContext *ctx,int result,const char *path) {
