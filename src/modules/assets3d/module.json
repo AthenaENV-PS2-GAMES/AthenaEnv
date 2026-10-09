@@ -1,0 +1,23 @@
+{
+  "id": "assets3d",
+  "name": "Assets3D",
+  "description": "3D asset kinds for Scene.Assets manifests (meshes, textures3d, gltf): reference counted, disposed when unused, loaded between frames within a time budget. Written in JavaScript.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [
+      "scene",
+      "model3d"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/assets3d.js",
+    "module_name": "Assets3D",
+    "global_alias": "Assets3D"
+  },
+  "types": "assets3d.d.ts"
+}

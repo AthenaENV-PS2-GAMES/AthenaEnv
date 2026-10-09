@@ -56,6 +56,7 @@ JSModuleDef *athena_noise_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_profiler_js_init(JSContext *ctx);
 JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
+JSModuleDef *athena_savegame_js_init(JSContext *ctx);
 void athena_debug3d_js_cleanup(JSContext *ctx);
 void athena_profiler_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
@@ -383,6 +384,10 @@ static const struct {
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },
     { "Profiler", "../src/modules/profiler/js/profiler.js" },
+    { "Input", "../src/modules/input/js/input.js" },
+    { "Replay", "../src/modules/replay/js/replay.js" },
+    { "SaveGame", "../src/modules/savegame/js/savegame.js" },
+    { "Assets3D", "../src/modules/assets3d/js/assets3d.js" },
     { "Scene", "../src/modules/scene/js/scene.js" },
     { "Draw", "../tests/js/stub/Draw.js" },
 #ifndef RUNNER_REAL_FONT
@@ -565,6 +570,7 @@ static int run_script(int argc, char **argv) {
     athena_debug_init(ctx);
     athena_profiler_js_init(ctx);
     athena_debug3d_js_init(ctx);
+    athena_savegame_js_init(ctx);
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);

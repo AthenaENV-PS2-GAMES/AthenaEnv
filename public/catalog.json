@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-09T12:52:50.369Z",
+  "generatedAt": "2026-10-09T13:27:47.160Z",
   "modules": [
     {
       "id": "animation3d",
@@ -49,6 +49,28 @@
       "global_alias": "Archive",
       "api": {
         "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "assets3d",
+      "name": "Assets3D",
+      "description": "3D asset kinds for Scene.Assets manifests (meshes, textures3d, gltf): reference counted, disposed when unused, loaded between frames within a time budget. Written in JavaScript.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "scene",
+          "model3d"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Assets3D",
+      "api": {
+        "native": false,
         "quickjs": true
       }
     },
@@ -554,6 +576,27 @@
       }
     },
     {
+      "id": "input",
+      "name": "Input",
+      "description": "Named actions and axes over Gamepad snapshots (or any source): buttons with edges, digital axes, sticks with dead zone, curve, sensitivity, inversion and d-pad fallback, rebinding and saved bindings. Written in JavaScript.",
+      "category": "Input",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "gamepad"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Input",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
       "id": "iop",
       "name": "IOP",
       "description": "IOP module discovery, loading, reset, and memory statistics.",
@@ -922,6 +965,46 @@
         "ee_libs": []
       },
       "global_alias": "Render3D",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "replay",
+      "name": "Replay",
+      "description": "Frame-by-frame recording and playback of controller input with a seed, in a compact binary format, for reproducible bugs, regression tests, attract demos and benchmarks. Written in JavaScript.",
+      "category": "Game",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Replay",
+      "api": {
+        "native": false,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "savegame",
+      "name": "SaveGame",
+      "description": "Versioned, checksummed save slots on the Memory Card with atomic background writes, migrations, optional gzip (Archive) and the browser icon. JavaScript over a small C codec (CRC-32, UTF-8).",
+      "category": "System",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "memcard"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "SaveGame",
       "api": {
         "native": true,
         "quickjs": true

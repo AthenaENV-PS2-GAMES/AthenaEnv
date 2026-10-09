@@ -1,0 +1,20 @@
+{
+  "id": "replay",
+  "name": "Replay",
+  "description": "Frame-by-frame recording and playback of controller input with a seed, in a compact binary format, for reproducible bugs, regression tests, attract demos and benchmarks. Written in JavaScript.",
+  "category": "Game",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/replay.js",
+    "module_name": "Replay",
+    "global_alias": "Replay"
+  },
+  "types": "replay.d.ts"
+}

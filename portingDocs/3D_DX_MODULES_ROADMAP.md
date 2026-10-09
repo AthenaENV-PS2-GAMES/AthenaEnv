@@ -1,9 +1,9 @@
 # Roadmap de novos modulos para jogos 3D (developer experience e voxel)
 
 Proposta de modulos novos que aumentam a produtividade de quem faz jogos 3D
-com o AthenaEnv, incluindo um modulo nativo de voxel. A Fase 1 foi
-implementada em 2026-10-09 (secao 3 e "Registro da Fase 1"); os demais itens
-seguem propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
+com o AthenaEnv, incluindo um modulo nativo de voxel. As Fases 1 e 2
+foram implementadas em 2026-10-09 (registros nas secoes 3 e 4); os demais
+itens seguem propostos. Todos seguem `NEW_MODULE_DIRECTIVES.md` e sao
 **aditivos** (diretorio novo em `src/modules/<id>/` com `module.json`), salvo
 quando marcado como "extensao de modulo existente".
 
@@ -226,7 +226,50 @@ Estes tres sao mudancas pequenas em modulos existentes, nao modulos novos.
 
 ## 4. Fase 2: fluxo de jogo
 
-### 4.1 `input`: mapa de acoes (PROPOSTO)
+### Registro da Fase 2 (2026-10-09)
+
+Quatro modulos novos, opt-in, sem mudar a selecao de modulos do repositorio
+(build de validacao numa copia com `configure` incluindo os novos, `gltf3d`,
+`animation3d` e `archive`). Validacao:
+
+- testes host (Docker `js-tests`): `input_test.js` (33), `replay_test.js`
+  (15), `savegame_test.js` (23, cartao falso do runner) e
+  `assets3d_test.js` (11, dois runtimes) passam, com o resto da suite;
+- PCSX2 2.8.2: os quatro testes passam; o SaveGame gravou, listou, leu e
+  removeu no Memory Card emulado com o gzip real do `Archive`; o Replay
+  gravou e leu o arquivo no host fs;
+- PS2 real: **pendente**.
+
+Numeros MEDIDOS no PCSX2 (`Date.now()` sobre 2.000 repeticoes):
+
+| Medida | Primeira versao | Otimizada |
+|---|---|---|
+| `Input.Map.update`, preset `shooter` (9 acoes, 2 sticks) | 648 us | 217 us |
+| `Replay.Recorder.capture`, 1 jogador | 221 us | 75 us |
+| `SaveGame.encode`, 7 KB de JSON (-> 1,5 KB gzip) | 120 ms | 40 ms |
+| `SaveGame.load` do mesmo save | 315 ms | 28 ms |
+| `SaveGame.save` (escrita atomica no cartao, em worker) | - | 488 ms |
+
+As otimizacoes: laços indexados sem iteradores, nada alocado por frame,
+tabela para os sticks do Replay, e UTF-8/CRC-32 em C no SaveGame
+(`SaveGameNative`). O `encode` ainda roda na thread principal
+(`JSON.stringify` + gzip nivel 9); o `save` em si nao trava os frames.
+Proximo passo do `input`, se 217 us por frame pesar: o nucleo do
+`update()` em C (o roadmap ja previa "nativo leve").
+
+### 4.1 `input`: mapa de acoes (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/input/` (JS, depende de `gamepad`).
+> API final: `Input.button(...masks)` (cada mascara e uma combinacao; varias
+> sao alternativas), `Input.axis(neg, pos)`, `Input.stick(side, {deadZone,
+> curve, sensitivity, invertX, invertY, dpad})`, `Input.preset("platformer"
+> | "shooter" | "menu")`, `new Input.Map(bindings, {player | source})` com
+> `update`, `pressed`, `justPressed`, `justReleased`, `heldFrames`, `value`,
+> `axis` (objeto reusado), `x`, `y`, `rebind`, `bindings()`/`load()`
+> (dados simples, para salvar com o SaveGame) e `setSource()` (Replay ou
+> dublê de teste). As bordas sao do proprio Map, entao funcionam com
+> qualquer fonte. O Map zera o `deadzone` do jogador do Gamepad e aplica o
+> de cada stick. Sem triggers analogicos por pressao nesta versao.
 
 - **Objetivo:** acoes e eixos nomeados sobre o `gamepad`, com presets.
 - **Usos:** controles de FPS e terceira pessoa, menus, rebinding nas
@@ -247,7 +290,18 @@ Estes tres sao mudancas pequenas em modulos existentes, nao modulos novos.
   `double` por frame).
 - **Esforco:** 1 semana.
 
-### 4.2 `assets3d`: carga 3D gerenciada (PROPOSTO)
+### 4.2 `assets3d`: carga 3D gerenciada (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/assets3d/` (JS, depende de `scene` e
+> `model3d`; `gltf` usa o GLTF3D quando presente). Tipos `meshes`,
+> `textures3d` (com `upload: true` para residir na VRAM durante o loading)
+> e `gltf` no `Scene.Assets`, com contagem de referencias e `dispose` no
+> ultimo holder (gltf: clips, nos e raiz destacada). **Diferenca do
+> esboco:** o parse continua sincrono; as cargas entram numa fila executada
+> entre frames dentro de `budgetMs` (padrao 8 ms, ao menos uma por frame),
+> por um sistema do Loop ou `Assets3D.update()`. `Model3D.loadMemory` +
+> leitura em worker (`Thread.readFileAsync`) ficam **PENDENTE**: exigem
+> mudar os loaders nativos (OBJ/glTF/PNG a partir de memoria).
 
 - **Objetivo:** tipos `mesh`, `gltf` e `texture3d` no `Scene.Assets`, com
   contagem de referencias, carga em segundo plano e tela de loading.
@@ -262,7 +316,18 @@ Estes tres sao mudancas pequenas em modulos existentes, nao modulos novos.
   uma variante `Model3D.loadMemory` (extensao pequena).
 - **Esforco:** 1 semana.
 
-### 4.3 `savegame` (PROPOSTO)
+### 4.3 `savegame` (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/savegame/` (JS + codec C pequeno;
+> depende de `memcard`, usa `Archive` se estiver no build). API final:
+> `define({directory, title, icon, version, migrate, compress, port})`,
+> `await save(slot, data, {title})`, `await load(slot)` (null se vazio),
+> `await remove(slot)`, `exists`, `list`, `status`, `encode`/`decode`,
+> `crc32`. Formato: cabecalho "ASAV" + versao dos dados + tamanho + CRC-32,
+> payload JSON (gzip opcional); escrita `atomic` em worker. Erros
+> `SaveGame.Error` com `code` (os do MemoryCard + CORRUPT, NEWER_VERSION,
+> OLD_VERSION, NOT_DEFINED, NOT_AVAILABLE). Sem icone, nao grava
+> `icon.sys` (o save nao aparece no navegador do PS2).
 
 - **Objetivo:** slots de save com versao, migracao, compressao e icone.
 - **Usos:** progresso, configuracoes, rebinding, regioes alteradas de um
@@ -276,7 +341,18 @@ Estes tres sao mudancas pequenas em modulos existentes, nao modulos novos.
 - **Implementacao:** JS sobre `memcard` + `archive`.
 - **Esforco:** 3-5 dias.
 
-### 4.4 `replay`: gravacao e reproducao de entrada (PROPOSTO)
+### 4.4 `replay`: gravacao e reproducao de entrada (VALIDAR NO HW)
+
+> **Implementado** em `src/modules/replay/` (JS, sem dependencias).
+> `new Replay.Recorder(sources, {seed, maxFrames})` com `capture()`,
+> `source(i)` (valores quantizados como gravados, para o jogo ler os mesmos
+> valores ao gravar e ao reproduzir), `toArrayBuffer()`, `save(path)`;
+> `Replay.load(path)` / `new Replay.Playback(buffer)` com `advance()`,
+> `source(i)`, `seed`, `restart()`. Formato "ARPL": 16 bytes de cabecalho +
+> 6 bytes por jogador por frame (1 h a 60 Hz com 1 jogador = 1,3 MB). O
+> teste confirma que a reproducao repete a execucao gravada quadro a
+> quadro. O `seed` e so armazenado: o jogo semeia seus geradores
+> (`Random.seed(play.seed)`), sem acoplar o modulo ao `random`.
 
 - **Objetivo:** gravar acoes/entradas por frame mais a seed e reproduzi-las.
 - **Usos:** reproduzir bugs, testes de regressao visual e de logica, demos

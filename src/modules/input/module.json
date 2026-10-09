@@ -1,0 +1,22 @@
+{
+  "id": "input",
+  "name": "Input",
+  "description": "Named actions and axes over Gamepad snapshots (or any source): buttons with edges, digital axes, sticks with dead zone, curve, sensitivity, inversion and d-pad fallback, rebinding and saved bindings. Written in JavaScript.",
+  "category": "Input",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "dependencies": {
+    "modules": [
+      "gamepad"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/input.js",
+    "module_name": "Input",
+    "global_alias": "Input"
+  },
+  "types": "input.d.ts"
+}
