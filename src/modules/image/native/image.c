@@ -406,11 +406,10 @@ bool athena_image_lock(AthenaImage *image)
 		return true;
 
 	/*
-	 * Locking must leave the texture resident. An asynchronous bind only
-	 * queues an upload; its VIF marker is normally emitted by draw_image().
-	 * Since a locked texture is already treated as resident by subsequent
-	 * draws, that marker would never be emitted and the upload could remain
-	 * pending forever.
+	 * Locking must leave the texture resident. The synchronous bind returns
+	 * once the upload was sent: a video texture's asynchronous bind would
+	 * only queue a MARK upload that the draws of a locked texture never
+	 * emit.
 	 */
 	result = graphics_surface_bind_sync(image->surface);
 	if (result == GRAPHICS_BIND_ERROR)

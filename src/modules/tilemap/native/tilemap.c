@@ -7,6 +7,7 @@
 
 #include <athena/graphics.h>
 #include <athena/graphics/owl_packet.h>
+#include <athena/graphics/texture_manager.h>
 #include <athena/graphics/mpg_manager.h>
 #include <athena/graphics/vif.h>
 
@@ -205,18 +206,7 @@ static void tilemap_flush(void)
 static void tilemap_upload_tags(owl_packet *packet, int texture_id)
 {
 	owl_add_cnt_tag(packet, 4, 0);
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-	owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-	owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-	owl_add_tag(packet, GIF_NOP, 0);
-
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+	texture_manager_add_mark(packet, texture_id);
 }
 
 /* Sets TEX0/TEX1 once earlier draws, which may use another texture, end. */

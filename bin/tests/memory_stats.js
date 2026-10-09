@@ -54,6 +54,7 @@ function refresh() {
         [WHITE, "  Used             " + kb(vramUsed) + "   " + pct(vramUsed, vramTotal)],
         [WHITE, "    static         " + kb(Screen.getMemoryStats(Screen.VRAM_USED_STATIC))],
         [WHITE, "    dynamic        " + kb(Screen.getMemoryStats(Screen.VRAM_USED_DYNAMIC))],
+        [WHITE, "  Uploaded/frame   " + kb(Screen.getMemoryStats(Screen.VRAM_UPLOADED))],
         [GRAY, "Heap: every malloc on the EE; js is the QuickJS share of it."],
     ];
 }

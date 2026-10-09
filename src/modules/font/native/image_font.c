@@ -271,25 +271,16 @@ void athena_font_print_scaled(GSCONTEXT *gsGlobal, GSFONT *gsFont, float X, floa
 		}
 
 		texture_id = texture_manager_bind(gsGlobal, gsFont->Texture, true);
-		
+		if (texture_id == GRAPHICS_BIND_ERROR)
+			return;
+
 		int text_vert_size = printable_chars * 2;
-		packet = owl_query_packet(CHANNEL_VIF1, (texture_id != -1 ? 12 : 8) + text_vert_size);
+		packet = owl_query_packet(CHANNEL_VIF1, (texture_id >= 0 ? 12 : 8) + text_vert_size);
 
-		owl_add_cnt_tag(packet, (texture_id != -1 ? 11 : 7) + text_vert_size, 0);
+		owl_add_cnt_tag(packet, (texture_id >= 0 ? 11 : 7) + text_vert_size, 0);
 
-		if (texture_id != -1) {
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
-			owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
-
-			owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
-			owl_add_tag(packet, GIF_NOP, 0);
-
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-			owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
-			owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+		if (texture_id >= 0) {
+			texture_manager_add_mark(packet, texture_id);
 		}
 
 		owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
