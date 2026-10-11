@@ -51,7 +51,8 @@ declare namespace TileMap {
 
     /**
      * Tileset geometry. Tile `id` is the cell at column `id % columns`, row
-     * `Math.floor(id / columns)` of the atlas texture.
+     * `Math.floor(id / columns)` of the atlas texture, starting at texel
+     * `margin + column * (tileWidth + spacing)` (likewise for rows).
      */
     interface Atlas {
         tileWidth: number;
@@ -59,6 +60,15 @@ declare namespace TileMap {
         columns: number;
         /** When set, tile ids must be below `columns * rows`. */
         rows?: number;
+        /**
+         * Texels around the atlas edge. Default 0. For an extruded atlas
+         * (tiles padded by `e` texels of their own border, so LINEAR
+         * filtering at fractional zoom does not bleed neighbours) use
+         * `margin: e` and `spacing: 2 * e`.
+         */
+        margin?: number;
+        /** Texels between neighbouring tiles. Default 0. */
+        spacing?: number;
     }
 
     interface DescriptorOptions {

@@ -283,8 +283,10 @@ float *athena_tilemap_atlas_table(const AthenaTileAtlas *atlas)
 	if (!table)
 		return NULL;
 	for (id = 0; id < count; ++id) {
-		table[2 * id] = (float)((id % atlas->columns) * atlas->tile_width);
-		table[2 * id + 1] = (float)((id / atlas->columns) * atlas->tile_height);
+		table[2 * id] = (float)(atlas->margin + (id % atlas->columns) *
+			(atlas->tile_width + atlas->spacing));
+		table[2 * id + 1] = (float)(atlas->margin + (id / atlas->columns) *
+			(atlas->tile_height + atlas->spacing));
 	}
 	return table;
 }
@@ -294,6 +296,9 @@ typedef struct {
 	const AthenaTileAtlas *atlas;
 	float tile_width;
 	float tile_height;
+	float margin;
+	float step_x;
+	float step_y;
 	float width;
 	float height;
 } TileLookup;
@@ -304,6 +309,9 @@ static void tilemap_lookup_init(TileLookup *lookup,
 	lookup->atlas = atlas;
 	lookup->tile_width = (float)atlas->tile_width;
 	lookup->tile_height = (float)atlas->tile_height;
+	lookup->margin = (float)atlas->margin;
+	lookup->step_x = (float)(atlas->tile_width + atlas->spacing);
+	lookup->step_y = (float)(atlas->tile_height + atlas->spacing);
 	lookup->width = width;
 	lookup->height = height;
 }
@@ -325,8 +333,8 @@ static inline void tilemap_point_at_tile(AthenaTileSprite *sprite,
 		u = atlas->uv[2 * id];
 		v = atlas->uv[2 * id + 1];
 	} else {
-		u = (float)((id % atlas->columns) * atlas->tile_width);
-		v = (float)((id / atlas->columns) * atlas->tile_height);
+		u = lookup->margin + (float)(id % atlas->columns) * lookup->step_x;
+		v = lookup->margin + (float)(id / atlas->columns) * lookup->step_y;
 	}
 	sprite->u1 = u;
 	sprite->v1 = v;

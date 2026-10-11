@@ -79,6 +79,12 @@ typedef struct {
 	/* 0 when unknown; otherwise ids must be below columns * rows. */
 	uint32_t rows;
 	/*
+	 * Texels around the whole atlas and between tiles (extruded atlases).
+	 * Tile (c, r) starts at margin + c * (tile_width + spacing).
+	 */
+	uint32_t margin;
+	uint32_t spacing;
+	/*
 	 * Optional (u, v) pairs per tile id, from athena_tilemap_atlas_table().
 	 * The EE has no fast integer divide, so looking tiles up here instead of
 	 * computing id / columns and id % columns makes setTiles about 3x faster.

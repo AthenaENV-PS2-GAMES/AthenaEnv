@@ -515,7 +515,11 @@ static int descriptor_atlas(JSContext *ctx, TileMapDescriptor *descriptor,
         tilemap_uint_property(ctx, atlas, "columns", 1,
             TILEMAP_MAX_ATLAS, false, &descriptor->atlas.columns, name) &&
         tilemap_uint_property(ctx, atlas, "rows", 1,
-            TILEMAP_MAX_ATLAS, true, &descriptor->atlas.rows, name);
+            TILEMAP_MAX_ATLAS, true, &descriptor->atlas.rows, name) &&
+        tilemap_uint_property(ctx, atlas, "margin", 0,
+            TILEMAP_MAX_ATLAS, true, &descriptor->atlas.margin, name) &&
+        tilemap_uint_property(ctx, atlas, "spacing", 0,
+            TILEMAP_MAX_ATLAS, true, &descriptor->atlas.spacing, name);
     JS_FreeValue(ctx, atlas);
     if (valid && descriptor->atlas.rows > 0 &&
         descriptor->atlas.columns * descriptor->atlas.rows >
@@ -594,6 +598,10 @@ static JSValue descriptor_get(JSContext *ctx, JSValueConst this_val,
         if (descriptor->atlas.rows > 0)
             JS_DefinePropertyValueStr(ctx, atlas, "rows",
                 JS_NewUint32(ctx, descriptor->atlas.rows), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, atlas, "margin",
+            JS_NewUint32(ctx, descriptor->atlas.margin), JS_PROP_C_W_E);
+        JS_DefinePropertyValueStr(ctx, atlas, "spacing",
+            JS_NewUint32(ctx, descriptor->atlas.spacing), JS_PROP_C_W_E);
         return atlas;
     }
     textures = JS_NewArray(ctx);
