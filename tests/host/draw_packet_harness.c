@@ -45,6 +45,19 @@ int graphics_surface_bind(GSSURFACE *s,bool async) {
 int texture_manager_bind(GSCONTEXT *c,GSSURFACE *s,bool async) {
     (void)c; return graphics_surface_bind(s,async);
 }
+/* Same packet as texture_manager.c: the mark that ends a texture's use. */
+void texture_manager_add_mark(owl_packet *packet, int texture_id) {
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
+    owl_add_uint(packet, VIF_CODE(2, 0, VIF_DIRECT, 0));
+    owl_add_tag(packet, GIF_AD, GIFTAG(1, 1, 0, 0, 0, 1));
+    owl_add_tag(packet, GIF_NOP, 0);
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSHA, 0));
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
+    owl_add_uint(packet, VIF_CODE(texture_id, 0, VIF_MARK, 0));
+    owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 1));
+}
 void athena_set_tw_th(const GSSURFACE *s,int *w,int *h) { (void)s; *w=*h=8; }
 void flush_gs_texcache(void) {}
 float athena_sinf(float x) { return sinf(x); }

@@ -1,3 +1,4 @@
+#pragma once
 #include "../../../3d_stubs/athena/graphics/owl_packet.h"
 #define VIF_MARK 7
 /* Match the production fixed-point/clamping conversions for glyph positions. */
