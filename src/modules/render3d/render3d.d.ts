@@ -51,6 +51,14 @@ declare namespace Render3D {
     /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
      * since the last reset (with or without per-call stats). `reset`
      * (default true) clears them, so call it once per frame. */
+    /** Linear RGB multiplier in [0, 1] (white by default) applied to the vertex colors of every
+     * following draw, after lighting and before fog: clamp(color * lighting) * tint, or
+     * color * tint for UNLIT. The mesh's colors are not touched and no VU1 time is added (one
+     * constant quad per object, sent when it changes). Global state: set it before each draw or
+     * group that needs another tint, and restore white (1, 1, 1). Texture/vertex alpha are
+     * unaffected. Throws RangeError for a component outside [0, 1]. */
+    function setTint(r: number, g: number, b: number): void;
+    function getTint(): [number, number, number];
     function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
     /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
      * camera, program and texture skip the barrier, program upload, camera

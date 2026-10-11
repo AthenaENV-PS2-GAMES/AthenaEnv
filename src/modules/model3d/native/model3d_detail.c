@@ -22,3 +22,16 @@ void athena_model3d_detail_context(const char *format,...) {
     snprintf(merged,sizeof(merged),detail[0]?"%s: %s":"%s",context,detail);
     memcpy(detail,merged,sizeof(detail));
 }
+
+#if defined(__mips__)
+#define LOADER_TICKS_PER_MS 294912.0f
+uint32_t athena_model3d_clock(void) { uint32_t count; __asm__ __volatile__("mfc0 %0, $9" : "=r"(count)); return count; }
+#else
+#include <time.h>
+#define LOADER_TICKS_PER_MS 1000.0f
+uint32_t athena_model3d_clock(void) {
+    struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
+    return (uint32_t)((uint64_t)ts.tv_sec*1000000u+(uint64_t)ts.tv_nsec/1000u);
+}
+#endif
+float athena_model3d_clock_ms(uint32_t ticks) { return (float)ticks/LOADER_TICKS_PER_MS; }

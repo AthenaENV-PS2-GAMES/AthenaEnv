@@ -267,6 +267,174 @@ int athena_meshbuilder_heightmap(AthenaMeshBuilder *b,const float *h,uint32_t w,
     }
     return 0;
 }
+
+/* ---- Extrusion ---- */
+static const char *extrude_detail="";
+const char *athena_meshbuilder_error_detail(void) { return extrude_detail; }
+static int reject(const char *why) { extrude_detail=why; return ATHENA_MESHBUILDER_EINVAL; }
+/* y component of (b - a) x (c - a): positive when a, b, c turn counter-clockwise seen from +Y. */
+static float orient2(const float *a,const float *b,const float *c) {
+    return (b[1]-a[1])*(c[0]-a[0])-(b[0]-a[0])*(c[1]-a[1]);
+}
+static int on_segment(const float *a,const float *b,const float *p) {   /* p collinear with a-b */
+    return p[0]>=fminf(a[0],b[0])&&p[0]<=fmaxf(a[0],b[0])&&p[1]>=fminf(a[1],b[1])&&p[1]<=fmaxf(a[1],b[1]);
+}
+static int segments_touch(const float *a,const float *b,const float *c,const float *d) {
+    float o1=orient2(a,b,c),o2=orient2(a,b,d),o3=orient2(c,d,a),o4=orient2(c,d,b);
+    if(((o1>0&&o2<0)||(o1<0&&o2>0))&&((o3>0&&o4<0)||(o3<0&&o4>0))) return 1;
+    if(o1==0&&on_segment(a,b,c)) return 1;
+    if(o2==0&&on_segment(a,b,d)) return 1;
+    if(o3==0&&on_segment(c,d,a)) return 1;
+    if(o4==0&&on_segment(c,d,b)) return 1;
+    return 0;
+}
+/* Points are stored as (x, z) pairs, so "2D" below is the (x, z) plane and orient2 is the y of the 3D cross product. */
+static int in_triangle(const float *a,const float *b,const float *c,const float *p) {
+    return orient2(a,b,p)>=0&&orient2(b,c,p)>=0&&orient2(c,a,p)>=0;
+}
+int athena_meshbuilder_extrude(AthenaMeshBuilder *b,const float *xz,uint32_t count,float y,const float ext[3],uint32_t flags) {
+    extrude_detail="";
+    if(!b||!xz||!ext) return reject("missing argument");
+    if(count<3) return reject("a contour needs at least 3 points");
+    if(count>ATHENA_MESHBUILDER_MAX_CONTOUR) return reject("too many contour points");
+    if(flags&~(ATHENA_EXTRUDE_CAP_START|ATHENA_EXTRUDE_CAP_END|ATHENA_EXTRUDE_SMOOTH)) return reject("unknown flags");
+    if(!athena_float_isfinite(y)||!finite_n(ext,3)||!finite_n(xz,(int)(count*2))) return reject("non-finite value");
+    float elen=sqrtf(ext[0]*ext[0]+ext[1]*ext[1]+ext[2]*ext[2]);
+    if(!(fabsf(ext[1])>1e-6f*elen)||!(elen>0)||!athena_float_isfinite(elen)) return reject("the extrusion must leave the contour plane (y component not zero)");
+    float minx=xz[0],maxx=xz[0],minz=xz[1],maxz=xz[1];
+    for(uint32_t i=1;i<count;i++) {
+        if(xz[i*2]<minx) minx=xz[i*2];
+        if(xz[i*2]>maxx) maxx=xz[i*2];
+        if(xz[i*2+1]<minz) minz=xz[i*2+1];
+        if(xz[i*2+1]>maxz) maxz=xz[i*2+1];
+    }
+    float width=maxx-minx,depth=maxz-minz,scale=width>depth?width:depth;
+    if(!(scale>0)||!(width>0)||!(depth>0)) return reject("degenerate contour (zero width or depth)");
+    if(!athena_float_isfinite(scale)) return reject("non-finite value");
+    float eps=scale*1e-6f;
+    /* Counter-clockwise (normal +Y) working copy, via Newell's area (accumulated in double: the sum cancels). */
+    double area=0;
+    for(uint32_t i=0;i<count;i++) { uint32_t j=(i+1)%count; area+=((double)xz[i*2+1]-xz[j*2+1])*((double)xz[i*2]+xz[j*2]); }
+    if(!(fabs(area)>1e-9*(double)scale*scale)) return reject("zero area");
+    float *pts=malloc((size_t)count*2*sizeof(float)); uint32_t *idx=malloc((size_t)count*sizeof(uint32_t)*4);
+    if(!pts||!idx) { free(pts); free(idx); return ATHENA_MESHBUILDER_ENOMEM; }
+    int ccw=area>0;
+    for(uint32_t i=0;i<count;i++) { uint32_t k=ccw?i:count-1-i; pts[i*2]=xz[k*2]; pts[i*2+1]=xz[k*2+1]; }
+    int code=0;
+    /* Repeated points and spikes. */
+    for(uint32_t i=0;i<count&&!code;i++) {
+        const float *a=&pts[((i+count-1)%count)*2],*c=&pts[i*2],*d=&pts[((i+1)%count)*2];
+        float abx=c[0]-a[0],abz=c[1]-a[1],bcx=d[0]-c[0],bcz=d[1]-c[1];
+        float lab=sqrtf(abx*abx+abz*abz),lbc=sqrtf(bcx*bcx+bcz*bcz);
+        if(lbc<=eps) { code=reject("repeated consecutive points (do not repeat the first point at the end)"); break; }
+        if(lab>eps&&fabsf(abx*bcz-abz*bcx)<=1e-6f*lab*lbc&&abx*bcx+abz*bcz<0) code=reject("the outline doubles back on itself (a spike)");
+    }
+    /* Edges may not cross or touch, except neighbours at their shared point. */
+    for(uint32_t i=0;i<count&&!code;i++) for(uint32_t j=i+2;j<count;j++) {
+        if(i==0&&j==count-1) continue;
+        if(segments_touch(&pts[i*2],&pts[((i+1)%count)*2],&pts[j*2],&pts[((j+1)%count)*2])) { code=reject("the outline crosses or touches itself"); break; }
+    }
+    uint32_t *cap=idx,*tris=idx+count,ntris=0,ncap=0;   /* tris: up to 3 * (count - 2) indices */
+    if(!code) {
+        for(uint32_t i=0;i<count;i++) {
+            const float *a=&pts[((i+count-1)%count)*2],*c=&pts[i*2],*d=&pts[((i+1)%count)*2];
+            float abx=c[0]-a[0],abz=c[1]-a[1],bcx=d[0]-c[0],bcz=d[1]-c[1];
+            float lab=sqrtf(abx*abx+abz*abz),lbc=sqrtf(bcx*bcx+bcz*bcz);
+            if(fabsf(abx*bcz-abz*bcx)<=1e-6f*lab*lbc) continue;   /* on a straight edge: not part of the caps */
+            cap[ncap++]=i;
+        }
+        if(ncap<3) code=reject("zero area");
+    }
+    if(!code) {
+        /* Ear clipping on the remaining ring (cap[] shrinks as ears are cut). */
+        uint32_t n=ncap,guard=0;
+        uint32_t i=0;
+        while(n>3&&guard<=n*n+8) {
+            uint32_t ip=(i+n-1)%n,in=(i+1)%n;
+            const float *a=&pts[cap[ip]*2],*c=&pts[cap[i]*2],*d=&pts[cap[in]*2];
+            int ear=orient2(a,c,d)>1e-9f*scale*scale;
+            for(uint32_t k=0;ear&&k<n;k++) {
+                if(k==ip||k==i||k==in) continue;
+                if(in_triangle(a,c,d,&pts[cap[k]*2])) ear=0;
+            }
+            if(ear) {
+                tris[ntris++]=cap[ip]; tris[ntris++]=cap[i]; tris[ntris++]=cap[in];
+                for(uint32_t k=i;k+1<n;k++) cap[k]=cap[k+1];
+                n--; guard=0; if(i>=n) i=0;
+            } else { i=(i+1)%n; guard++; }
+        }
+        if(n==3) { tris[ntris++]=cap[0]; tris[ntris++]=cap[1]; tris[ntris++]=cap[2]; }
+        else code=reject("the outline could not be triangulated");
+    }
+    if(code) { free(pts); free(idx); return code; }
+    int smooth=(flags&ATHENA_EXTRUDE_SMOOTH)!=0,cap_start=(flags&ATHENA_EXTRUDE_CAP_START)!=0,cap_end=(flags&ATHENA_EXTRUDE_CAP_END)!=0;
+    uint32_t side_verts=smooth?(count+1)*2:count*4,verts=side_verts+((cap_start?1:0)+(cap_end?1:0))*count;
+    uint32_t indices=count*6+((cap_start?1:0)+(cap_end?1:0))*ntris;
+    if(reserve(b,verts,indices)) { free(pts); free(idx); return ATHENA_MESHBUILDER_ENOMEM; }
+    /* Edge frames: wall normals pointing away from the interior, and u along the contour. */
+    float *wn=malloc((size_t)count*3*sizeof(float)),*cum=malloc((size_t)(count+1)*sizeof(float));
+    if(!wn||!cum) { free(wn); free(cum); free(pts); free(idx); return ATHENA_MESHBUILDER_ENOMEM; }
+    cum[0]=0;
+    for(uint32_t i=0;i<count;i++) {
+        const float *a=&pts[i*2],*c=&pts[((i+1)%count)*2];
+        float d[3]={c[0]-a[0],0,c[1]-a[1]};
+        float o[3]={-d[2],0,d[0]};                               /* d x (0,1,0): outward for a counter-clockwise outline */
+        float n[3]={d[1]*ext[2]-d[2]*ext[1],d[2]*ext[0]-d[0]*ext[2],d[0]*ext[1]-d[1]*ext[0]},len=sqrtf(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+        for(int k=0;k<3;k++) n[k]/=len;
+        if(n[0]*o[0]+n[1]*o[1]+n[2]*o[2]<0) for(int k=0;k<3;k++) n[k]=-n[k];
+        memcpy(&wn[i*3],n,sizeof(n));
+        cum[i+1]=cum[i]+sqrtf(d[0]*d[0]+d[2]*d[2]);
+    }
+    float total=cum[count];
+    uint32_t first;
+    /* A wall wound so that its front faces outward whichever way the extrusion points. */
+    #define WALL_TRI(p,q,r,flip) do { if(flip) tri(b,p,r,q); else tri(b,p,q,r); } while(0)
+    if(smooth) {
+        first=b->vcount;
+        for(uint32_t i=0;i<=count;i++) {
+            uint32_t k=i%count,pk=(k+count-1)%count;
+            float n[3]={wn[k*3]+wn[pk*3],wn[k*3+1]+wn[pk*3+1],wn[k*3+2]+wn[pk*3+2]},len=sqrtf(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]);
+            if(len>1e-6f) for(int r=0;r<3;r++) n[r]/=len; else memcpy(n,&wn[k*3],sizeof(n));
+            float lo[3]={pts[k*2],y,pts[k*2+1]},hi[3]={lo[0]+ext[0],lo[1]+ext[1],lo[2]+ext[2]},u=cum[i]/total;
+            put(b,lo,n,b->color,u,1); put(b,hi,n,b->color,u,0);
+        }
+        for(uint32_t i=0;i<count;i++) {
+            const float *a=&pts[i*2],*c=&pts[((i+1)%count)*2];
+            float d[3]={c[0]-a[0],0,c[1]-a[1]},cr[3]={d[1]*ext[2]-d[2]*ext[1],d[2]*ext[0]-d[0]*ext[2],d[0]*ext[1]-d[1]*ext[0]};
+            int flip=cr[0]*(-d[2])+cr[2]*d[0]<0;
+            uint32_t a0=first+i*2,a1=a0+1,b0=a0+2,b1=a0+3;       /* base/far of the edge's start and end */
+            WALL_TRI(a0,b0,b1,flip); WALL_TRI(a0,b1,a1,flip);
+        }
+    } else {
+        for(uint32_t i=0;i<count;i++) {
+            const float *a=&pts[i*2],*c=&pts[((i+1)%count)*2];
+            float la[3]={a[0],y,a[1]},lb[3]={c[0],y,c[1]};
+            float ha[3]={la[0]+ext[0],la[1]+ext[1],la[2]+ext[2]},hb[3]={lb[0]+ext[0],lb[1]+ext[1],lb[2]+ext[2]};
+            float d[3]={c[0]-a[0],0,c[1]-a[1]},cr[3]={d[1]*ext[2]-d[2]*ext[1],d[2]*ext[0]-d[0]*ext[2],d[0]*ext[1]-d[1]*ext[0]};
+            int flip=cr[0]*(-d[2])+cr[2]*d[0]<0;
+            first=b->vcount; const float *n=&wn[i*3];
+            put(b,la,n,b->color,cum[i]/total,1); put(b,lb,n,b->color,cum[i+1]/total,1);
+            put(b,hb,n,b->color,cum[i+1]/total,0); put(b,ha,n,b->color,cum[i]/total,0);
+            WALL_TRI(first,first+1,first+2,flip); WALL_TRI(first,first+2,first+3,flip);
+        }
+    }
+    #undef WALL_TRI
+    float up=ext[1]>0?1.0f:-1.0f;
+    for(int end=0;end<2;end++) {
+        if(!(end?cap_end:cap_start)) continue;
+        float n[3]={0,end?up:-up,0},oy=end?ext[1]:0;
+        first=b->vcount;
+        for(uint32_t i=0;i<count;i++) {
+            float p[3]={pts[i*2]+(end?ext[0]:0),y+oy,pts[i*2+1]+(end?ext[2]:0)};
+            put(b,p,n,b->color,(pts[i*2]-minx)/width,(pts[i*2+1]-minz)/depth);
+        }
+        /* tris are counter-clockwise from +Y: keep them when this cap faces +Y, reverse otherwise. */
+        int faces_up=n[1]>0;
+        for(uint32_t t=0;t<ntris;t+=3) { if(faces_up) tri(b,first+tris[t],first+tris[t+1],first+tris[t+2]); else tri(b,first+tris[t],first+tris[t+2],first+tris[t+1]); }
+    }
+    free(wn); free(cum); free(pts); free(idx);
+    return 0;
+}
 static int merge_mesh(AthenaMeshBuilder *b,const AthenaMesh3D *mesh);
 int athena_meshbuilder_merge(AthenaMeshBuilder *b,const AthenaMesh3D *mesh,const AthenaMatrix4 *model) {
     if(!b||!mesh) return ATHENA_MESHBUILDER_EINVAL;

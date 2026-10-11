@@ -99,12 +99,18 @@ static JSValue state(JSContext *ctx,JSValueConst self,int argc,JSValueConst *arg
     JS_SetPropertyStr(ctx,o,"zenith",rgb_value(ctx,s.zenith)); JS_SetPropertyStr(ctx,o,"horizon",rgb_value(ctx,s.horizon));
     JS_SetPropertyStr(ctx,o,"ground",rgb_value(ctx,s.ground)); JS_SetPropertyStr(ctx,o,"sunDirection",rgb_value(ctx,s.sun_direction));
     JS_SetPropertyStr(ctx,o,"sunColor",rgb_value(ctx,s.sun_color)); JS_SetPropertyStr(ctx,o,"ambient",rgb_value(ctx,s.ambient));
-    JS_SetPropertyStr(ctx,o,"light",rgb_value(ctx,s.light)); JS_SetPropertyStr(ctx,o,"lightDirection",rgb_value(ctx,s.light_direction));
+    JS_SetPropertyStr(ctx,o,"tint",rgb_value(ctx,s.tint)); JS_SetPropertyStr(ctx,o,"light",rgb_value(ctx,s.light)); JS_SetPropertyStr(ctx,o,"lightDirection",rgb_value(ctx,s.light_direction));
     return o;
+}
+/* tint(): the day/night RGB multiplier, for Render3D.setTint(...Sky.tint()). */
+static JSValue tint(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self; (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Sky.tint")) return JS_EXCEPTION;
+    AthenaSkyState s; athena_sky_get(&s); return rgb_value(ctx,s.tint);
 }
 static const JSCFunctionListEntry exports[]={
     JS_CFUNC_DEF("setColors",1,set_colors),JS_CFUNC_DEF("setSun",3,set_sun),JS_CFUNC_DEF("setTime",1,set_time),
     JS_CFUNC_DEF("apply",1,apply),JS_CFUNC_DEF("draw",1,draw),JS_CFUNC_DEF("colorAt",1,color_at),
-    JS_CFUNC_DEF("clearColor",0,clear_color),JS_CFUNC_DEF("state",0,state)};
+    JS_CFUNC_DEF("clearColor",0,clear_color),JS_CFUNC_DEF("state",0,state),JS_CFUNC_DEF("tint",0,tint)};
 static int init(JSContext *ctx,JSModuleDef *m) { return JS_SetModuleExportList(ctx,m,exports,countof(exports)); }
 JSModuleDef *athena_sky_js_init(JSContext *ctx) { return athena_push_module(ctx,init,exports,countof(exports),"Sky"); }

@@ -21,6 +21,7 @@ uint32_t athena_test_dma_address(uintptr_t address) {
     return dma_address_count;
 }
 static int flusha_tags,flushe_tags,model_uploads;
+static int tint_uploads; static float tint_last[3];
 static int parse_chains,position_chunks,color_chunks,clipped_chunks,clip_mode,normal_chunks,light_uploads,uv_chunks,textured_tags;
 static uint32_t geometry_bytes;
 static unsigned indexed_mode,indexed_unique,indexed_chunks,indexed_config_uploads;
@@ -158,6 +159,11 @@ static void parse_chain(owl_qword *p) {
             assert(count==1);
             giftag_t giftag={.data=payload[0].dword[0]}; prim_reg_t prim={.data=giftag.PRIM};
             if(prim.TME) { assert(!prim.FST); textured_tags++; }
+        }
+        if(cmd==0x6c&&dest==16&&!(code&(1u<<15))) {
+            assert(count==1);
+            for(unsigned i=0;i<3;i++) { assert(isfinite(payload[0].f[i])&&payload[0].f[i]>=0&&payload[0].f[i]<=255.f); tint_last[i]=payload[0].f[i]; }
+            tint_uploads++;
         }
         if(cmd==0x6c&&dest==10) {
             assert(count==6&&payload[5].sword[3]<=4);
@@ -440,6 +446,22 @@ int main(void) {
     athena_instance3d_release(instance);
     owl_wait_generation(owl_flush_generation());
     assert(stats.draw_passes==2&&stats.pipeline_passes==2&&flusha_tags==4&&!flushe_tags);
+    /* Tint: one constant quad per pass, white default = untextured scale 255. */
+    {
+        float t[3]; athena_render3d_get_tint(t); assert(t[0]==1&&t[1]==1&&t[2]==1);
+        assert(athena_render3d_set_tint(2,0,0)==-1&&athena_render3d_set_tint(NAN,0,0)==-1);
+        athena_render3d_get_tint(t); assert(t[0]==1);
+        tint_uploads=0; instance=athena_instance3d_create(inside_mesh);
+        assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+        owl_wait_generation(owl_flush_generation());
+        assert(tint_uploads==1&&tint_last[0]==255&&tint_last[1]==255&&tint_last[2]==255);
+        assert(athena_render3d_set_tint(.5f,.25f,0)==0);
+        assert(!athena_render3d_draw(instance,&camera,ATHENA_RENDER3D_CULL_NONE,&stats));
+        owl_wait_generation(owl_flush_generation());
+        assert(tint_uploads==2&&tint_last[0]==127.5f&&tint_last[1]==63.75f&&tint_last[2]==0);
+        assert(athena_render3d_set_tint(1,1,1)==0);
+        athena_instance3d_release(instance);
+    }
     /* Camera mutation and reinitialization at the same address must upload
      * new constants within a group. Unchanged and copied state can reuse. */
     {

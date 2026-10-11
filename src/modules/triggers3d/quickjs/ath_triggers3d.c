@@ -130,6 +130,36 @@ static JSValue occupants(JSContext *ctx,JSValueConst self,int argc,JSValueConst 
     for(int i=0;i<n&&!JS_IsException(arr);i++) JS_SetPropertyUint32(ctx,arr,(uint32_t)i,JS_NewInt32(ctx,ids[i]));
     return arr;
 }
+/* setGrid(cellSize, capacity): the optional broad phase; 0 turns it off. */
+static JSValue set_grid(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,2,2,"setGrid")) return JS_EXCEPTION;
+    float size; uint32_t capacity;
+    if(!athena_js_float(ctx,argv[0],&size,"cellSize")||!u32_arg(ctx,argv[1],&capacity)) return JS_EXCEPTION;
+    AthenaTriggers3D *t=get_world(ctx,self); if(!t) return JS_EXCEPTION;
+    if(!(size>=0)||capacity>65536) return JS_ThrowRangeError(ctx,"Triggers3D.setGrid: cellSize >= 0 and capacity 0 to 65536");
+    if(athena_triggers3d_set_grid(t,size,capacity)<0) return JS_ThrowOutOfMemory(ctx);
+    return JS_UNDEFINED;
+}
+/* setStay(zone, on) for a zone id >= 0, or the whole world with zone -1. */
+static JSValue set_stay(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,2,2,"setStay")) return JS_EXCEPTION;
+    int32_t id; if(!int_arg(ctx,argv[0],&id)) return JS_EXCEPTION;
+    int on=JS_ToBool(ctx,argv[1]);
+    AthenaTriggers3D *t=get_world(ctx,self); if(!t) return JS_EXCEPTION;
+    return code(ctx,id<0?athena_triggers3d_set_stay_all(t,on):athena_triggers3d_set_zone_stay(t,id,on),"Triggers3D stay");
+}
+static JSValue stats(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"stats")) return JS_EXCEPTION;
+    AthenaTriggers3D *t=get_world(ctx,self); if(!t) return JS_EXCEPTION;
+    AthenaTriggers3DStats s; athena_triggers3d_stats(t,&s);
+    const struct { const char *name; uint32_t v; } f[]={{"zones",s.zones},{"bodies",s.bodies},{"candidates",s.candidates},{"tested",s.tested},
+        {"events",s.events},{"stayEvents",s.stay_events},{"occupiedPairs",s.occupied_pairs},{"dirtyBodies",s.dirty_bodies},{"cells",s.cells},
+        {"entries",s.entries},{"largeBodies",s.large_bodies},{"largeZones",s.large_zones}};
+    JSValue o=JS_NewObject(ctx); if(JS_IsException(o)) return o;
+    for(unsigned i=0;i<countof(f);i++) JS_SetPropertyStr(ctx,o,f[i].name,JS_NewUint32(ctx,f[i].v));
+    return o;
+}
 static JSClassDef class_def={"Triggers3DNative.World",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("addZone",8,add_zone),JS_CFUNC_DEF("setZone",8,set_zone),JS_CFUNC_DEF("addBody",5,add_body),
@@ -137,10 +167,12 @@ static const JSCFunctionListEntry methods[]={
     JS_CFUNC_MAGIC_DEF("setZoneEnabled",2,set_value,0),JS_CFUNC_MAGIC_DEF("setMask",2,set_value,1),
     JS_CFUNC_MAGIC_DEF("setLayers",2,set_value,2),JS_CFUNC_MAGIC_DEF("zoneFollow",5,follow_fn,0),
     JS_CFUNC_MAGIC_DEF("bodyFollow",5,follow_fn,1),JS_CFUNC_DEF("update",1,update),JS_CFUNC_DEF("readEvents",1,read_events),
-    JS_CFUNC_DEF("inside",2,inside),JS_CFUNC_DEF("occupants",1,occupants),JS_CFUNC_DEF("dispose",0,dispose)};
+    JS_CFUNC_DEF("inside",2,inside),JS_CFUNC_DEF("occupants",1,occupants),JS_CFUNC_DEF("setGrid",2,set_grid),JS_CFUNC_DEF("setStay",2,set_stay),
+    JS_CFUNC_DEF("stats",0,stats),JS_CFUNC_DEF("dispose",0,dispose)};
 static const JSCFunctionListEntry exports[]={
     JS_PROP_INT32_DEF("MAX",ATHENA_TRIGGERS3D_MAX,JS_PROP_ENUMERABLE),
-    JS_PROP_INT32_DEF("ENTER",ATHENA_TRIGGER3D_ENTER,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("EXIT",ATHENA_TRIGGER3D_EXIT,JS_PROP_ENUMERABLE)};
+    JS_PROP_INT32_DEF("ENTER",ATHENA_TRIGGER3D_ENTER,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("EXIT",ATHENA_TRIGGER3D_EXIT,JS_PROP_ENUMERABLE),
+    JS_PROP_INT32_DEF("STAY",ATHENA_TRIGGER3D_STAY,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {
     if(athena_register_class(ctx,&world_id,&class_def)<0) return -1;
     JSValue proto=JS_NewObject(ctx); if(JS_IsException(proto)) return -1;

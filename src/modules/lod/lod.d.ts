@@ -32,13 +32,19 @@ declare namespace LOD {
         /** Used while the distance is below this (increasing, > 0). */
         until: number;
     }
-    interface Stats { groups: number; hidden: number; changes: number; perLevel: number[] }
+    interface Stats {
+        groups: number; hidden: number; changes: number; perLevel: number[];
+        /** Groups whose level was computed this update (groups - the ones inside skipped cells). */
+        evaluated: number;
+        /** Grid cells visited / skipped whole (0 without setGrid). */
+        cells: number; cellsSkipped: number;
+    }
     class Group {
         /** Retains the node and meshes. hysteresis: 0 to 0.5 of each threshold (default 0.1). */
         constructor(node: Scene3D.Node, levels: Level[], options?: { hysteresis?: number });
         /** Current level, HIDDEN, or -2 before the first selection. */
         readonly level: number;
-        /** Distance at the last selection. */
+        /** Distance at the last evaluation (not refreshed while the grid skips the group's cell). */
         readonly distance: number;
         /** Disabled groups leave the node alone. */
         enabled: boolean;
@@ -51,6 +57,16 @@ declare namespace LOD {
     function update<T extends object>(camera: Camera3D.Camera, stats: T): T & Stats;
     /** Of the last selection. */
     function stats<T extends object = Stats>(out?: T): T & Stats;
+    /**
+     * Optional spatial index for many groups (0 turns it off, the default). Groups are binned by the
+     * world position of their node into cells of `cellSize`; static groups cost nothing per update, and
+     * a cell is skipped whole when all its groups are already hidden by distance and the cell lies
+     * beyond their farthest threshold. The selection (levels, hysteresis, visibility) is identical to
+     * the full traversal; `capacity` (default 1024) bounds the cells, extra groups are still evaluated
+     * every update. Pick `cellSize` near the largest `until`. Moved nodes are noticed through Scene3D
+     * updates, so nodes moved after the last `scene.update()` are seen one frame late, as without the grid.
+     */
+    function setGrid(cellSize: number, options?: { capacity?: number }): void;
     /** Multiplies every threshold (quality setting, default 1). */
     function setBias(bias: number): void;
     /**

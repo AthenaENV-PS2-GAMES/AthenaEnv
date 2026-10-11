@@ -81,6 +81,39 @@ const tmesh = terrain.build({ shading: Model3D.DIFFUSE });
 check("heightmap builds lit", tmesh.length === 1);
 tmesh[0].dispose(); terrain.dispose();
 
+// extrude: prisms from flat contours (exact geometry is checked by tests/host/meshbuilder_extrude_test.c).
+const square = new Float32Array([0, 0, 4, 0, 4, 3, 0, 3]);
+const ex = new MeshBuilder.Builder();
+ex.extrude(square, { y: 1, height: 2 });
+check("extrude: walls and caps", ex.vertexCount === 24 && ex.triangleCount === 12);
+ex.clear().extrude(square, { vector: [1, 2, 0], capStart: false });
+check("extrude: slanted vector, one cap", ex.vertexCount === 20 && ex.triangleCount === 10);
+ex.clear().extrude(square, { height: -1, capStart: false, capEnd: false, smooth: true });
+check("extrude: smooth walls only", ex.vertexCount === 10 && ex.triangleCount === 8);
+ex.clear().extrude(new Float32Array([0, 0, 4, 0, 4, 1, 1, 1, 1, 3, 0, 3]), { height: 1 });
+check("extrude: concave outline", ex.triangleCount === 6 * 2 + 2 * 4);
+const exMeshes = ex.build({ shading: Model3D.DIFFUSE });
+check("extrude builds", exMeshes.length === 1);
+for (const m of exMeshes) m.dispose();
+ex.clear().box(0, 0, 0, 1, 1, 1);
+const exBefore = ex.vertexCount;
+const bad = (name, contour, options) => {
+    throws("extrude " + name, () => ex.extrude(contour, options), RangeError);
+    check("extrude " + name + " leaves the builder untouched", ex.vertexCount === exBefore);
+};
+bad("bowtie", new Float32Array([0, 0, 2, 2, 2, 0, 0, 2]), { height: 1 });
+bad("two points", new Float32Array([0, 0, 1, 1]), { height: 1 });
+bad("collinear", new Float32Array([0, 0, 1, 0, 2, 0]), { height: 1 });
+bad("repeated point", new Float32Array([0, 0, 4, 0, 4, 0, 4, 3, 0, 3]), { height: 1 });
+bad("NaN", new Float32Array([0, 0, 4, NaN, 4, 3, 0, 3]), { height: 1 });
+bad("odd length", new Float32Array([0, 0, 4, 0, 4, 3, 0]), { height: 1 });
+bad("too many points", new Float32Array(513 * 2).map((_, i) => Math.cos(i >> 1) * (i & 1 ? 1 : 2)), { height: 1 });
+bad("parallel extrusion", square, { vector: [1, 0, 0] });
+throws("extrude needs height or vector", () => ex.extrude(square, {}), TypeError);
+throws("extrude not both", () => ex.extrude(square, { height: 1, vector: [0, 1, 0] }), TypeError);
+throws("extrude contour type", () => ex.extrude([0, 0, 1, 0, 1, 1], { height: 1 }), TypeError);
+ex.dispose();
+
 // Splitting: 48000 triangles need three meshes (21844 triangles each).
 const big = new MeshBuilder.Builder();
 for (let i = 0; i < 4000; i++) big.box(i, 0, 0, i + 0.5, 0.5, 0.5);

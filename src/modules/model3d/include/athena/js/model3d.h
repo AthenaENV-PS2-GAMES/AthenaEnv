@@ -13,4 +13,7 @@ JSValue athena_mesh3d_js_wrap(JSContext *ctx,AthenaMesh3D *mesh);
  * success the caller owns a reference to out->texture (may be NULL) and
  * releases it with athena_texture3d_release() after loading. */
 int athena_model3d_js_material(JSContext *ctx,JSValueConst value,AthenaMaterial3D *out);
+/* A Model3D.Texture handle for a native texture: takes over the caller's reference (released by
+ * dispose(), the finalizer, and on failure, which returns JS_EXCEPTION). */
+JSValue athena_texture3d_js_wrap(JSContext *ctx,AthenaTexture3D *texture);
 #endif

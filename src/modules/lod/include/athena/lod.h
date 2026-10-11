@@ -28,7 +28,20 @@ int athena_lod_set_bias(float bias);
 /* Nodes farther than this are hidden whatever their levels (<= 0: none). */
 int athena_lod_set_draw_distance(float distance);
 float athena_lod_draw_distance(void);
-typedef struct { uint32_t groups,hidden,changes; uint32_t per_level[ATHENA_LOD_MAX_LEVELS]; } AthenaLODStats;
+/* Optional spatial index (off by default). With cell_size > 0 enabled groups are binned by their node's
+ * world position into a hash of at most `capacity` cells (1..65535, 0 = 1024; groups beyond that stay in
+ * an always-evaluated overflow set, so results never change, only the saving shrinks). Positions are cached
+ * and refreshed through Scene3D's moved hooks, so static groups cost nothing per update. A cell is skipped
+ * only when every group in it is already hidden by distance (level -1) and the cell is entirely beyond the
+ * farthest threshold of those groups (with hysteresis and bias): that is exactly the state the full
+ * traversal would recompute, so selection and hysteresis are identical to cell_size = 0. 0 turns it off.
+ * -1 on bad arguments or when memory runs out (the index is then off). Tune cell_size to roughly the
+ * largest `until` of the groups: much smaller cells cost more cells per update than they save. */
+int athena_lod_set_grid(float cell_size,uint32_t capacity);
+float athena_lod_grid_cell_size(void);
+/* groups: enabled groups; evaluated: groups whose level was computed; cells/cells_skipped: grid cells
+ * visited and skipped whole (0 without the grid). */
+typedef struct { uint32_t groups,hidden,changes; uint32_t per_level[ATHENA_LOD_MAX_LEVELS]; uint32_t evaluated,cells,cells_skipped; } AthenaLODStats;
 /* Selects every enabled group's level for a camera at eye. */
 void athena_lod_update(const float eye[3],AthenaLODStats *stats);
 void athena_lod_module_shutdown(void);

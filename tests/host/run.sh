@@ -30,7 +30,7 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
     -Isrc/modules/thread/include -Isrc/modules/thread/native \
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
-$CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
+$CC $CFLAGS -Itests/host/stubs -Isrc/modules/graphics/include -Isrc/modules/video/include -Isrc/modules/video/native \
     -o "$OUT/video_test" tests/host/video_test.c -lpthread
 $CC $CFLAGS -Isrc/modules/random/include -Isrc/modules/noise/include \
     -o "$OUT/random_noise_test" tests/host/random_noise_test.c \

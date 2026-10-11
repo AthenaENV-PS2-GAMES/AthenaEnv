@@ -113,11 +113,89 @@ static inline uint32_t athena_mesh3d_stream_count(const AthenaMesh3DView *v) {
     return v->indices?v->stream_vertex_count:v->vertex_count;
 }
 int athena_mesh3d_create(const AthenaGeometry3D *geometry,AthenaMesh3D **out);
+/* Resumable athena_mesh3d_create(): the same stages (validation, batch plan,
+ * morph targets, streams, flat normals, deform metadata), each step visiting
+ * at most max_items vertices/corners/components/triangles (0 selects
+ * ATHENA_MESH3D_BUILD_ITEMS); allocation, the plan's final copies and the
+ * cache write-back are single steps. `geometry` and every array it points to
+ * (material included) are borrowed and must stay valid and unchanged until
+ * take or destroy. Step returns 0 while work remains, 1 when finished or a
+ * negative AthenaModel3DResult (EINVAL: invalid geometry, see
+ * athena_geometry3d_validate; ENOMEM), sticky. Take the mesh once, then
+ * destroy; destroying earlier frees everything not taken. Main thread. */
+#define ATHENA_MESH3D_BUILD_ITEMS 256u
+typedef struct AthenaMesh3DBuilder AthenaMesh3DBuilder;
+int athena_mesh3d_builder_begin(const AthenaGeometry3D *geometry,AthenaMesh3DBuilder **out);
+int athena_mesh3d_builder_step(AthenaMesh3DBuilder *builder,uint32_t max_items);
+int athena_mesh3d_builder_take(AthenaMesh3DBuilder *builder,AthenaMesh3D **out);
+void athena_mesh3d_builder_destroy(AthenaMesh3DBuilder *builder);
 int athena_mesh3d_load(const char *path,AthenaMesh3D **out);
 /* Optional copied override; default loader preserves the existing unlit subset.
  * Supplied normals are normalized; absent diffuse normals are flat-generated.
  * A diffuse degenerate triangle without supplied normals is rejected. */
 int athena_mesh3d_load_with_material(const char *path,const AthenaMaterial3D *material,AthenaMesh3D **out);
+/* Self-contained GLB only; no file I/O or GS upload. Bytes are borrowed for
+ * this call; all returned streams/textures are owned copies. Unaligned input
+ * is copied temporarily. origin is a nonempty diagnostic name, not a resolver.
+ * URI buffers/external images are rejected, including unused dependencies.
+ * The static-mesh subset is identical to load_with_material(). Main thread. */
+#define ATHENA_MODEL3D_MEMORY_MAX_BYTES (16u * 1024u * 1024u)
+int athena_mesh3d_load_memory(const void *bytes,size_t size,const char *origin,
+    const AthenaMaterial3D *material,AthenaMesh3D **out);
+/* Per-phase accounting kept by the resumable loaders: units run, their total time
+ * and the largest single unit (waiting for dependencies is not counted). */
+typedef struct { uint32_t units; float total_ms,max_ms; } AthenaLoaderPhaseStats;
+/* Resumable athena_mesh3d_load_memory (same static-mesh subset). begin allocates
+ * the loader's byte snapshot and borrows `bytes`, which must stay valid and
+ * unchanged until athena_mesh3d_loader_source_needed() returns 0 (the first
+ * steps copy ATHENA_GLTF3D_COPY_CHUNK_BYTES each). Further steps: parse and
+ * checks, glTF validation, then the primitive build (texture decode, vertex
+ * and index slices, Mesh3D builder stages of max_items, 0 = default). Step
+ * returns 0 while work remains, 1 when done, or a negative result (sticky).
+ * Take the mesh once; destroy frees whatever was not taken. Main thread. */
+#define ATHENA_GLTF3D_COPY_CHUNK_BYTES (256u*1024u)
+typedef struct AthenaMesh3DLoader AthenaMesh3DLoader;
+typedef enum { ATHENA_MESH3D_LOADER_COPY=0, ATHENA_MESH3D_LOADER_PARSE, ATHENA_MESH3D_LOADER_DEPENDENCIES, ATHENA_MESH3D_LOADER_VALIDATE,
+    ATHENA_MESH3D_LOADER_BUILD, ATHENA_MESH3D_LOADER_DONE } AthenaMesh3DLoaderPhase;
+int athena_mesh3d_loader_begin_memory(const void *bytes,size_t size,const char *origin,
+    const AthenaMaterial3D *material,AthenaMesh3DLoader **out);
+int athena_mesh3d_loader_step(AthenaMesh3DLoader *loader,uint32_t max_items);
+/* Zero-copy variant of begin_memory/begin_external (flags: ATHENA_LOADER_EXTERNAL=1,
+ * ATHENA_LOADER_BORROW=2). With BORROW and 4-byte aligned bytes there is no copy
+ * phase: the bytes are used in place and must stay valid and unchanged until take
+ * or destroy (source_needed stays 1). Unaligned input silently falls back to the
+ * snapshot copy. */
+#define ATHENA_LOADER_EXTERNAL 1
+#define ATHENA_LOADER_BORROW 2
+int athena_mesh3d_loader_begin(const void *bytes,size_t size,const char *origin,
+    const AthenaMaterial3D *material,int flags,AthenaMesh3DLoader **out);
+/* Runs at least one unit, then more while less than budget_ms elapsed (budget_ms <= 0:
+ * exactly one). *ran counts units; returns like step (0 more, 1 done, <0 error,
+ * ATHENA_MESH3D_WAITING with *ran 0 when waiting for files). */
+int athena_mesh3d_loader_run(AthenaMesh3DLoader *loader,float budget_ms,uint32_t *ran);
+void athena_mesh3d_loader_phase_stats(const AthenaMesh3DLoader *loader,int phase,AthenaLoaderPhaseStats *out);
+/* Explicit resolver, as for athena_gltf3d_loader_begin_external: a .gltf or a GLB
+ * that names relative external buffers/images. Step returns ATHENA_MESH3D_WAITING
+ * (no work) in the DEPENDENCIES phase until every listed file was provided
+ * (borrowed; valid and unchanged until take or destroy). */
+#define ATHENA_MESH3D_WAITING 2
+int athena_mesh3d_loader_begin_external(const void *bytes,size_t size,const char *origin,
+    const AthenaMaterial3D *material,AthenaMesh3DLoader **out);
+uint32_t athena_mesh3d_loader_dependency_count(const AthenaMesh3DLoader *loader);
+const char *athena_mesh3d_loader_dependency_uri(const AthenaMesh3DLoader *loader,uint32_t index);
+int athena_mesh3d_loader_dependency_image(const AthenaMesh3DLoader *loader,uint32_t index);
+int athena_mesh3d_loader_dependency_provided(const AthenaMesh3DLoader *loader,uint32_t index);
+int athena_mesh3d_loader_provide(AthenaMesh3DLoader *loader,uint32_t index,const void *bytes,size_t size);
+int athena_mesh3d_loader_source_needed(const AthenaMesh3DLoader *loader);
+int athena_mesh3d_loader_phase(const AthenaMesh3DLoader *loader);
+int athena_mesh3d_loader_last_phase(const AthenaMesh3DLoader *loader);
+void athena_mesh3d_loader_progress(const AthenaMesh3DLoader *loader,uint32_t *done,uint32_t *total);
+int athena_mesh3d_loader_take(AthenaMesh3DLoader *loader,AthenaMesh3D **out);
+void athena_mesh3d_loader_destroy(AthenaMesh3DLoader *loader);
+/* Monotonic loader clock: COP0 Count on the EE (294.912 MHz), microseconds on a
+ * host. Wraps; subtract with unsigned arithmetic. Same scale as Profiler ticks. */
+uint32_t athena_model3d_clock(void);
+float athena_model3d_clock_ms(uint32_t ticks);
 const char *athena_model3d_error(int result);
 /* Module shutdown: waits for the GS and frees deferred texture releases. */
 void athena_model3d_module_shutdown(void);

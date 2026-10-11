@@ -24,6 +24,9 @@ declare namespace Model3D {
          * distinct GS RGBA colors when texture+CLUT is smaller than CT32.
          * Errors name the path and the reason. */
         static load(path: string, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
+        /** load() from PNG/JPEG/BMP bytes (ArrayBuffer/Uint8Array, borrowed for the
+         * call, subarrays honored): no file I/O, so a Thread read job can feed it. */
+        static loadMemory(bytes: ArrayBuffer | Uint8Array, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
         readonly width: number; readonly height: number; readonly wrap: 0 | 1 | 2 | 3;
         /** Makes the texture resident in VRAM now (one synchronous upload and
          * GS wait), e.g. on a loading screen, instead of at the first draw.
@@ -100,6 +103,62 @@ declare namespace Model3D {
     /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset.
      * Errors name the file and the exact unsupported feature. */
     function load(path: string, material?: Material): Mesh;
+    /** Self-contained GLB, at most 16 MiB. Borrows bytes for the call and
+     * copies all native data; honors Uint8Array.subarray(), including unaligned
+     * offsets. origin is a nonempty diagnostic name, not an I/O resolver.
+     * URI buffers and external images are rejected. No upload; synchronous
+     * parse/construction on the main thread, with the same static-mesh subset. */
+    function loadMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material): Mesh;
+    type LoaderPhase = 'copy' | 'parse' | 'dependencies' | 'validate' | 'build' | 'done';
+    /** Resumable loadMemory() of one static GLB mesh. The first steps ('copy',
+     * 256 KiB each) snapshot the bytes into memory the loader owns; do not
+     * modify the source before `phase` leaves 'copy'. Then the parse, the
+     * glTF validation and the primitive build (texture decode is one unit;
+     * vertex/index reads and the mesh stages are small slices). Dispose to
+     * abandon; unreferenced loaders are freed by GC. */
+    class Loader {
+        private constructor();
+        /** Phase names by native phase index (the order of phaseStatsInto). */
+        static readonly PHASES: readonly string[];
+        /** Runs up to `units` (1..64, default 1) consecutive units of the same
+         * phase. false while work remains, true once finished. Throws the load
+         * error, and keeps throwing it; then dispose(). */
+        step(units?: number): boolean;
+        /** Runs at least one unit, then more until `budgetMs` (0..1000, default 0 =
+         * one unit) has elapsed: a single call for a time slice, timed by the
+         * native loader. Same results as step(); false while work remains, true
+         * once finished; lastUnits is the number of units that ran. */
+        run(budgetMs?: number): boolean;
+        /** Units, total time and largest single unit per phase so far. */
+        /** Same numbers as `phaseStats`, written into a Float64Array (units, totalMs,
+         * maxMs at index 3 * phase index; at least 3 * PHASES.length elements): no allocation. */
+        phaseStatsInto(out: Float64Array): void;
+        readonly phaseStats: { [phase: string]: { units: number; totalMs: number; maxMs: number } };
+        /** The Mesh, after step() returned true. Spends the loader. */
+        finish(): Mesh;
+        dispose(): void;
+        readonly phase: LoaderPhase | 'disposed';
+        readonly lastPhase: LoaderPhase | 'disposed';
+        /** Native steps the last step() call ran (at most `units`). */
+        readonly lastUnits: number;
+        /** Files named by relative URI (external buffers and images), listed after
+         * the parse step when started with `{ dependencies: true }`; else empty.
+         * Read each one yourself (the loader does no I/O) and give it to provide(). */
+        readonly dependencies: { uri: string; image: boolean; provided: boolean }[];
+        /** Hands over the bytes of dependencies[index] (ArrayBuffer/Uint8Array,
+         * 1 byte to 16 MiB, once). They are used, not copied: do not modify the
+         * buffer until finish() or dispose(). While files are missing step()
+         * returns false and does nothing (phase 'dependencies'). Absolute, scheme,
+         * drive and ".." URIs are rejected, at most 64 files. */
+        provide(index: number, bytes: ArrayBuffer | Uint8Array): void;
+        readonly unitsDone: number;
+        readonly unitsTotal: number;
+    }
+    /** Starts a resumable loadMemory() (same rules and errors, found while stepping). *
+     * `options.borrow: true` uses the bytes in place (no 'copy' phase and no snapshot
+     * RAM) when they are 4-byte aligned, otherwise the snapshot is made as usual; the
+     * buffer is pinned and must not be modified until finish() or dispose(). */
+    function beginMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material, options?: { dependencies?: boolean; borrow?: boolean }): Loader;
     /** Bulk setters, one call per frame instead of one per instance: values holds
      * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
      * value is checked finite before any instance changes. Returns the count. */

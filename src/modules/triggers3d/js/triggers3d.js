@@ -18,10 +18,17 @@ class Zone {
         this._world = world; this._id = id;
         this.onEnter = checkFn(options.onEnter, "onEnter");
         this.onExit = checkFn(options.onExit, "onExit");
+        this._onStay = checkFn(options.onStay, "onStay");
         this.data = options.data;
         this._enabled = true; this._mask = options.mask ?? ALL;
     }
     get id() { return this._id; }
+    /** Called every update for each body that was already inside and still is (opt-in: assigning a function turns it on). */
+    get onStay() { return this._onStay; }
+    set onStay(fn) {
+        checkFn(fn, "onStay"); this._live();
+        this._world._native.setStay(this._id, !!fn); this._onStay = fn;
+    }
     get enabled() { return this._enabled; }
     set enabled(on) { this._live(); this._enabled = !!on; this._world._native.setZoneEnabled(this._id, this._enabled); }
     get mask() { return this._mask; }
@@ -77,18 +84,21 @@ export class World {
         this._dispatchZones = []; this._dispatchBodies = [];
         this._updating = false;
         this.onEnter = undefined; this.onExit = undefined;   // world-wide callbacks (zone, body)
+        this._onStay = undefined;
     }
     /** A box zone. options: mask (layers it reacts to, default all), onEnter(body, zone), onExit(body, zone), data. */
     box(minX, minY, minZ, maxX, maxY, maxZ, options = {}) {
         const zone = new Zone(this, -1, options);
         const id = this._native.addZone(0, minX, minY, minZ, maxX, maxY, maxZ, zone._mask >>> 0);
         zone._id = id;
+        if (zone._onStay) this._native.setStay(id, true);
         return (this._zones[id] = zone);
     }
     sphere(x, y, z, radius, options = {}) {
         const zone = new Zone(this, -1, options);
         const id = this._native.addZone(1, x, y, z, radius, 0, 0, zone._mask >>> 0);
         zone._id = id;
+        if (zone._onStay) this._native.setStay(id, true);
         return (this._zones[id] = zone);
     }
     /** A body: a sphere of options.radius (default 0, a point) on options.layers (default 1). */
@@ -98,6 +108,17 @@ export class World {
         body._id = id;
         return (this._bodies[id] = body);
     }
+    /** Called every update for each body already inside a zone, for every zone (opt-in: assigning a function turns it on). */
+    get onStay() { return this._onStay; }
+    set onStay(fn) { checkFn(fn, "onStay"); this._native.setStay(-1, !!fn); this._onStay = fn; }
+    /**
+     * Optional broad phase for many zones/bodies: bodies are binned by their bounds into cells of `cellSize`
+     * (near the typical zone size) and each zone only tests the bodies of the cells it covers. Events and
+     * their order are identical to no grid; 0 turns it off. capacity (default 4096) bounds the body-cell entries.
+     */
+    setGrid(cellSize, options = {}) { this._native.setGrid(cellSize, options.capacity ?? 0); return this; }
+    /** Counters of the last update(): candidate and tested pairs, events, occupied pairs, grid size. */
+    stats() { return this._native.stats(); }
     _enter(zone, body) {
         if (zone.onEnter) zone.onEnter(body, zone);
         if (this.onEnter) this.onEnter(zone, body);
@@ -105,6 +126,10 @@ export class World {
     _exit(zone, body) {
         if (zone.onExit) zone.onExit(body, zone);
         if (this.onExit) this.onExit(zone, body);
+    }
+    _stay(zone, body) {
+        if (zone._onStay) zone._onStay(body, zone);
+        if (this._onStay) this._onStay(zone, body);
     }
     /** Tests every pair in C and runs the callbacks of the changes; returns the number of events. */
     update() {
@@ -128,7 +153,8 @@ export class World {
             for (let i = 0; i < n; i++) {
                 const zone = zones[i], body = bodies[i];
                 if (!zone || !body || zone._id < 0 || body._id < 0) continue;
-                if (e[i * 3] === Native.ENTER) this._enter(zone, body); else this._exit(zone, body);
+                const type = e[i * 3];
+                if (type === Native.ENTER) this._enter(zone, body); else if (type === Native.EXIT) this._exit(zone, body); else this._stay(zone, body);
             }
             return n;
         } finally {

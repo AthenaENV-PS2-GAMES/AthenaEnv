@@ -17,6 +17,14 @@ declare namespace Bench {
         run(context: T, iteration: number): unknown;
         /** Called once even when setup/run fails; context may be undefined after a failed setup. */
         teardown?(context: T | undefined): void;
+        /** Per-batch preparation outside the work timer, including warmup. */
+        beforeBatch?(context: T): void;
+        /** Runs even if beforeBatch/run throws or cancels; outside the work timer. */
+        afterBatch?(context: T): void;
+        /** Once before teardown, even on error/cancel. Snapshot counters/memory here. */
+        inspect?(context: T | undefined): unknown;
+        /** Scene, data sizes, phase boundaries and explicit GS-wait policy. */
+        metadata?: Record<string, unknown>;
         warmup?: number;
         samples?: number;
         iterations?: number;
@@ -26,10 +34,24 @@ declare namespace Bench {
         status: "completed" | "error" | "cancelled";
         warmup: number; samples: number; iterations: number;
         averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+        metadata: Record<string, unknown>;
+        /** Successful measured batches in execution order, without warmup or failed batches. */
+        sampleTicks: number[];
+        /** Work time per invocation, i.e. sampleTicks converted and divided by iterations. */
+        sampleMs: number[];
+        /** Total batch CPU time, including beforeBatch/afterBatch, never divided by iterations.
+         * Excludes setup, inspect, teardown, checkpoints and the rest of the application frame.
+         * This is a lower bound on frame CPU cost, not a total frame measurement. */
+        batchCpu: {
+            averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+            sampleMs: number[]; overBudget: number;
+        };
+        metrics?: unknown;
         error?: string;
     }
     interface Report {
-        version: 1; label: string; metadata: Record<string, unknown>;
+        version: 2; label: string; metadata: Record<string, unknown>;
+        frameBudgetMs: number;
         status: "running" | "completed" | "cancelled" | "error";
         results: Result[];
     }
@@ -42,6 +64,9 @@ declare namespace Bench {
         samples?: number;
         /** Work invocations per batch, default 1; 1..10000. */
         iterations?: number;
+        /** Total target frame budget in ms, default 1000/60. Used for batchCpu.overBudget.
+         * Each batch AND its preparation/cleanup must finish before the EE clock wraps. */
+        frameBudgetMs?: number;
         /** Rewrites JSON between tasks; writable device required, not an atomic save. */
         path?: string;
         onResult?(result: Result, report: Report): void;

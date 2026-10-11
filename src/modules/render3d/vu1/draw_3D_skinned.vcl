@@ -187,8 +187,8 @@ lights_done:
     isw.y kickThird, KICK_CYCLE(vi00)
     isw.z kickFirst, KICK_CYCLE(vi00)
     ; RGB scale is 255 untextured, 128 for GS MODULATE; alpha is 0..128.
-    lq.x rgbScale, CLIPFAN_OFFSET(vi00)
-    mulx.xyz color, color, rgbScale[x]
+    lq.xyz rgbScale, 16(vi00)
+    mul.xyz color, color, rgbScale
     loi 128.0
     mul.w color, color, i
     ColorFPtoGsRGBAQ intColor, color

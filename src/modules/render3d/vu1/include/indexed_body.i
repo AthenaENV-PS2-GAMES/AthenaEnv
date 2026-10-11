@@ -63,8 +63,8 @@ uv_done:
     mul.xyz vertex, vertex, q
     mul.xyz vertex, vertex, scale
     add.xyz vertex, vertex, offset
-    lq.x rgbScale, CLIPFAN_OFFSET(vi00)
-    mulx.xyz color, color, rgbScale
+    lq.xyz rgbScale, 16(vi00)
+    mul.xyz color, color, rgbScale
     loi 128.0
     mul.w color, color, i
     ColorFPtoGsRGBAQ intColor, color

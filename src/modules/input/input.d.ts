@@ -8,6 +8,10 @@
  * their own radial dead zone, so a Map sets its Gamepad player's
  * `deadzone` to 0 and reads raw values.
  *
+ * `Input.pressure(Gamepad.R2, { threshold: 0.3 })` binds the analog pressure of a button (DualShock 2/3
+ * face, shoulder and d-pad buttons, DualShock 4 L2/R2); `value()` gives 0..1 and sources without pressure
+ * fall back to the digital bit.
+ *
  * Bindings are plain data: save `map.bindings()` with the settings and
  * restore them with `map.load()`.
  *
@@ -44,14 +48,31 @@ declare namespace Input {
         /** Use the d-pad while the stick rests in its dead zone. */
         dpad?: boolean;
     }
-    type Binding = ButtonBinding | AxisBinding | StickBinding;
+    interface PressureBinding {
+        /** One Gamepad button bit. */
+        pressure: number;
+        /** Held from this pressure, in (0, 1] (default 0.5). */
+        threshold: number;
+        /** Stays held until the pressure falls below this, in (0, threshold] (default threshold). */
+        release: number;
+    }
+    type Binding = ButtonBinding | AxisBinding | StickBinding | PressureBinding;
     /** What a Map reads; Gamepad.Player fits. */
-    interface Source { buttons: number; leftX: number; leftY: number; rightX: number; rightY: number }
+    interface Source {
+        buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** Optional: how hard one button bit is pressed, 0..1. Without it pressure actions read the digital bit (1 while held). */
+        pressure?(button: number): number;
+    }
 
     /** Held while every bit of any mask is held (`L1 | R1` is a combination; several masks are alternatives). */
     function button(...masks: number[]): ButtonBinding;
     /** -1 while `negative` is held, +1 while `positive` is held. */
     function axis(negative: number, positive: number): AxisBinding;
+    /**
+     * Pressure of one button (value() is 0..1), held from `threshold` until it falls below `release`.
+     * Sources or buttons without pressure give 1 while held, so the action works digitally.
+     */
+    function pressure(button: number, options?: { threshold?: number; release?: number }): PressureBinding;
     function stick(side: "left" | "right", options?: Omit<StickBinding, "stick">): StickBinding;
     /** New bindings of a common layout. */
     function preset(name: "platformer" | "shooter" | "menu"): Record<string, Binding>;
@@ -71,7 +92,7 @@ declare namespace Input {
         justReleased(action: string): boolean;
         /** Consecutive updates held (0 when released). */
         heldFrames(action: string): number;
-        /** 0/1 for buttons, -1/0/1 for axes, the processed magnitude for sticks. */
+        /** 0/1 for buttons, -1/0/1 for axes, 0..1 for pressure, the processed magnitude for sticks. */
         value(action: string): number;
         /** A stick's processed vector (y negative upwards, like Gamepad); the same object every call. */
         axis(action: string): { readonly x: number; readonly y: number };

@@ -1,9 +1,9 @@
 {
   "id": "nav",
   "name": "Nav",
-  "description": "Navigation on an XZ grid in C: per-cell costs, A* with a binary heap and no allocation per search, 8-way moves without corner cutting, line-of-sight path smoothing, and crowds of agents that follow paths with arrival and separation, driving Scene3D nodes.",
+  "description": "Navigation on a weighted XZ grid in C: synchronous A*, bounded incremental queries and agent-owned plans with cancellation, shared allocation-free scratch, path smoothing, and crowds driving Scene3D nodes.",
   "category": "Game",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "required": false,
   "default": false,
   "sources": ["native/nav.c"],

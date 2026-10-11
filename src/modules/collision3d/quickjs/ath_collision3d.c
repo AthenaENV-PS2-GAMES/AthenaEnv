@@ -1,3 +1,4 @@
+#include <math.h>
 #include <athena_js_args.h>
 #include <athena/collision3d.h>
 #include <athena/js/model3d.h>
@@ -19,6 +20,20 @@ static AthenaCollision3DWorld *get_world(JSContext *ctx,JSValueConst v) {
 }
 AthenaCollision3DWorld *athena_collision3d_world_from_value(JSContext *ctx,JSValueConst value) {
     return get_world(ctx,value);
+}
+int athena_collision3d_js_segment_blocked(JSContext *ctx,JSValueConst world,const float from[3],const float to[3],uint32_t mask,float *blocked) {
+    AthenaCollision3DWorld *w=get_world(ctx,world);
+    if(!w) { JS_FreeValue(ctx,JS_GetException(ctx)); return -1; }
+    float d[3]={to[0]-from[0],to[1]-from[1],to[2]-from[2]},len=sqrtf(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+    *blocked=0;
+    if(!(len>1e-4f)) return 0;
+    for(int i=0;i<3;i++) d[i]/=len;
+    AthenaCollision3DHit hit;
+    int r=athena_collision3d_raycast(w,from,d,len,mask,&hit);
+    if(r<0) return -1;
+    /* Geometry touching the source itself (a wall it hangs on) does not occlude it. */
+    if(r>0&&hit.distance<len-.05f) *blocked=1;
+    return 0;
 }
 static AthenaCharacter3D *get_character(JSContext *ctx,JSValueConst v) {
     AthenaCharacter3D *c=JS_GetOpaque2(ctx,v,character_id);

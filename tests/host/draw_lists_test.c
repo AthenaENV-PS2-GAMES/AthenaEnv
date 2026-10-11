@@ -118,7 +118,36 @@ static void run(unsigned ring,enum Kind kind,unsigned count,int marker,AthenaVie
     }
     free(items);cases++;
 }
+static void screen_lines(unsigned ring,unsigned count,bool prefill) {
+    test_view(ATHENA_VIEW_ROTATED);
+    AthenaAffine2D saved=athena_view_matrix;
+    test_packet_begin(ring,vertex,prefill);expected_count=observed=0;
+    AthenaScreenLine *items=calloc(count?count:1,sizeof(*items));assert(items);
+    const float values[]={-16383,-10.5f,-.5f,nextafterf(-.5f,0),nextafterf(.5f,0),.5f,
+        nextafterf(.5f,1),10.5f,16383};
+    test_view(ATHENA_VIEW_IDENTITY);
+    for(unsigned i=0;i<count;i++) {
+        float x=values[i%9],y=values[(i+2)%9],x2=values[(i+4)%9],y2=values[(i+6)%9];
+        uint64_t color=0x80000000u+i*3+1;
+        items[i]=(AthenaScreenLine){x,y,x2,y2,(uint32_t)color};
+        /* Integer pixel coordinates clamp to [-2048,2047] before GS 12.4 packing. */
+        expect(fminf(2047,fmaxf(-2048,lroundf(x))),fminf(2047,fmaxf(-2048,lroundf(y))),0,0,color,1,false,true,0);
+        expect(fminf(2047,fmaxf(-2048,lroundf(x2))),fminf(2047,fmaxf(-2048,lroundf(y2))),0,0,color,1,false,true,0);
+    }
+    test_view(ATHENA_VIEW_ROTATED);
+    draw_screen_line_list(NULL,1);draw_screen_line_list(items,0);draw_screen_line_list(items,-1);
+    assert(!test_queries);
+    draw_screen_line_list(items,count);test_packet_end();
+    assert(observed==expected_count&&test_vertices==expected_count);
+    assert(!memcmp(&saved,&athena_view_matrix,sizeof(saved)));
+    free(items);cases++;
+}
 int main(void) {
+    for(unsigned ring=2048;ring<=8192;ring*=2) {
+        unsigned capacity=(ring/2-4)/2;
+        const unsigned counts[]={0,1,capacity-1,capacity,capacity+1,capacity*3+7};
+        for(unsigned i=0;i<6;i++) for(int prefill=0;prefill<2;prefill++) screen_lines(ring,counts[i],prefill);
+    }
     const unsigned overhead[]={5,3,5,5,5,11,11,10,12};
     const unsigned per_item[]={1,2,2,2,3,3,5,3,6};
     for(unsigned ring=2048;ring<=8192;ring*=2)

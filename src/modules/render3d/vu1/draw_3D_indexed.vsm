@@ -204,12 +204,12 @@ shading_done:
                     mulq.xy VF12, VF13, q           nop
                     addq.z VF12, VF00, q            nop
 uv_done:
-                    mulq.xyz VF14, VF14, q          lq.x VF13, 26(VI00)
+                    mulq.xyz VF14, VF14, q          lq.xyz VF13, 16(VI00)
                     nop                             loi 0x43000000
                     muli.w VF11, VF11, i            sq VF12, 2(VI08)
                     nop                             iaddiu VI06, VI06, 1
                     mul.xyz VF14, VF14, VF07        iaddi VI07, VI07, -1
-                    mulx.xyz VF11, VF11, VF13x      nop
+                    mul.xyz VF11, VF11, VF13        nop
                     nop                             nop
                     nop                             nop
                     add.xyz VF14, VF14, VF08        nop

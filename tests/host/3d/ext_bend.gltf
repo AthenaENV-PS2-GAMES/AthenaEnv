@@ -1,0 +1,185 @@
+{
+ "asset": {
+  "version": "2.0",
+  "generator": "AthenaEnv skinned fixture"
+ },
+ "buffers": [
+  {
+   "byteLength": 2760,
+   "uri": "ext%20bend.bin"
+  }
+ ],
+ "bufferViews": [
+  {
+   "buffer": 0,
+   "byteOffset": 0,
+   "byteLength": 648
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 648,
+   "byteLength": 648
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1296,
+   "byteLength": 432
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 1728,
+   "byteLength": 864
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2592,
+   "byteLength": 128
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2720,
+   "byteLength": 8
+  },
+  {
+   "buffer": 0,
+   "byteOffset": 2728,
+   "byteLength": 32
+  }
+ ],
+ "accessors": [
+  {
+   "bufferView": 0,
+   "componentType": 5126,
+   "count": 54,
+   "type": "VEC3",
+   "min": [
+    -0.25,
+    0,
+    -0.25
+   ],
+   "max": [
+    0.25,
+    2,
+    0.25
+   ]
+  },
+  {
+   "bufferView": 1,
+   "componentType": 5126,
+   "count": 54,
+   "type": "VEC3"
+  },
+  {
+   "bufferView": 2,
+   "componentType": 5123,
+   "count": 54,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 3,
+   "componentType": 5126,
+   "count": 54,
+   "type": "VEC4"
+  },
+  {
+   "bufferView": 4,
+   "componentType": 5126,
+   "count": 2,
+   "type": "MAT4"
+  },
+  {
+   "bufferView": 5,
+   "componentType": 5126,
+   "count": 2,
+   "type": "SCALAR",
+   "min": [
+    0
+   ],
+   "max": [
+    1
+   ]
+  },
+  {
+   "bufferView": 6,
+   "componentType": 5126,
+   "count": 2,
+   "type": "VEC4"
+  }
+ ],
+ "meshes": [
+  {
+   "name": "column",
+   "primitives": [
+    {
+     "attributes": {
+      "POSITION": 0,
+      "NORMAL": 1,
+      "JOINTS_0": 2,
+      "WEIGHTS_0": 3
+     },
+     "mode": 4
+    }
+   ]
+  }
+ ],
+ "skins": [
+  {
+   "joints": [
+    1,
+    2
+   ],
+   "inverseBindMatrices": 4
+  }
+ ],
+ "nodes": [
+  {
+   "name": "body",
+   "mesh": 0,
+   "skin": 0
+  },
+  {
+   "name": "root",
+   "children": [
+    2
+   ]
+  },
+  {
+   "name": "tip",
+   "translation": [
+    0,
+    1,
+    0
+   ]
+  }
+ ],
+ "scenes": [
+  {
+   "nodes": [
+    0,
+    1
+   ]
+  }
+ ],
+ "scene": 0,
+ "animations": [
+  {
+   "name": "bend",
+   "samplers": [
+    {
+     "input": 5,
+     "output": 6,
+     "interpolation": "LINEAR"
+    }
+   ],
+   "channels": [
+    {
+     "sampler": 0,
+     "target": {
+      "node": 2,
+      "path": "rotation"
+     }
+    }
+   ]
+  }
+ ]
+}

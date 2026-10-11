@@ -4,7 +4,9 @@
  * A Map turns the snapshot of a source (a Gamepad.Player by default, or any
  * object with buttons, leftX, leftY, rightX and rightY, such as a Replay
  * source) into actions: buttons with pressed/justPressed/justReleased,
- * digital axes from two buttons, and sticks with dead zone, response curve,
+ * digital axes from two buttons, pressure actions (how hard one button is
+ * pressed, with press/release thresholds and a digital fallback for sources
+ * without pressure), and sticks with dead zone, response curve,
  * sensitivity, inversion and an optional d-pad fallback. Edges are tracked
  * by the Map itself, so they follow map.update() and work with any source.
  *
@@ -35,6 +37,18 @@ export function axis(negative, positive) {
 }
 
 /**
+ * A pressure action on one button (a single Gamepad bit): value() is the
+ * pressure in 0..1 and the action counts as held from `threshold` (default
+ * 0.5, in (0, 1]) until the pressure falls below `release` (default
+ * `threshold`; a lower value adds hysteresis). Sources without a pressure()
+ * method, and buttons without a sensor, report 1 while the button is held
+ * and 0 otherwise, so the action still works digitally.
+ */
+export function pressure(mask, options = {}) {
+    return normalize({ pressure: mask, ...options }, "Input.pressure");
+}
+
+/**
  * A stick: "left" or "right". Options: deadZone (radial, 0..0.95, default
  * 0.15), curve ("linear" default, "quadratic", "cubic"), sensitivity
  * (default 1), invertX, invertY, dpad (use the d-pad while the stick rests).
@@ -49,6 +63,15 @@ function normalize(binding, where) {
         const masks = Array.isArray(binding.button) ? binding.button : [binding.button];
         if (!masks.length) throw new TypeError(`${where}: button needs at least one mask`);
         return { button: masks.map(m => checkMask(m, where)) };
+    }
+    if (binding.pressure !== undefined) {
+        const mask = checkMask(binding.pressure, where);
+        if (mask & (mask - 1)) throw new TypeError(`${where}: pressure takes a single button bit`);
+        const threshold = binding.threshold ?? 0.5;
+        if (typeof threshold !== "number" || !(threshold > 0 && threshold <= 1)) throw new RangeError(`${where}: threshold must be in (0, 1]`);
+        const release = binding.release ?? threshold;
+        if (typeof release !== "number" || !(release > 0 && release <= threshold)) throw new RangeError(`${where}: release must be in (0, threshold]`);
+        return { pressure: mask, threshold, release };
     }
     if (binding.axis !== undefined) {
         if (!Array.isArray(binding.axis) || binding.axis.length !== 2) throw new TypeError(`${where}: axis must be [negative, positive]`);
@@ -75,22 +98,23 @@ function normalize(binding, where) {
         for (const flag of ["invertX", "invertY", "dpad"]) if (binding[flag] !== undefined) out[flag] = !!binding[flag];
         return out;
     }
-    throw new TypeError(`${where}: a binding needs button, axis or stick`);
+    throw new TypeError(`${where}: a binding needs button, axis, pressure or stick`);
 }
 
-/* Per action runtime state. kind: 0 button, 1 axis, 2 stick (cached from
+/* Per action runtime state. kind: 0 button, 1 axis, 2 stick, 3 pressure (cached from
  * the binding so update() runs without property lookups on it). */
 function makeState(binding) {
-    const state = { binding, kind: 0, masks: null, neg: 0, pos: 0, held: false, was: false, frames: 0, value: 0,
+    const state = { binding, kind: 0, masks: null, neg: 0, pos: 0, release: 0, held: false, was: false, frames: 0, value: 0,
         vector: { x: 0, y: 0 } };
     compile(state);
     return state;
 }
 function compile(state) {
     const b = state.binding;
-    state.kind = b.button ? 0 : b.axis ? 1 : 2;
+    state.kind = b.button ? 0 : b.axis ? 1 : b.pressure ? 3 : 2;
     state.masks = b.button || null;
     if (b.axis) { state.neg = b.axis[0]; state.pos = b.axis[1]; }
+    if (b.pressure) { state.neg = b.pressure; state.pos = b.threshold; state.release = b.release; }
 }
 
 export class Map {
@@ -167,7 +191,7 @@ export class Map {
         const s = this._source || this.source, raw = this.raw;
         const buttons = s.buttons | 0;
         raw.buttons = buttons; raw.leftX = s.leftX; raw.leftY = s.leftY; raw.rightX = s.rightX; raw.rightY = s.rightY;
-        const list = this._list;
+        const list = this._list, pressureOf = typeof s.pressure === "function";
         for (let i = 0; i < list.length; i++) {
             const state = list[i], was = state.held;
             let held;
@@ -180,6 +204,14 @@ export class Map {
             } else if (state.kind === 1) {
                 const v = ((buttons & state.pos) === state.pos ? 1 : 0) - ((buttons & state.neg) === state.neg ? 1 : 0);
                 state.value = v; held = v !== 0;
+            } else if (state.kind === 3) {
+                /* A source without pressure() falls back to the digital bit. */
+                const mask = state.neg;
+                let p = pressureOf ? s.pressure(mask) : (buttons & mask) ? 1 : 0;
+                if (!(p > 0)) p = 0; else if (p > 1) p = 1;     /* also NaN */
+                state.value = p;
+                held = was ? p >= state.release : p >= state.pos;
+                if (p === 0) held = false;
             } else held = this._stick(state, state.binding, raw, buttons);
             state.held = held;
             state.frames = held ? (was ? state.frames + 1 : 1) : 0;
@@ -218,7 +250,7 @@ export class Map {
     justReleased(name) { const s = this._state(name); return !s.held && s.was; }
     /** Consecutive updates the action has been held (0 when released). */
     heldFrames(name) { return this._state(name).frames; }
-    /** 0/1 for buttons, -1/0/1 for axes, the processed magnitude for sticks. */
+    /** 0/1 for buttons, -1/0/1 for axes, 0..1 pressure, the processed magnitude for sticks. */
     value(name) { return this._state(name).value; }
     /** A stick's processed vector; the same object every call, updated by update(). */
     axis(name) {

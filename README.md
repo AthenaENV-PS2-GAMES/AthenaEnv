@@ -445,11 +445,11 @@ screen needs a depth buffer: `mode.zbuffering = true` before `Screen.setMode()`.
 | [`gltf3d`](src/modules/gltf3d/gltf3d.d.ts) | `GLTF3D` | glTF/GLB scenes: node hierarchy as Scene3D nodes, every primitive as a mesh, animations as Animation3D clips, skinned meshes deformed by their joints (on VU1 with a bone palette of up to 24 joints when the mesh is fully on screen, in C with clipping otherwise), and morph targets blended by animated or scripted weights (on VU1 for up to four active targets). |
 | [`scene3d`](src/modules/scene3d/scene3d.d.ts) | `Scene3D` | Scene graph: hierarchy with dirty propagation, subtree bounds culling, a render queue sorted by pipeline, native motion (velocity and spin), skins and morph weights, and an update system on the Loop. |
 | [`particles3d`](src/modules/particles3d/particles3d.d.ts) | `Particles3D` | Billboard particles: emitters in C, quads built and projected by VU1, depth tested against the scene without writing depth. |
-| [`meshbuilder`](src/modules/meshbuilder/meshbuilder.d.ts) | `MeshBuilder` | Native procedural geometry: boxes, spheres, cylinders, planes and heightmaps, transformed mesh merging, vertex colors and atlas UVs; splits large builds into multiple Model3D meshes. |
+| [`meshbuilder`](src/modules/meshbuilder/meshbuilder.d.ts) | `MeshBuilder` | Native procedural geometry: boxes, spheres, cylinders, planes, heightmaps and extruded contours (concave outlines, caps, flat or smooth walls), transformed mesh merging, vertex colors and atlas UVs; splits large builds into multiple Model3D meshes. |
 | [`voxel`](src/modules/voxel/voxel.d.ts) | `Voxel` | Editable block worlds in native memory, terrain and caves, chunk meshing within a time budget, distance/frustum culling, block raycasts and box movement. |
 | [`lod`](src/modules/lod/lod.d.ts) | `LOD` | Distance-based mesh selection for Scene3D nodes, hysteresis, quality bias, draw-distance culling and optional fog settings. |
 | [`sky`](src/modules/sky/sky.d.ts) | `Sky` | Sky gradient, sun disc and day/night keyframes; applies matching ambient, directional light and fog color to a Lights.Set. |
-| [`debug3d`](src/modules/debug3d/debug3d.d.ts) | `Debug3D` | World-space lines, boxes, spheres, axes, grids, frusta and mesh normals, projected and clipped in C and drawn over the scene. |
+| [`debug3d`](src/modules/debug3d/debug3d.d.ts) | `Debug3D` | World-space lines, boxes, spheres, axes, grids, frusta and mesh normals, with batched VU0 projection, C clipping/fallback and GS overlay drawing. |
 
 Animation and cameras for 3D objects are listed under [Animation](#animation):
 `Animation3D`, `CameraRig3D` and `Tween3D`.
@@ -485,7 +485,7 @@ variable holds them; a script that ends releases what it created.
 the geometry added next. `build(material)` returns an array of meshes;
 dispose the builder after building and keep the meshes for drawing or
 Scene3D nodes. `merge()` bakes static props into shared geometry to reduce
-draw calls; `heightmap()` accepts a `Float32Array`, including Noise output.
+draw calls; `heightmap()` accepts a `Float32Array`, including Noise output; `extrude(contour, { height | vector })` turns a flat x,z outline into a closed prism and rejects invalid outlines without adding anything.
 
 ```js
 const builder = new MeshBuilder.Builder();
@@ -527,6 +527,15 @@ their colors. The sky gradient ignores camera roll.
 no depth test, so diagnostics stay visible. Shapes last one frame by
 default, or a supplied number of real-time seconds. `lines(Float32Array)`
 queues many segments at once; `dropped()` reports queue overflow.
+Projection uses reusable batches of 256 lines, with C fallback for extreme
+operands. Near and screen clipping apply; far-plane clipping is disabled
+for distant diagnostics. `normals()` uses inverse transpose under non-uniform
+scale and rejects singular or ill-conditioned transforms before queueing.
+Enable `Debug3D.profile(true)` to read native transform, clip and GS packet
+timings through `stats()`; timers default to off. These CPU timings include
+no GS completion wait. The focused [benchmark](bin/debug3d_bench.js) and
+[paired PCSX2 results](docs/benchmarks/e02-debug3d-2026-10-09/summary.json)
+record draw time, queue cost, complete frames and separate visual validation.
 See [bin/debug3d_example.js](bin/debug3d_example.js) and
 [bin/world_systems_example.js](bin/world_systems_example.js), which combines
 procedural geometry, LOD, navigation, triggers and a day/night cycle.
@@ -570,7 +579,7 @@ render statistics in your own scenes to identify expensive paths.
 | Module | Global | Description |
 |---|---|---|
 | [`gamepad`](src/modules/gamepad/gamepad.d.ts) | `Gamepad` | Up to eight players: DualShock 2 on both ports and multitaps, DualShock 3/4 over USB and Bluetooth. Buttons, sticks, pressure and rumble. |
-| [`input`](src/modules/input/input.d.ts) | `Input` | Named actions, button combinations and edges, digital axes, sticks with radial dead zones, response curves, sensitivity and d-pad fallback; rebinding and serializable bindings. Written in JavaScript; optional. |
+| [`input`](src/modules/input/input.d.ts) | `Input` | Named actions, button combinations and edges, digital axes, analog button pressure actions with thresholds and digital fallback, sticks with radial dead zones, response curves, sensitivity and d-pad fallback; rebinding and serializable bindings. Written in JavaScript; optional. |
 
 ```js
 Gamepad.configure({ multitap: true });   // optional drivers: multitap, usb, bluetooth
@@ -693,9 +702,9 @@ Not in the default build: `node tools/modules.js configure --modules=scene,usbma
 | Module | Global | Description |
 |---|---|---|
 | [`scene`](src/modules/scene/scene.d.ts) | `Scene` | Scenes with a lifecycle, a stack for pause menus, fade transitions and a loading screen; reference-counted assets (images, sprite sheets, sounds, music, fonts, JSON) loaded in the background and kept while two scenes share them. Written in JavaScript. |
-| [`assets3d`](src/modules/assets3d/assets3d.d.ts) | `Assets3D` | Adds meshes, textures3d and gltf kinds to Scene.Assets manifests, shared and disposed by reference count. Loads queued between frames. Written in JavaScript; optional. |
+| [`assets3d`](src/modules/assets3d/assets3d.d.ts) | `Assets3D` | Reference-counted Scene.Assets kinds, with cancellable GLB reads on Thread jobs and resumable GLTF3D construction. Written in JavaScript; optional. |
 | [`replay`](src/modules/replay/replay.d.ts) | `Replay` | Compact controller recording and playback for up to eight players, with a stored seed, quantized sticks and snapshots compatible with Input.Map. Written in JavaScript; optional. |
-| [`nav`](src/modules/nav/nav.d.ts) | `Nav` | Native A* on a weighted XZ grid, diagonal movement without corner cutting, path smoothing, and crowds with arrival and separation that drive Scene3D nodes. Optional. |
+| [`nav`](src/modules/nav/nav.d.ts) | `Nav` | Native weighted A*, incremental queries with a per-frame budget, path smoothing, and crowds with arrival and separation that drive Scene3D nodes. Optional. |
 | [`triggers3d`](src/modules/triggers3d/triggers3d.d.ts) | `Triggers3D` | Box and sphere zones with layer masks and enter/exit events for spherical bodies; zones and bodies can follow Scene3D nodes. Pair tests in C, callbacks in JavaScript. Optional. |
 
 ```js
@@ -735,11 +744,55 @@ VRAM leaks), and `Scene.Assets.define()` adds asset kinds.
 `Assets3D` registers its kinds when imported. Add `meshes`, `textures3d`
 and `gltf` entries to a scene's asset manifest; include `gltf3d` explicitly
 when using the `gltf` kind, since it is not an Assets3D dependency.
-`Assets3D.setBudget(ms)` controls the queued loading budget (default 8 ms
-per frame). Model parsing is synchronous and at least one load runs per
-frame: a single large model can exceed the budget. These loads are spread
-across frames rather than decoded on a worker. Shared assets are disposed
-when their last scene releases them.
+GLB reads use Thread jobs by default, one at a time, with a 16 MiB limit;
+`{ maxBytes }` can lower it. Releasing the last holder cancels queued/read
+work. `gltf` scenes are then built by `GLTF3D.Loader` in resumable units
+(a 256 KiB slice of the byte snapshot, parse, validation, a slice of one
+primitive's vertex/index reads or of its Mesh3D build, links, one skin or
+animation), spread over `Assets3D.update()` calls (one native `run()` per
+call, timed per unit, so a call stops after the budget plus at most one unit);
+the loaders borrow the bytes the job read, so no copy is made. Pass
+`{ stepped: false }` per asset, or `Assets3D.setStepped(false)`, to build each
+GLB in a single call instead (best for loading screens). Texture decoding
+and uploads are still atomic. `Assets3D.setBudget(ms)` stays a soft
+budget (default 8 ms): one unit can exceed it. `pending()` reports read
+progress (bytes) and construction progress (units); `stats()` records each
+phase's largest unit (`resetStats()` clears them). Call `update()` yourself
+in games without Loop.
+`.gltf` files and GLBs with relative external buffers or images are resolved
+explicitly: the loader lists the files, Assets3D reads each on a Thread job
+(each up to `maxBytes`, relative paths only) and provides them, so no hidden
+synchronous I/O remains; start one yourself with
+`GLTF3D.beginMemory(bytes, origin, material?, { dependencies: true })`,
+`loader.dependencies` and `loader.provide(index, bytes)`.
+`{ asyncRead: false }` selects the path loader. OBJ/MTL and standalone
+textures still use path loaders. Shared assets are disposed when their last scene releases
+them; later upload requests for cached textures are honored.
+
+`Model3D.loadMemory(bytes, origin, material?)` and
+`GLTF3D.loadMemory(bytes, origin, material?)` synchronously construct from
+self-contained GLB bytes. They accept ArrayBuffer or Uint8Array, honor
+subarrays, and copy all returned geometry, animations and decoded pixels.
+Unaligned input needs a temporary copy. `origin` identifies errors; URI
+buffers and external images are rejected before construction. These APIs
+perform no file I/O or GS upload. `GLTF3D.beginMemory(bytes, origin, material?)`
+(and `Model3D.beginMemory` for one static mesh) returns a `GLTF3D.Loader`: call `step()` until it returns true and `finish()`
+for the same asset; its first steps snapshot the bytes (do not modify them
+before `phase` leaves `"copy"`), so later steps never touch your buffer;
+`{ borrow: true }` skips that copy (aligned bytes are used in place and must
+stay unchanged until `finish()`/`dispose()`), and `loader.run(budgetMs)` runs
+units for a time slice.
+`dispose()` abandons it. A single unit is still atomic. The focused
+[loading benchmark](bin/assets3d_bench.js) records peak blocking spans and
+every complete frame, including warmup and cleanup. The
+[validated E03 results](docs/benchmarks/e03-glb-2026-10-09/summary.json)
+and the [stepped-construction results](docs/benchmarks/e03-steps-2026-10-09/summary.json)
+and the [closing E03 results](docs/benchmarks/e03-final-2026-10-09/summary.json)
+include host sanitizer tests and PCSX2 Flatpak runs: in the measured scenes the
+largest single `update()` call fell from 17.2 to 0.9 ms (119 to 1.7 ms for a
+65k-corner mesh), at the price of extra CPU per step and of a copy of the GLB
+bytes; standalone textures, OBJ/MTL and glTF validation are still atomic and
+the budget remains soft.
 
 For repeatable input, call `Replay.Recorder.capture()` once per simulation
 step and let gameplay read `recorder.source(0)` through `Input.Map`.
@@ -758,6 +811,60 @@ advances agents with `crowd.update(dt)`. Navigation keeps each agent's Y
 position; populate the grid and handle terrain height/collision in the game.
 It has no automatic Loop attachment. Move bound agents in the game update,
 before Scene3D's post-update system computes their world transforms.
+
+For large queries, `requestPath()` creates a persistent request and
+`stepRequests(maxWork, budgetMs)` advances the grid's FIFO once per frame.
+The budget covers initialization, search, reconstruction and smoothing.
+It is a soft CPU limit: one work unit and the binding overhead may exceed
+it. A grid shares its six cell arrays across at most 16 pending requests;
+each request owns its output (8 bytes per point, 512 points by default)
+and retains the grid until disposal. Changed costs invalidate pending
+requests with `gridChanged`; unchanged writes preserve them. `findPath()`
+and `Agent.moveTo()` throw while requests are pending; the latter preserves
+its previous path. For agents, `requestMoveTo()` queues an owned plan using
+the Crowd's path options. It enters `planning` and pauses movement/separation
+until the grid step adopts the result. The completion work unit includes
+copying at most 512 points into the agent's existing route buffer.
+
+```js
+const request = grid.requestPath(1.5, 1.5, 60.5, 60.5);
+const result = new Float32Array(Nav.MAX_PATH * 2);
+// In each update, until the request leaves "pending":
+grid.stepRequests(256, 1); // work units or 1 ms, whichever comes first
+if (request.state === "found") {
+    const validFloats = request.copyPath(result);
+    // Consume result[0..validFloats); copying is outside the step budget.
+    request.dispose();
+}
+// Also dispose failed/cancelled requests after inspecting state/error.
+```
+
+`request.cancel()` frees its queue slot; `request.dispose()` also releases
+native output. `grid.dispose()` cancels every pending request. `getPath()`
+allocates a result array; `copyPath()` supports a reusable subarray and
+throws before writing if it is too short. See the [C contract](src/modules/nav/include/athena/nav.h)
+and [incremental benchmark](bin/nav_incremental_bench.js).
+
+```js
+const plan = orc.requestMoveTo(player.x, player.z);
+// Once per grid per frame, shared with every Crowd and independent request:
+grid.stepRequests(4096, 1);
+crowd.update(dt);
+// Inspect plan.state/error if needed; dispose it after a terminal outcome.
+```
+
+One pending plan belongs to each agent. A replacement joins the FIFO tail,
+including when its old plan occupies the last queue slot. Queue-full, invalid
+target and allocation errors preserve the prior plan/motion. The agent owns
+planning independently of the returned observer: ignoring/collecting that
+Request keeps planning alive; explicitly cancelling/disposing it stops the
+plan. `stop()`, `setPosition()`, Agent disposal/GC, Crowd disposal and grid
+cost changes cancel/invalidate pending plans. Crowd disposal cancels its own
+plans; retained Agents remain usable. `planningState`/`planningError` retain
+the last outcome; `moveTo()` resets them. Planning failure leaves the agent
+idle. Keep the Grid handle to advance its shared queue; `crowd.update()`
+does not advance searches. See the [16-agent queue benchmark](bin/nav_crowd_queue_bench.js)
+for measured queue latency and node update costs.
 
 `Triggers3D.World` also requires an explicit `update()`. If its bodies or
 zones follow nodes, run it after `scene.update()` so callbacks see the
@@ -961,13 +1068,23 @@ task fails, and the next task continues. Task failures appear in the report;
 checkpoint failures reject the promise. Warmup batches, setup, cleanup and
 JSON writes are excluded from timings. Reported milliseconds are per
 invocation (batch duration divided by `iterations`), including JS and timer
-overhead. `Bench.Runner.step()` supports manual loops and `cancel()` stops
+overhead. Optional `beforeBatch()` and `afterBatch()` prepare and clean up
+each batch outside the work timer; `afterBatch()` also runs on failure or
+cancellation. `inspect(context)` records counters or memory before teardown.
+Version 2 reports retain raw ticks and all samples in execution order.
+`batchCpu` includes preparation, work and cleanup without dividing by
+iterations, and counts batches exceeding `frameBudgetMs` (default 1000/60).
+It excludes setup, checkpoints and other frame work; it is a lower bound
+on frame cost. `Bench.Runner.step()` supports manual loops and `cancel()` stops
 the runner. Every batch must finish before the EE clock wraps (about 14.5 s).
 Drawing measures CPU submission unless the task explicitly waits for the
 GS. Use an empty task as a timing reference and record platform, build and
 scene metadata; compare repeated runs of the same workload.
 [bin/world_systems_bench.js](bin/world_systems_bench.js) measures LOD,
-navigation and triggers and writes a checkpoint after each task.
+navigation, triggers, 2,000 debug lines and loading. It also records complete
+Loop frame CPU costs, including setup and checkpoints. Supply its recorded
+configuration using the [E00 benchmark procedure](docs/benchmarks/README.md),
+which documents phase boundaries and three alternating before/after pairs.
 
 ```js
 // Read a file straight from a zip, without extracting it.

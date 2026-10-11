@@ -14,7 +14,9 @@
  * ambient occlusion and atlas tiles; "greedy" merges equal coplanar faces
  * into rectangles (far fewer triangles, colors only, no AO). Faces are
  * shaded by direction (`bakedLight`, UNLIT, cheapest) or lit by Render3D
- * (`shading: Model3D.DIFFUSE`).
+ * (`shading: Model3D.DIFFUSE`). Baked light does not follow the time of day:
+ * call `Render3D.setTint(...Sky.tint())` before `draw()` and restore
+ * `Render3D.setTint(1, 1, 1)` after, with no rebuild of the chunks.
  *
  * Coordinates are in blocks: block (x, y, z) fills [x, x+1) x [y, y+1) x
  * [z, z+1). Chunks that surround the camera are clipped in C on the EE

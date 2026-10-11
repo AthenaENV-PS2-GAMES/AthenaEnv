@@ -255,24 +255,23 @@ points_done:
                     nop                             fmand VI01, VI04
                     nop                             ilw.y VI10, 33(VI00)
                     nop                             ilw.z VI11, 33(VI00)
+                    nop                             lq.xyz VF14, 16(VI00)
                     nop                             iaddiu VI01, VI01, 0x7fe0
                     nop                             ior VI09, VI09, VI01
                     nop                             ilw.x VI01, 33(VI00)
-                    nop                             isw.x VI10, 33(VI00)
+                    mul.xyz VF13, VF13, VF14        isw.x VI10, 33(VI00)
                     nop                             isw.y VI11, 33(VI00)
-                    nop                             loi 0x437f0000
-                    muli.xyz VF13, VF13, i          sq VF00, 0(VI07)
-                    nop                             isw.z VI01, 33(VI00)
                     nop                             loi 0x43000000
-                    muli.w VF13, VF13, i            ior VI09, VI09, VI01
+                    muli.w VF13, VF13, i            sq VF00, 0(VI07)
+                    nop                             isw.z VI01, 33(VI00)
+                    nop                             ior VI09, VI09, VI01
                     nop                             iaddiu VI01, VI00, 0x7fff
-                    nop                             iaddiu VI01, VI01, 1
+                    ftoi0.xyzw VF14, VF13           iaddiu VI01, VI01, 1
                     nop                             iand VI10, VI09, VI01
-                    ftoi0.xyzw VF14, VF13           ilw.x VI01, 9(VI00)
-                    nop                             nop
-                    nop                             nop
+                    nop                             ilw.x VI01, 9(VI00)
                     nop                             nop
                     nop                             sq VF14, 1(VI07)
+                    nop                             nop
                     nop                             nop
                     nop                             ibeq VI01, VI00, fog_off
                     nop                             nop

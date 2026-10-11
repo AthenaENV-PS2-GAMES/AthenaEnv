@@ -4,7 +4,9 @@
  *
  * Shapes become line segments queued in C; each frame they are projected
  * with a Camera3D and clipped (near plane and screen edges) on the EE, then
- * drawn as GS lines over the frame, without depth test (always on top). A
+ * drawn as GS lines over the frame, without depth test (always on top).
+ * Far-plane clipping is disabled for distant diagnostics; transformed
+ * non-finite endpoints are discarded. A
  * segment lasts one frame (`seconds` omitted or 0) or `seconds` of real
  * time. At most MAX_LINES segments are queued; more are dropped and counted
  * by dropped(). Colors are Color.new() values (default green).
@@ -48,6 +50,8 @@ declare namespace Debug3D {
     /**
      * Normals of a mesh, `length` units long (default 0.25), from each
      * vertex: an Instance uses its transform unless `matrix` is given.
+     * Uses inverse transpose under non-uniform scale. Singular/ill-conditioned
+     * linear matrices (scaled determinant <=1e-7) throw before queueing.
      * Meshes without normals queue nothing.
      */
     function normals(target: Model3D.Instance | Model3D.Mesh, length?: number, color?: Color.Value,
@@ -65,4 +69,19 @@ declare namespace Debug3D {
     function dropped(): number;
     /** Turns the module on or off (off: queueing does nothing and the queue is emptied). Returns whether on. */
     function show(on?: boolean): boolean;
+    /** Enables native phase timers (default off, no clock reads). */
+    function profile(enabled: boolean): void;
+    /** Latest projection/draw. Transform includes packing and VU0 perspective/
+     * viewport mapping; clip includes C clipping/mapping of adjusted endpoints.
+     * Emit includes callbacks and GS packet construction
+     * without a GS wait. Total excludes 2D-view save/restore and age().
+     * Reading creates a JS object outside native phase timers.
+     * Clock spans must finish before the EE wrap (~14.5 seconds). */
+    function stats(): {
+        input: number; emitted: number; rejected: number; batches: number;
+        transformTicks: number; clipTicks: number; emitTicks: number; totalTicks: number;
+        /** EE batches using C for extreme operands (VU0 overflow/denormal behavior differs). */
+        fallbackBatches: number;
+        ticksPerMs: number; profiling: boolean; backend: "c" | "vu0";
+    };
 }

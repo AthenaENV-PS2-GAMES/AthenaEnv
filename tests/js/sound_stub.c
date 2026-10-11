@@ -6,14 +6,16 @@
  * stopped or until __soundEnd(channel).
  */
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 #include <quickjs.h>
 #include <athena/sound.h>
 #include <athena/js/sound.h>
 
-struct AthenaSfx { int volume, pan; };
+struct AthenaSfx { int volume, pan, loop; };
 static JSClassID fake_class;
 static struct AthenaSfx *voice_owner[24];
+static uint32_t voice_gen[24];
 static int plays, stops, level_count, levels[64][3];
 
 AthenaSfx *athena_sfx_js_peek(JSValueConst value) { return fake_class ? JS_GetOpaque(value, fake_class) : NULL; }
@@ -21,10 +23,14 @@ int athena_sfx_get_volume(const AthenaSfx *s) { return s->volume; }
 int athena_sfx_get_pan(const AthenaSfx *s) { return s->pan; }
 int athena_sfx_set_volume(AthenaSfx *s, int v) { s->volume = v; return 0; }
 int athena_sfx_set_pan(AthenaSfx *s, int p) { s->pan = p; return 0; }
+bool athena_sfx_get_loop(const AthenaSfx *s) { return s->loop; }
+uint32_t athena_sfx_voice_token(const AthenaSfx *s, int channel) {
+    return channel >= 0 && channel < 24 && voice_owner[channel] == s ? voice_gen[channel] : 0;
+}
 int athena_sfx_play(AthenaSfx *s, int channel) {
     (void)channel;
     for (int i = 0; i < 24; i++) if (!voice_owner[i]) {
-        voice_owner[i] = s; plays++;
+        voice_owner[i] = s; voice_gen[i]++; plays++;
         if (level_count < 64) { levels[level_count][0] = i; levels[level_count][1] = s->volume; levels[level_count][2] = s->pan; level_count++; }
         return i;
     }
@@ -48,10 +54,10 @@ static void fake_finalizer(JSRuntime *rt, JSValue v) {
 }
 static JSClassDef fake_def = { "FakeSfx", .finalizer = fake_finalizer };
 static JSValue js_fake_sfx(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
-    (void)self; (void)argc; (void)argv;
+    (void)self;
     JSValue obj = JS_NewObjectClass(ctx, fake_class);
     struct AthenaSfx *s = js_mallocz(ctx, sizeof(*s));
-    s->volume = 100; JS_SetOpaque(obj, s); return obj;
+    s->volume = 100; s->loop = argc > 0 && JS_ToBool(ctx, argv[0]); JS_SetOpaque(obj, s); return obj;
 }
 static JSValue js_sound_log(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
     (void)self; (void)argc; (void)argv;
@@ -73,6 +79,12 @@ static JSValue js_sound_end(JSContext *ctx, JSValueConst self, int argc, JSValue
     if (ch >= 0 && ch < 24) voice_owner[ch] = NULL;
     return JS_UNDEFINED;
 }
+/* __soundPlay(sfx): a play that does not come from Audio3D (another Sound user); returns the channel. */
+static JSValue js_sound_play(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    AthenaSfx *s = argc > 0 ? athena_sfx_js_peek(argv[0]) : NULL;
+    return JS_NewInt32(ctx, s ? athena_sfx_play(s, -1) : -2);
+}
 void sound_stub_init(JSContext *ctx) {
     if (!fake_class) JS_NewClassID(&fake_class);
     if (!JS_IsRegisteredClass(JS_GetRuntime(ctx), fake_class)) JS_NewClass(JS_GetRuntime(ctx), fake_class, &fake_def);
@@ -81,5 +93,6 @@ void sound_stub_init(JSContext *ctx) {
     JS_SetPropertyStr(ctx, g, "__fakeSfx", JS_NewCFunction(ctx, js_fake_sfx, "__fakeSfx", 0));
     JS_SetPropertyStr(ctx, g, "__soundLog", JS_NewCFunction(ctx, js_sound_log, "__soundLog", 0));
     JS_SetPropertyStr(ctx, g, "__soundEnd", JS_NewCFunction(ctx, js_sound_end, "__soundEnd", 1));
+    JS_SetPropertyStr(ctx, g, "__soundPlay", JS_NewCFunction(ctx, js_sound_play, "__soundPlay", 1));
     JS_FreeValue(ctx, g);
 }

@@ -18,7 +18,7 @@ BASE="-O1 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DCONFIG_BIGNUM -DCONFIG_VERS
 ASAN="-fsanitize=address"
 UBSAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
 INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include \
-    -Isrc/modules/random/include -Isrc/modules/noise/include \
+    -Isrc/modules/random/include -Isrc/modules/noise/include -Isrc/modules/assets3d/include -Isrc/modules/assets3d/quickjs -Isrc/modules/thread/include \
     -Isrc/modules/debug/include -Isrc/modules/color/include -Isrc/modules/profiler/include -Isrc/modules/debug3d/include -Isrc/modules/savegame/include -Isrc/modules/meshbuilder/include -Isrc/modules/voxel/include \
     -Isrc/modules/lod/include -Isrc/modules/triggers3d/include -Isrc/modules/nav/include -Isrc/modules/audio3d/include \
     -Isrc/modules/sky/include -Isrc/modules/sound/include \
@@ -90,6 +90,7 @@ $CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare 
     src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
+    src/modules/assets3d/native/texture_decode_job.c src/modules/assets3d/quickjs/ath_assets3d.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
     src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
     src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
@@ -117,6 +118,7 @@ $CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter
     src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
     src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
     src/modules/noise/quickjs/ath_noise.c \
+    src/modules/assets3d/native/texture_decode_job.c src/modules/assets3d/quickjs/ath_assets3d.c \
     src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
     src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
     src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
@@ -162,6 +164,8 @@ echo "== tests/three_d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/three_d_test.js "3D module tests passed"
 echo "== tests/lights_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/lights_test.js "3D lighting tests passed"
+echo "== tests/tint_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/tint_test.js "TINT_TEST: PASS"
 echo "== tests/geometry3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/geometry3d_test.js "3D procedural geometry tests passed"
 echo "== tests/textures3d_test.js (two fresh runtimes)"
@@ -172,6 +176,8 @@ echo "== tests/animation3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/animation3d_test.js "Animation3D tests passed"
 echo "== tests/gltf3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/gltf3d_test.js "glTF3D tests passed"
+echo "== tests/gltf_memory_test.js (two fresh runtimes)"
+ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/gltf_memory_test.js "GLB memory JS test passed"
 echo "== tests/camerarig3d_test.js (two fresh runtimes)"
 ATHENA_TEST_REPEAT=2 check "$OUT/runner" tests/camerarig3d_test.js "CameraRig3D tests passed"
 echo "== tests/tween3d_test.js (two fresh runtimes)"

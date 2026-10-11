@@ -299,11 +299,11 @@ points_done:
                     nop                             fmand VI01, VI03
                     nop                             ilw.y VI09, 33(VI00)
                     nop                             ilw.z VI10, 33(VI00)
-                    nop                             lq.x VF13, 26(VI00)
+                    nop                             lq.xyz VF13, 16(VI00)
                     nop                             iaddiu VI01, VI01, 0x7fe0
                     nop                             ior VI08, VI08, VI01
                     nop                             ilw.x VI01, 33(VI00)
-                    mulx.xyz VF17, VF17, VF13x      isw.x VI09, 33(VI00)
+                    mul.xyz VF17, VF17, VF13        isw.x VI09, 33(VI00)
                     nop                             isw.y VI10, 33(VI00)
                     nop                             loi 0x43000000
                     muli.w VF17, VF17, i            nop

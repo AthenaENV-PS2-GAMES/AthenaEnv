@@ -55,6 +55,27 @@ int athena_meshbuilder_plane(AthenaMeshBuilder *b,const float center[3],float wi
  * between the minimum and maximum sample instead of the current color. */
 int athena_meshbuilder_heightmap(AthenaMeshBuilder *b,const float *heights,uint32_t w,uint32_t h,float cell,float scale,
     const float origin[3],const float low[4],const float high[4]);
+/* Prism from a flat contour. xz holds count (x, z) pairs of a simple polygon in the plane y = `y` (3 to
+ * ATHENA_MESHBUILDER_MAX_CONTOUR points, the first point is not repeated at the end, no holes); extrusion
+ * is the vector from the contour plane to the other end (its y component must not be 0: it may be slanted,
+ * and negative extrudes downward). The input winding does not matter: faces are always counter-clockwise
+ * from outside. Side walls: one quad per edge with a flat normal (perpendicular to the wall, pointing away
+ * from the interior) or, with SMOOTH, vertices shared between walls with the averaged normal (seam
+ * duplicated); u runs along the contour by length (0 at the first point to 1 at its return), v is 1 at
+ * the contour plane and 0 at the far end. Caps: CAP_START at the contour plane (normal opposite to the
+ * extrusion's y direction) and CAP_END at the far end (normal along it), triangulated by ear clipping, so
+ * concave outlines work; points that lie on a straight edge are kept for the walls but not used by the
+ * caps; cap UVs are the contour's bounding box, 0..1 in x and z. The pen's color, transform and UV
+ * rectangle apply. Rejected (EINVAL, athena_meshbuilder_error_detail() says why, nothing is added): fewer
+ * than 3 or too many points, non-finite values, repeated consecutive points, a spike (the outline
+ * doubling back on itself), edges that cross or touch, zero area, an extrusion parallel to the plane. */
+#define ATHENA_MESHBUILDER_MAX_CONTOUR 512u
+#define ATHENA_EXTRUDE_CAP_START 1u
+#define ATHENA_EXTRUDE_CAP_END 2u
+#define ATHENA_EXTRUDE_SMOOTH 4u
+int athena_meshbuilder_extrude(AthenaMeshBuilder *b,const float *xz,uint32_t count,float y,const float extrusion[3],uint32_t flags);
+/* The reason of the last extrude() rejection (static text). */
+const char *athena_meshbuilder_error_detail(void);
 /* Static batching: the mesh's triangles under the current transform (and
  * `model` inside it when not NULL, e.g. an instance transform), with its
  * colors (times base color) and UVs when it has them. Skin and morph data

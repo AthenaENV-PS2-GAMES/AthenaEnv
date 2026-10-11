@@ -163,7 +163,7 @@ fanLoop:
     iadd corner, vi00, vi00
     iadd at, vi00, vi00
 projectLoop:
-    lq.xyz colorScale, CLIPFAN_OFFSET(vi00)
+    lq.xyz colorScale, 16(vi00)
     lq pos, POLY_POS(at)
     lq col, POLY_COL(at)
     lq tex, POLY_UV(at)
@@ -173,7 +173,7 @@ projectLoop:
     add.xyz pos, pos, offset
     addw.z tex, vf00, vf00[w]
     mul.xyz tex, tex, q
-    mulx.xyz col, col, colorScale[x]
+    mul.xyz col, col, colorScale
     loi 128.0
     muli.w col, col, i
     sq pos, 60(corner)

@@ -332,12 +332,12 @@ fanLoop:
 projectLoop:
                     nop                             lq VF11, 48(VI09)
                     nop                             lq VF13, 56(VI09)
-                    addw.z VF13, VF00, VF00w        lq.xyz VF10, 26(VI00)
+                    addw.z VF13, VF00, VF00w        lq.xyz VF10, 16(VI00)
                     nop                             lq VF12, 52(VI09)
                     nop                             div q, VF00w, VF11w
                     nop                             loi 0x43000000
                     nop                             iaddiu VI10, VI00, 3
-                    mulx.xyz VF12, VF12, VF10x      nop
+                    mul.xyz VF12, VF12, VF10        nop
                     mulq.xyz VF11, VF11, q          waitq
                     mulq.xyz VF13, VF13, q          nop
                     nop                             nop

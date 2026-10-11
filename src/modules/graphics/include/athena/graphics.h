@@ -536,6 +536,11 @@ typedef struct {
 void draw_point_list(float x, float y, prim_point *list, int list_size);
 
 void draw_line_list(float x, float y, prim_line *list, int list_size);
+/* Preprojected pixel-space segments. Ignores the 2D view; caller guarantees
+ * finite coordinates in [-16383,16383]. Same half-away-from-zero pixel
+ * rounding, color, scissor and packet ownership as draw_line_list(). */
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list, int list_size);
 
 void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size);
 

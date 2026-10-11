@@ -8,7 +8,16 @@
  * call `update()` after `scene.update()` (or let the attached Loop update the
  * scene first).
  *
- * Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
+ * Stay: `onStay(body, zone)` (opt-in per zone by passing or assigning a function, or world-wide with
+ * `world.onStay`) runs every update for each body that was already inside at the previous update and
+ * still is; a body that enters in an update gets ENTER only, STAY from the next one. Per update the
+ * callbacks run in this order: every ENTER/EXIT (by zone id, then body id), then every STAY (same order).
+ * Each STAY is one JavaScript call, so opt in only the zones that need it.
+ *
+ * Many zones and bodies: `world.setGrid(cellSize)` adds a broad phase (bodies binned by their bounds; each
+ * zone tests only the bodies of the cells it covers; still bodies cost nothing per update; a body that
+ * leaves a zone's neighbourhood still gets its EXIT). Events and their order are identical with and
+ * without it; `world.stats()` shows how many pairs were considered. Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
  *
  * Example:
  * ```js
@@ -29,6 +38,8 @@ declare namespace Triggers3D {
         mask?: number;
         onEnter?(body: Body, zone: Zone): void;
         onExit?(body: Body, zone: Zone): void;
+        /** Every update while a body stays inside (opt-in). */
+        onStay?(body: Body, zone: Zone): void;
         data?: any;
     }
     class Zone {
@@ -38,6 +49,8 @@ declare namespace Triggers3D {
         mask: number;
         onEnter?: (body: Body, zone: Zone) => void;
         onExit?: (body: Body, zone: Zone) => void;
+        /** Assigning a function turns STAY events on for this zone; undefined turns them off. */
+        onStay?: (body: Body, zone: Zone) => void;
         data: any;
         setBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): this;
         setSphere(x: number, y: number, z: number, radius: number): this;
@@ -66,11 +79,22 @@ declare namespace Triggers3D {
         /** Called for every event after the zone's own callbacks. */
         onEnter?: (zone: Zone, body: Body) => void;
         onExit?: (zone: Zone, body: Body) => void;
+        /** STAY for every zone, after the zone's own callbacks (opt-in: assigning a function turns it on). */
+        onStay?: (zone: Zone, body: Body) => void;
+        /**
+         * Broad phase: cellSize near the typical zone size; 0 turns it off (default). `capacity` (default 4096)
+         * bounds the body-cell entries: bodies that do not fit, or cover more than 64 cells, are tested against
+         * every zone; zones covering more than 256 cells test every body.
+         */
+        setGrid(cellSize: number, options?: { capacity?: number }): this;
+        /** Of the last update(): pairs considered and tested, events, occupied pairs and grid occupancy. */
+        stats(): { zones: number; bodies: number; candidates: number; tested: number; events: number; stayEvents: number;
+            occupiedPairs: number; dirtyBodies: number; cells: number; entries: number; largeBodies: number; largeZones: number };
         box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, options?: ZoneOptions): Zone;
         sphere(x: number, y: number, z: number, radius: number, options?: ZoneOptions): Zone;
         body(x: number, y: number, z: number, options?: { radius?: number; layers?: number; data?: any }): Body;
         /**
-         * Tests every pair and runs callbacks; returns events generated.
+         * Tests the pairs and runs callbacks; returns events generated (ENTER, EXIT and STAY).
          * Callbacks may remove/create bodies or zones: pending events for
          * removed objects are skipped, new objects are tested next update.
          * Recursive update() throws; callback errors propagate.

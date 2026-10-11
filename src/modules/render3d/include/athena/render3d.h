@@ -35,6 +35,15 @@ typedef struct {
  * Main thread only. */
 void athena_render3d_stats_add(const AthenaRender3DStats *stats);
 void athena_render3d_frame_stats(AthenaRender3DStats *out,int reset);
+/* Tint: a linear RGB multiplier in [0,1] (white by default) that every draw after the call applies
+ * to its final vertex RGB, after lighting and before fog: result = clamp(color * lighting) * tint,
+ * and color * tint for UNLIT. It does not alter the mesh's immutable colors, costs one constant
+ * quad per object (sent only when it changes within a pass) and no VU cycles, and is global state:
+ * set it before each draw or group of draws that needs a different one, and restore white.
+ * Texture alpha and vertex alpha are untouched. -1 (state unchanged) when a component is not in
+ * [0,1]. Main thread only. */
+int athena_render3d_set_tint(float r,float g,float b);
+void athena_render3d_get_tint(float out[3]);
 /* The guard band factor of the current screen mode: how far beyond the
  * screen (in screen widths/heights from the centre, at least 1) primitives
  * still fit the GS's coordinate range with a margin. 1 without a GS. */

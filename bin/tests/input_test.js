@@ -83,5 +83,53 @@ for (const name of ["platformer", "shooter", "menu"]) {
 throws("unknown preset", () => Input.preset("racing"), RangeError);
 if (!globalThis.Gamepad) throws("no Gamepad and no source", () => new Input.Map({ a: Input.button(1) }).update(), Error);
 
+// Pressure actions: threshold, hysteresis, digital fallback, source with pressure(), rebind and saved bindings.
+const L2 = 0x0100, R2 = 0x0200;
+const analog = { buttons: 0, leftX: 0, leftY: 0, rightX: 0, rightY: 0, levels: {}, pressure(b) { return (this.buttons & b) ? (this.levels[b] ?? 1) : 0; } };
+const pm = new Input.Map({ fire: Input.pressure(R2, { threshold: 0.6, release: 0.3 }), aim: Input.pressure(L2), jump: Input.button(CROSS) }, { source: analog });
+pm.update();
+check("pressure idle", !pm.pressed("fire") && pm.value("fire") === 0 && !pm.justPressed("fire"));
+analog.buttons = R2; analog.levels[R2] = 0.4; pm.update();
+check("below the threshold", !pm.pressed("fire") && close(pm.value("fire"), 0.4));
+analog.levels[R2] = 0.6; pm.update();
+check("press at the threshold, edge", pm.pressed("fire") && pm.justPressed("fire") && pm.heldFrames("fire") === 1);
+analog.levels[R2] = 0.35; pm.update();
+check("hysteresis keeps it held above release", pm.pressed("fire") && !pm.justPressed("fire") && close(pm.value("fire"), 0.35) && pm.heldFrames("fire") === 2);
+analog.levels[R2] = 0.25; pm.update();
+check("released below release, edge", !pm.pressed("fire") && pm.justReleased("fire"));
+analog.levels[R2] = 0.5; pm.update();
+check("re-press needs the threshold again", !pm.pressed("fire"));
+analog.buttons = 0; analog.levels[R2] = 0.9; pm.update();
+check("button bit released gives 0", pm.value("fire") === 0 && !pm.pressed("fire"));
+analog.buttons = L2; analog.levels[L2] = 0.5; pm.update();
+check("default threshold 0.5", pm.pressed("aim") && close(pm.value("aim"), 0.5));
+analog.levels[L2] = 7; pm.update();
+check("pressure clamped to 1", pm.value("aim") === 1);
+analog.levels[L2] = NaN; pm.update();
+check("NaN pressure is 0", pm.value("aim") === 0 && !pm.pressed("aim"));
+analog.buttons = CROSS; pm.update();
+check("buttons keep their edges beside pressure", pm.justPressed("jump"));
+// Source without pressure(): the digital bit gives 1.
+const digital = { buttons: 0, leftX: 0, leftY: 0, rightX: 0, rightY: 0 };
+const dm = new Input.Map({ fire: Input.pressure(R2, { threshold: 0.9 }) }, { source: digital });
+digital.buttons = R2; dm.update();
+check("digital fallback", dm.pressed("fire") && dm.justPressed("fire") && dm.value("fire") === 1);
+digital.buttons = 0; dm.update();
+check("digital fallback released", !dm.pressed("fire") && dm.justReleased("fire") && dm.value("fire") === 0);
+// Rebind, save, load; a map can switch between a source with and one without pressure.
+pm.rebind("fire", Input.pressure(L2, { threshold: 0.2 }));
+check("rebind to pressure", pm.bindings().fire.pressure === L2 && pm.bindings().fire.release === 0.2);
+const psaved = JSON.parse(JSON.stringify(pm.bindings()));
+const reloaded = new Input.Map(psaved, { source: analog }); analog.buttons = L2; analog.levels[L2] = 0.3; reloaded.update();
+check("saved pressure bindings", reloaded.pressed("fire") && close(reloaded.value("fire"), 0.3));
+pm.setSource(digital); digital.buttons = L2; pm.update();
+check("setSource to a digital source", pm.pressed("fire") && pm.value("fire") === 1);
+throws("pressure needs one bit", () => Input.pressure(L2 | R2), TypeError);
+throws("pressure bad mask", () => Input.pressure(0), TypeError);
+throws("pressure threshold 0", () => Input.pressure(R2, { threshold: 0 }), RangeError);
+throws("pressure threshold > 1", () => Input.pressure(R2, { threshold: 1.5 }), RangeError);
+throws("pressure release above threshold", () => Input.pressure(R2, { threshold: 0.4, release: 0.5 }), RangeError);
+throws("pressure threshold NaN", () => Input.pressure(R2, { threshold: NaN }), RangeError);
+
 console.log(`Result: ${passed} passed, ${failed} failed`);
 if (!failed) console.log("Input module test passed");

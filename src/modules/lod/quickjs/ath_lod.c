@@ -109,7 +109,7 @@ static JSValue js_set_camera(JSContext *ctx,JSValueConst self,int argc,JSValueCo
     } else if(!c&&auto_system) athena_loop_system_remove(auto_system);
     return JS_UNDEFINED;
 }
-static const char *const names[]={"groups","hidden","changes","perLevel"};
+static const char *const names[]={"groups","hidden","changes","evaluated","cells","cellsSkipped","perLevel"};
 static JSAtom atoms[countof(names)];
 static AthenaJSAtoms table={names,countof(names),atoms,NULL};
 static JSValue put_stats(JSContext *ctx,JSValueConst out) {
@@ -117,10 +117,10 @@ static JSValue put_stats(JSContext *ctx,JSValueConst out) {
     if(!athena_js_out_object(ctx,out,&obj,&define,"out")) return JS_EXCEPTION;
     JSValue levels=JS_NewArray(ctx);
     for(uint32_t i=0;i<ATHENA_LOD_MAX_LEVELS&&!JS_IsException(levels);i++) JS_SetPropertyUint32(ctx,levels,i,JS_NewUint32(ctx,last.per_level[i]));
-    const uint32_t v[]={last.groups,last.hidden,last.changes};
+    const uint32_t v[]={last.groups,last.hidden,last.changes,last.evaluated,last.cells,last.cells_skipped};
     int failed=JS_IsException(levels);
-    for(unsigned i=0;!failed&&i<3;i++) failed=athena_js_put(ctx,&table,obj,define,i,JS_NewUint32(ctx,v[i]))<0;
-    if(!failed) failed=athena_js_put(ctx,&table,obj,define,3,levels)<0; else JS_FreeValue(ctx,levels);
+    for(unsigned i=0;!failed&&i<6;i++) failed=athena_js_put(ctx,&table,obj,define,i,JS_NewUint32(ctx,v[i]))<0;
+    if(!failed) failed=athena_js_put(ctx,&table,obj,define,6,levels)<0; else JS_FreeValue(ctx,levels);
     if(failed) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
     return obj;
 }
@@ -143,6 +143,20 @@ static JSValue js_set_bias(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     if(!athena_js_argc(ctx,argc,1,1,"LOD.setBias")) return JS_EXCEPTION;
     float b; if(!athena_js_float(ctx,argv[0],&b,"bias")) return JS_EXCEPTION;
     if(athena_lod_set_bias(b)<0) return JS_ThrowRangeError(ctx,"bias must be positive");
+    return JS_UNDEFINED;
+}
+/* setGrid(cellSize, { capacity }): optional spatial index; 0 turns it off. */
+static JSValue js_set_grid(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,1,2,"LOD.setGrid")) return JS_EXCEPTION;
+    float size; if(!athena_js_float(ctx,argv[0],&size,"cellSize")) return JS_EXCEPTION;
+    float capacity=0;
+    if(argc==2&&!JS_IsUndefined(argv[1])) {
+        if(!JS_IsObject(argv[1])) return JS_ThrowTypeError(ctx,"LOD.setGrid options must be an object");
+        if(!athena_js_option_float(ctx,argv[1],"capacity",&capacity)) return JS_EXCEPTION;
+    }
+    if(!(size>=0)||!(capacity>=0&&capacity<=65535)) return JS_ThrowRangeError(ctx,"LOD.setGrid: cellSize >= 0 and capacity 0 to 65535");
+    if(athena_lod_set_grid(size,(uint32_t)capacity)<0) return JS_ThrowInternalError(ctx,"LOD.setGrid: out of memory (the index is off)");
     return JS_UNDEFINED;
 }
 /* setDrawDistance(distance, { lights, fogStart, color: [r, g, b] }): hides
@@ -184,7 +198,7 @@ static const JSCFunctionListEntry methods[]={
     JS_CGETSET_DEF("distance",get_distance,NULL),JS_CGETSET_DEF("enabled",get_enabled,set_enabled)};
 static const JSCFunctionListEntry exports[]={
     JS_CFUNC_DEF("setCamera",1,js_set_camera),JS_CFUNC_DEF("update",1,js_update),JS_CFUNC_DEF("stats",0,js_stats),
-    JS_CFUNC_DEF("setBias",1,js_set_bias),JS_CFUNC_DEF("setDrawDistance",1,js_set_draw_distance),
+    JS_CFUNC_DEF("setBias",1,js_set_bias),JS_CFUNC_DEF("setGrid",1,js_set_grid),JS_CFUNC_DEF("setDrawDistance",1,js_set_draw_distance),
     JS_PROP_INT32_DEF("MAX_LEVELS",ATHENA_LOD_MAX_LEVELS,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("HIDDEN",-1,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {
@@ -198,7 +212,7 @@ static int init(JSContext *ctx,JSModuleDef *m) {
 }
 void athena_lod_js_cleanup(JSContext *ctx) {
     athena_js_atoms_free(ctx,&table);
-    athena_lod_set_bias(1); athena_lod_set_draw_distance(0);   /* settings belong to the runtime */
+    athena_lod_set_bias(1); athena_lod_set_draw_distance(0); athena_lod_set_grid(0,0);   /* settings belong to the runtime */
     if(auto_system) athena_loop_system_remove(auto_system);
     if(auto_camera) { athena_camera3d_js_release(auto_camera); auto_camera=NULL; }
 }

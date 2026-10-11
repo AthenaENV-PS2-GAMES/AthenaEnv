@@ -3,7 +3,7 @@
   "name": "LOD",
   "description": "Distance-based level of detail for Scene3D nodes: mesh levels with hysteresis, a global draw distance with matching fog and a quality bias, selected in C by a Loop system before the scene updates.",
   "category": "Graphics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": false,
   "sources": ["native/lod.c"],

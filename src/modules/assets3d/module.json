@@ -1,15 +1,17 @@
 {
   "id": "assets3d",
   "name": "Assets3D",
-  "description": "3D asset kinds for Scene.Assets manifests (meshes, textures3d, gltf): reference counted, disposed when unused, loaded between frames within a time budget. Written in JavaScript.",
+  "description": "Reference-counted Scene.Assets kinds with cancellable GLB reads and texture decoding on Thread jobs, resumable GLTF3D/Model3D construction and a soft frame budget. JavaScript plus a small native job.",
   "category": "Graphics",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "required": false,
   "default": false,
   "dependencies": {
     "modules": [
       "scene",
-      "model3d"
+      "model3d",
+      "thread",
+      "profiler"
     ],
     "iop": [],
     "ee_libs": []
@@ -19,5 +21,15 @@
     "module_name": "Assets3D",
     "global_alias": "Assets3D"
   },
-  "types": "assets3d.d.ts"
+  "types": "assets3d.d.ts",
+  "sources": [
+    "native/texture_decode_job.c"
+  ],
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_assets3d.c"
+    ],
+    "module_name": "Assets3DNative",
+    "init_func": "athena_assets3d_native_js_init"
+  }
 }

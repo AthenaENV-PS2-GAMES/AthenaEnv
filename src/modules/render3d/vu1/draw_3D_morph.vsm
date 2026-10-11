@@ -262,11 +262,11 @@ shading_done:
                     addi.xy VF04, VF00, i           nop
                     add.zw VF04, VF00, VF00         loi 0x43000000
                     mulq.xyz VF05, VF01, q          nop
-                    muli.w VF02, VF02, i            lq.xyz VF01, 26(VI00)
+                    muli.w VF02, VF02, i            lq.xyz VF01, 16(VI00)
                     nop                             nop
                     add.xyz VF04, VF03, VF04        nop
                     mul.xyz VF06, VF05, VF03        nop
-                    mulx.xyz VF02, VF02, VF01x      nop
+                    mul.xyz VF02, VF02, VF01        nop
                     nop                             lq VF01, 101(VI01)
                     addw.z VF01, VF00, VF00w        iaddiu VI01, VI00, 3
                     add.xyz VF03, VF06, VF04        nop

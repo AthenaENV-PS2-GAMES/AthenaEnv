@@ -151,12 +151,29 @@ static JSValue frame_stats(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     if(athena_render3d_js_put_stats(ctx,obj,define,&s)<0) { JS_FreeValue(ctx,obj); return JS_EXCEPTION; }
     return obj;
 }
+/* Render3D.setTint(r, g, b): linear RGB multiplier in [0, 1] applied by every following draw. */
+static JSValue set_tint(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,3,3,"Render3D.setTint")) return JS_EXCEPTION;
+    float c[3];
+    for(int i=0;i<3;i++) if(!athena_js_float(ctx,argv[i],&c[i],"tint")) return JS_EXCEPTION;
+    if(athena_render3d_set_tint(c[0],c[1],c[2])<0) return JS_ThrowRangeError(ctx,"Render3D.setTint components must be in [0, 1]");
+    return JS_UNDEFINED;
+}
+static JSValue get_tint(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self; (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Render3D.getTint")) return JS_EXCEPTION;
+    float c[3]; athena_render3d_get_tint(c);
+    JSValue a=JS_NewArray(ctx); if(JS_IsException(a)) return a;
+    for(uint32_t i=0;i<3;i++) JS_SetPropertyUint32(ctx,a,i,JS_NewFloat64(ctx,c[i]));
+    return a;
+}
 static JSClassDef class_def={"Render3D.Batch",.finalizer=finalizer};
 static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("add",1,add),JS_CFUNC_DEF("clear",0,clear),JS_CFUNC_DEF("draw",1,batch_draw),
     JS_CFUNC_DEF("dispose",0,dispose),JS_CGETSET_DEF("size",size,NULL)};
 static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("draw",2,draw),JS_CFUNC_DEF("group",1,group),
-    JS_CFUNC_DEF("frameStats",0,frame_stats),
+    JS_CFUNC_DEF("frameStats",0,frame_stats),JS_CFUNC_DEF("setTint",3,set_tint),JS_CFUNC_DEF("getTint",0,get_tint),
     JS_PROP_INT32_DEF("CULL_NONE",0,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("CULL_BACK",1,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("CULL_FRONT",-1,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {

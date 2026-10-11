@@ -96,7 +96,37 @@ static void deform_reuse_test(int skin,int morph,int flat) {
     athena_scene3d_trim_scratch(); /* idempotent */
     host_morph_refuse=0;athena_mesh3d_release(indexed);athena_mesh3d_release(expanded);
 }
+static int hook_calls_a,hook_calls_b; static AthenaNode3D *hook_last;
+static void hook_a(void *user,AthenaNode3D *node) { (void)user; hook_calls_a++; hook_last=node; }
+static void hook_b(void *user,AthenaNode3D *node) { (void)node; hook_calls_b+=*(int *)user; }
+static void moved_hook_test(void) {
+    AthenaScene3D *scene=athena_scene3d_create(); AthenaNode3D *root=athena_scene3d_root(scene);
+    AthenaNode3D *parent=athena_node3d_create(),*child=athena_node3d_create(),*still=athena_node3d_create();
+    assert(!athena_node3d_add_child(root,parent)&&!athena_node3d_add_child(parent,child)&&!athena_node3d_add_child(root,still));
+    int two=2; hook_calls_a=hook_calls_b=0;
+    assert(athena_node3d_add_moved_hook(NULL,hook_a,NULL)<0&&athena_node3d_add_moved_hook(child,NULL,NULL)<0);
+    assert(!athena_node3d_add_moved_hook(child,hook_a,NULL)&&!athena_node3d_add_moved_hook(child,hook_a,NULL)&&!athena_node3d_add_moved_hook(child,hook_b,&two));
+    assert(!athena_node3d_add_moved_hook(still,hook_a,NULL));
+    /* First update recomputes everything; hooks run once per listener (duplicates are ignored). */
+    assert(!athena_scene3d_update(scene,NULL)); assert(hook_calls_a==2&&hook_calls_b==2);
+    assert(!athena_scene3d_update(scene,NULL)); assert(hook_calls_a==2&&hook_calls_b==2);   /* nothing moved */
+    /* An ancestor's move recomputes the child's world: the hook runs, with the new matrix already stored. */
+    hook_calls_a=hook_calls_b=0; assert(!athena_node3d_set_position(parent,5,0,0));
+    assert(!athena_scene3d_update(scene,NULL)); assert(hook_calls_a==1&&hook_calls_b==2&&hook_last==child);
+    float p[3]; athena_node3d_last_world_position(child,p); assert(p[0]==5);
+    athena_node3d_remove_moved_hook(child,hook_b,&two); athena_node3d_remove_moved_hook(child,hook_b,&two);   /* idempotent */
+    hook_calls_a=hook_calls_b=0; assert(!athena_node3d_set_position(child,1,0,0));
+    assert(!athena_scene3d_update(scene,NULL)); assert(hook_calls_a==1&&hook_calls_b==0);
+    athena_node3d_remove_moved_hook(child,hook_a,NULL); athena_node3d_remove_moved_hook(still,hook_a,NULL);
+    athena_node3d_remove_moved_hook(still,hook_a,NULL);
+    hook_calls_a=0; assert(!athena_node3d_set_position(child,2,0,0)); assert(!athena_scene3d_update(scene,NULL)); assert(!hook_calls_a);
+    /* Hooks still registered when the node dies are freed with it (checked by ASan). */
+    assert(!athena_node3d_add_moved_hook(child,hook_a,NULL));
+    athena_node3d_release(parent); athena_node3d_release(child); athena_node3d_release(still);
+    athena_scene3d_release(scene);
+}
 int main(void) {
+    moved_hook_test();
     AthenaScene3D *scene=athena_scene3d_create(); assert(scene);
     AthenaNode3D *root=athena_scene3d_root(scene);
     AthenaNode3D *parent=athena_node3d_create(),*child=athena_node3d_create(),*leaf=athena_node3d_create();

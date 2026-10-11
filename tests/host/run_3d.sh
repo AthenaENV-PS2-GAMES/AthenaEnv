@@ -21,6 +21,18 @@ $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/three_d_test" \
     src/modules/camera3d/native/camera3d.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/lights/native/lights.c src/modules/render3d/native/render3d_shade.c \
     src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/three_d_test"
+$CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/mesh_builder_test" \
+    tests/host/mesh_builder_test.c tests/host/render3d_host.c \
+    src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
+    src/modules/camera3d/native/camera3d.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/lights/native/lights.c src/modules/render3d/native/render3d_shade.c \
+    src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/mesh_builder_test"
+$CC $FLAGS $INC -Isrc/modules/meshbuilder/include -Wall -Wextra -Wno-unused-function -Wno-sign-compare -Werror -o "$OUT/meshbuilder_extrude_test" \
+    tests/host/meshbuilder_extrude_test.c tests/host/render3d_host.c \
+    src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
+    src/modules/camera3d/native/camera3d.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/lights/native/lights.c src/modules/render3d/native/render3d_shade.c \
+    src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/meshbuilder_extrude_test"
 $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/render3d_clip_test" \
     tests/host/render3d_clip_test.c src/modules/render3d/native/render3d_clip.c \
     src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
@@ -79,6 +91,17 @@ $CC $FLAGS $INC -Isrc/modules/animation3d/include -Isrc/modules/gltf3d/include -
     src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c \
     src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/gltf3d_test"
+$CC $FLAGS $INC -Isrc/modules/animation3d/include -Isrc/modules/gltf3d/include \
+    -DATHENA_GLTF_MEMORY_OOM -Wall -Wextra -Werror -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
+    -o "$OUT/gltf_memory_test" tests/ee/gltf_memory.c \
+    src/modules/gltf3d/native/gltf3d.c src/modules/animation3d/native/animation3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
+    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
+    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c \
+    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
+"$OUT/gltf_memory_test"
 $CC $FLAGS $INC -Isrc/modules/camerarig3d/include -Wall -Wextra -Werror -o "$OUT/camerarig3d_test" \
     tests/host/camerarig3d_test.c src/modules/camerarig3d/native/camerarig3d.c \
     src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
@@ -128,7 +151,13 @@ $CC $FLAGS -Isrc/core/include -Isrc/modules/particles3d/include -Isrc/modules/lo
     src/modules/camera3d/native/camera3d.c src/modules/matrix4/native/matrix4.c \
     src/modules/loop/native/loop_systems.c -lm
 "$OUT/particles3d_test"
-$CC $FLAGS $INC -Isrc/modules/nav/include -Wall -Wextra -Werror \
+$CC $FLAGS $INC -Isrc/modules/nav/include -DATHENA_NAV_TEST_HOOKS -Wall -Wextra -Werror \
     -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
     -o "$OUT/nav_test" tests/host/nav_test.c src/modules/nav/native/nav.c -lm
 "$OUT/nav_test"
+for optimized in 0 1; do
+$CC $FLAGS $INC -Isrc/modules/debug3d/include -Isrc/modules/graphics/include -DATHENA_DEBUG3D_OPTIMIZED=$optimized -Wall -Wextra -Werror \
+    -Wl,--wrap=malloc -o "$OUT/debug3d_projection_$optimized" tests/ee/debug3d_projection.c \
+    src/modules/debug3d/native/debug3d.c src/modules/camera3d/native/camera3d.c src/modules/matrix4/native/matrix4.c -lm
+"$OUT/debug3d_projection_$optimized"
+done

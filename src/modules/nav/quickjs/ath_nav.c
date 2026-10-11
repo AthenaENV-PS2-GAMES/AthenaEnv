@@ -3,8 +3,9 @@
 #include <athena/nav.h>
 #include <athena/js/scene3d.h>
 #include "ath_nav.h"
-static JSClassID grid_id,crowd_id,agent_id;
+static JSClassID grid_id,crowd_id,agent_id,request_id;
 typedef struct { AthenaNavCrowd *crowd; int id; } AgentHandle;
+typedef struct { AthenaNavRequest *request; JSValue grid; } RequestHandle;
 static AthenaNavGrid *get_grid(JSContext *ctx,JSValueConst v) {
     AthenaNavGrid *g=JS_GetOpaque2(ctx,v,grid_id); if(!g) JS_ThrowTypeError(ctx,"Expected a live Nav.Grid"); return g;
 }
@@ -57,7 +58,7 @@ static JSValue grid_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueCons
 static JSValue grid_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argc; (void)argv;
     if(!athena_js_class(ctx,self,grid_id)) return JS_EXCEPTION;
-    AthenaNavGrid *g=JS_GetOpaque(self,grid_id); JS_SetOpaque(self,NULL); athena_nav_grid_release(g); return JS_UNDEFINED;
+    AthenaNavGrid *g=JS_GetOpaque(self,grid_id); JS_SetOpaque(self,NULL); athena_nav_cancel_requests(g); athena_nav_grid_release(g); return JS_UNDEFINED;
 }
 static JSValue grid_set_cost(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,3,3,"Grid.setCost")) return JS_EXCEPTION;
@@ -115,6 +116,7 @@ static JSValue grid_find_path(JSContext *ctx,JSValueConst self,int argc,JSValueC
     AthenaNavGrid *g=get_grid(ctx,self); if(!g) return JS_EXCEPTION;
     float pts[ATHENA_NAV_MAX_PATH*2];
     int n=athena_nav_find_path(g,f[0],f[1],f[2],f[3],&q,pts,ATHENA_NAV_MAX_PATH);
+    if(n==ATHENA_NAV_EBUSY) return JS_ThrowTypeError(ctx,"Grid.findPath: incremental requests are pending; step or cancel them first");
     if(n==-1) return JS_ThrowRangeError(ctx,"Grid.findPath: invalid coordinates");
     if(n==-2) return JS_ThrowRangeError(ctx,"Grid.findPath: the path has more than %u points (use smooth)",ATHENA_NAV_MAX_PATH);
     if(n==0) return JS_NULL;
@@ -140,8 +142,122 @@ static JSValue grid_prop(JSContext *ctx,JSValueConst self,int magic) {
     AthenaNavGrid *g=get_grid(ctx,self); if(!g) return JS_EXCEPTION;
     uint32_t w,d; float cell,ox,oz; athena_nav_grid_size(g,&w,&d,&cell,&ox,&oz);
     switch(magic) { case 0: return JS_NewUint32(ctx,w); case 1: return JS_NewUint32(ctx,d); case 2: return JS_NewFloat64(ctx,cell);
-        default: return JS_NewUint32(ctx,athena_nav_last_expanded(g)); }
+        case 3: return JS_NewUint32(ctx,athena_nav_last_expanded(g));
+        case 4: return JS_NewUint32(ctx,athena_nav_pending_requests(g));
+        default: return JS_NewUint32(ctx,athena_nav_grid_revision(g)); }
 }
+/* --- Incremental requests --- */
+static RequestHandle *get_request(JSContext *ctx,JSValueConst v) {
+    RequestHandle *h=JS_GetOpaque2(ctx,v,request_id);
+    if(!h) JS_ThrowTypeError(ctx,"Expected a live Nav.Request");
+    return h;
+}
+static void request_free(JSRuntime *rt,RequestHandle *h) {
+    if(!h) return;
+    athena_nav_request_release(h->request); JS_FreeValueRT(rt,h->grid); free(h);
+}
+static void request_finalizer(JSRuntime *rt,JSValue v) { request_free(rt,JS_GetOpaque(v,request_id)); }
+static void request_mark(JSRuntime *rt,JSValueConst v,JS_MarkFunc *mark) {
+    RequestHandle *h=JS_GetOpaque(v,request_id); if(h) JS_MarkValue(rt,h->grid,mark);
+}
+static JSValue grid_request_path(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,4,5,"Grid.requestPath")) return JS_EXCEPTION;
+    float f[4],capacity=(float)ATHENA_NAV_MAX_PATH; AthenaNavQuery q;
+    JSValueConst options=argc==5?argv[4]:JS_UNDEFINED;
+    if(!floats(ctx,argv,4,f,"coordinate")||!query_option(ctx,options,&q)) return JS_EXCEPTION;
+    if(!JS_IsUndefined(options)&&!athena_js_option_float(ctx,options,"maxPoints",&capacity)) return JS_EXCEPTION;
+    if(capacity<2||capacity>ATHENA_NAV_MAX_CELLS+1u||capacity!=floorf(capacity))
+        return JS_ThrowRangeError(ctx,"maxPoints must be an integer from 2 to %u",ATHENA_NAV_MAX_CELLS+1u);
+    /* All option/coordinate getters run before acquiring the grid. */
+    AthenaNavGrid *g=get_grid(ctx,self); if(!g) return JS_EXCEPTION;
+    JSValue obj=JS_NewObjectClass(ctx,request_id); if(JS_IsException(obj)) return obj;
+    int error;
+    AthenaNavRequest *r=athena_nav_request_create(g,f[0],f[1],f[2],f[3],&q,(uint32_t)capacity,&error);
+    if(!r) {
+        JS_FreeValue(ctx,obj);
+        if(error==ATHENA_NAV_ENOMEM) return JS_ThrowOutOfMemory(ctx);
+        return JS_ThrowRangeError(ctx,error==ATHENA_NAV_EFULL?"Grid.requestPath: pending queue is full":"Grid.requestPath: invalid coordinates or capacity");
+    }
+    RequestHandle *h=malloc(sizeof(*h));
+    if(!h) { athena_nav_request_release(r); JS_FreeValue(ctx,obj); return JS_ThrowOutOfMemory(ctx); }
+    h->request=r; h->grid=JS_DupValue(ctx,self); JS_SetOpaque(obj,h); return obj;
+}
+static JSValue grid_step_requests(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,0,2,"Grid.stepRequests")) return JS_EXCEPTION;
+    float work=256,ms=0;
+    if(argc>0&&!JS_IsUndefined(argv[0])&&!athena_js_float(ctx,argv[0],&work,"maxWork")) return JS_EXCEPTION;
+    if(argc>1&&!JS_IsUndefined(argv[1])&&!athena_js_float(ctx,argv[1],&ms,"budgetMs")) return JS_EXCEPTION;
+    if(work<1||work>ATHENA_NAV_MAX_CELLS||work!=floorf(work)||ms<0||ms>1000)
+        return JS_ThrowRangeError(ctx,"stepRequests: maxWork 1..MAX_CELLS; budgetMs 0..1000");
+    AthenaNavGrid *g=get_grid(ctx,self); if(!g) return JS_EXCEPTION;
+    const AthenaNavBudget budget={(uint32_t)work,ms};
+    return JS_NewInt32(ctx,athena_nav_step_requests(g,&budget));
+}
+static JSValue grid_cancel_requests(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Grid.cancelRequests")) return JS_EXCEPTION;
+    AthenaNavGrid *g=get_grid(ctx,self); if(!g) return JS_EXCEPTION;
+    athena_nav_cancel_requests(g); return JS_UNDEFINED;
+}
+static JSValue request_cancel(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Request.cancel")) return JS_EXCEPTION;
+    RequestHandle *h=get_request(ctx,self); if(!h) return JS_EXCEPTION;
+    athena_nav_request_cancel(h->request); return JS_UNDEFINED;
+}
+static JSValue request_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)argc; (void)argv;
+    if(!athena_js_class(ctx,self,request_id)) return JS_EXCEPTION;
+    RequestHandle *h=JS_GetOpaque(self,request_id); JS_SetOpaque(self,NULL);
+    if(h) athena_nav_request_cancel(h->request);
+    request_free(JS_GetRuntime(ctx),h); return JS_UNDEFINED;
+}
+static JSValue request_get_path(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Request.getPath")) return JS_EXCEPTION;
+    RequestHandle *h=get_request(ctx,self); if(!h) return JS_EXCEPTION;
+    uint32_t points; const float *path=athena_nav_request_path(h->request,&points);
+    if(!path) return JS_NULL;
+    /* Copy before any custom Float32Array getter/constructor may dispose h. */
+    JSValue buffer=JS_NewArrayBufferCopy(ctx,(const uint8_t *)path,(size_t)points*2*sizeof(float));
+    if(JS_IsException(buffer)) return buffer;
+    JSValue global=JS_GetGlobalObject(ctx),ctor=JS_GetPropertyStr(ctx,global,"Float32Array"); JS_FreeValue(ctx,global);
+    JSValue result=JS_IsException(ctor)?JS_EXCEPTION:JS_CallConstructor(ctx,ctor,1,(JSValueConst *)&buffer);
+    JS_FreeValue(ctx,ctor); JS_FreeValue(ctx,buffer); return result;
+}
+static JSValue request_copy_path(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,1,1,"Request.copyPath")) return JS_EXCEPTION;
+    AthenaJSArray out;
+    if(!athena_js_array(ctx,argv[0],JS_TYPED_ARRAY_FLOAT32,&out,"path output")) return JS_EXCEPTION;
+    RequestHandle *h=get_request(ctx,self);
+    int n=h?athena_nav_request_copy(h->request,out.data,
+        out.count/2>ATHENA_NAV_MAX_CELLS+1u?ATHENA_NAV_MAX_CELLS+1u:(uint32_t)(out.count/2)):ATHENA_NAV_EINVAL;
+    JS_FreeValue(ctx,out.backing);
+    if(!h) return JS_EXCEPTION;
+    if(n<0) return JS_ThrowRangeError(ctx,"Request.copyPath: insufficient output capacity");
+    return JS_NewUint32(ctx,(uint32_t)n*2);
+}
+static JSValue request_prop(JSContext *ctx,JSValueConst self,int magic) {
+    RequestHandle *h=get_request(ctx,self); if(!h) return JS_EXCEPTION;
+    AthenaNavRequestInfo i; athena_nav_request_info(h->request,&i);
+    static const char *const state[]={"pending","found","noPath","cancelled","error"};
+    static const char *const phase[]={"queued","initialize","clearStamps","search","countPath","tracePath","emitPath","smoothPath","finished"};
+    switch(magic) {
+    case 0: return JS_NewString(ctx,state[i.state]);
+    case 1: return JS_NewString(ctx,phase[i.phase]);
+    case 2:
+        if(!i.error) return JS_NULL;
+        return JS_NewString(ctx,i.error==ATHENA_NAV_EREVISION?"gridChanged":i.error==ATHENA_NAV_EOUTPUT?"pathTooLong":
+            i.error==ATHENA_NAV_EITERATIONS?"iterationLimit":"invalid");
+    case 3: return JS_NewUint32(ctx,i.revision);
+    case 4: return JS_NewUint32(ctx,i.expanded);
+    case 5: return JS_NewInt64(ctx,(int64_t)i.work);
+    case 6: return JS_NewUint32(ctx,i.points);
+    case 7: return JS_NewFloat64(ctx,i.cost);
+    default: return JS_NewUint32(ctx,i.storage_bytes);
+    }
+}
+
 /* --- Crowd and agents --- */
 static JSValue crowd_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,2,"Nav.Crowd")) return JS_EXCEPTION;
@@ -160,7 +276,8 @@ static JSValue crowd_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueCon
 static JSValue crowd_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argc; (void)argv;
     if(!athena_js_class(ctx,self,crowd_id)) return JS_EXCEPTION;
-    AthenaNavCrowd *c=JS_GetOpaque(self,crowd_id); JS_SetOpaque(self,NULL); athena_nav_crowd_release(c); return JS_UNDEFINED;
+    AthenaNavCrowd *c=JS_GetOpaque(self,crowd_id); JS_SetOpaque(self,NULL);
+    athena_nav_crowd_cancel_requests(c); athena_nav_crowd_release(c); return JS_UNDEFINED;
 }
 /* add({ x, y, z, speed = 3, radius = 0.4, face = true, node }) */
 static JSValue crowd_add(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
@@ -199,8 +316,28 @@ static JSValue agent_move_to(JSContext *ctx,JSValueConst self,int argc,JSValueCo
     float f[2]; if(!floats(ctx,argv,2,f,"target")) return JS_EXCEPTION;
     AgentHandle *a=get_agent(ctx,self); if(!a) return JS_EXCEPTION;
     int r=athena_nav_agent_move_to(a->crowd,a->id,f[0],f[1]);
+    if(r==ATHENA_NAV_EBUSY) return JS_ThrowTypeError(ctx,"Agent.moveTo: incremental requests are pending; previous path retained");
     if(r<0) return JS_ThrowRangeError(ctx,"Agent.moveTo: invalid target");
     return JS_NewBool(ctx,r==1);
+}
+static JSValue agent_request_move_to(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,2,2,"Agent.requestMoveTo")) return JS_EXCEPTION;
+    float f[2]; if(!floats(ctx,argv,2,f,"target")) return JS_EXCEPTION;
+    AgentHandle *a=get_agent(ctx,self); if(!a) return JS_EXCEPTION;
+    /* Reserve both JS/native handles before committing a replacement. */
+    JSValue obj=JS_NewObjectClass(ctx,request_id); if(JS_IsException(obj)) return obj;
+    RequestHandle *h=malloc(sizeof(*h));
+    if(!h) { JS_FreeValue(ctx,obj); return JS_ThrowOutOfMemory(ctx); }
+    int error;
+    AthenaNavRequest *r=athena_nav_agent_request_move_to(a->crowd,a->id,f[0],f[1],&error);
+    if(!r) {
+        free(h); JS_FreeValue(ctx,obj);
+        if(error==ATHENA_NAV_ENOMEM) return JS_ThrowOutOfMemory(ctx);
+        return JS_ThrowRangeError(ctx,error==ATHENA_NAV_EFULL?"Agent.requestMoveTo: pending queue is full":"Agent.requestMoveTo: invalid target");
+    }
+    /* The native grid stays alive without keeping the JS agent alive:
+     * collecting/removing that agent cancels its plan with a live observer. */
+    h->request=r; h->grid=JS_UNDEFINED; JS_SetOpaque(obj,h); return obj;
 }
 static JSValue agent_stop(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argc; (void)argv;
@@ -225,15 +362,21 @@ static JSValue agent_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueCo
     if(!athena_js_class(ctx,self,agent_id)) return JS_EXCEPTION;
     AgentHandle *a=JS_GetOpaque(self,agent_id); JS_SetOpaque(self,NULL); agent_free(a); return JS_UNDEFINED;
 }
-static const char *const STATES[3]={"idle","moving","arrived"};
+static const char *const STATES[4]={"idle","moving","arrived","planning"};
 static JSValue agent_prop(JSContext *ctx,JSValueConst self,int magic) {
     AgentHandle *a=get_agent(ctx,self); if(!a) return JS_EXCEPTION;
     AthenaNavAgentInfo i; athena_nav_agent_info(a->crowd,a->id,&i);
+    static const char *const planning[]={"none","pending","found","noPath","cancelled","error"};
     switch(magic) {
         case 0: return JS_NewFloat64(ctx,i.x); case 1: return JS_NewFloat64(ctx,i.y); case 2: return JS_NewFloat64(ctx,i.z);
         case 3: return JS_NewString(ctx,STATES[i.state]); case 4: return JS_NewFloat64(ctx,i.yaw);
         case 5: return JS_NewFloat64(ctx,sqrtf(i.vx*i.vx+i.vz*i.vz)); case 6: return JS_NewUint32(ctx,i.waypoints);
         case 7: return JS_NewFloat64(ctx,i.speed);
+        case 8: return JS_NewString(ctx,planning[i.planning_state+1]);
+        case 9:
+            if(!i.planning_error) return JS_NULL;
+            return JS_NewString(ctx,i.planning_error==ATHENA_NAV_EREVISION?"gridChanged":
+                i.planning_error==ATHENA_NAV_EOUTPUT?"pathTooLong":i.planning_error==ATHENA_NAV_EITERATIONS?"iterationLimit":"invalid");
         default: return JS_UNDEFINED;
     }
 }
@@ -245,10 +388,14 @@ static JSValue agent_set_speed(JSContext *ctx,JSValueConst self,JSValueConst v) 
 }
 static JSValue agent_get_speed(JSContext *ctx,JSValueConst self) { return agent_prop(ctx,self,7); }
 static JSClassDef grid_class={"Nav.Grid",.finalizer=grid_finalizer},crowd_class={"Nav.Crowd",.finalizer=crowd_finalizer},
-    agent_class={"Nav.Agent",.finalizer=agent_finalizer};
+    agent_class={"Nav.Agent",.finalizer=agent_finalizer},
+    request_class={"Nav.Request",.finalizer=request_finalizer,.gc_mark=request_mark};
 static const JSCFunctionListEntry grid_methods[]={
     JS_CFUNC_DEF("setCost",3,grid_set_cost),JS_CFUNC_DEF("getCost",2,grid_get_cost),JS_CFUNC_DEF("fill",5,grid_fill),
     JS_CFUNC_DEF("setCosts",1,grid_set_costs),JS_CFUNC_DEF("lineOfSight",4,grid_los),JS_CFUNC_DEF("findPath",4,grid_find_path),
+    JS_CFUNC_DEF("requestPath",4,grid_request_path),JS_CFUNC_DEF("stepRequests",0,grid_step_requests),
+    JS_CFUNC_DEF("cancelRequests",0,grid_cancel_requests),
+    JS_CGETSET_MAGIC_DEF("pendingRequests",grid_prop,NULL,4),JS_CGETSET_MAGIC_DEF("revision",grid_prop,NULL,5),
     JS_CFUNC_DEF("nearestWalkable",2,grid_nearest),JS_CFUNC_DEF("dispose",0,grid_dispose),
     JS_CGETSET_MAGIC_DEF("width",grid_prop,NULL,0),JS_CGETSET_MAGIC_DEF("depth",grid_prop,NULL,1),
     JS_CGETSET_MAGIC_DEF("cellSize",grid_prop,NULL,2),JS_CGETSET_MAGIC_DEF("lastExpanded",grid_prop,NULL,3)};
@@ -256,12 +403,23 @@ static const JSCFunctionListEntry crowd_methods[]={
     JS_CFUNC_DEF("add",1,crowd_add),JS_CFUNC_DEF("update",1,crowd_update),JS_CFUNC_DEF("dispose",0,crowd_dispose)};
 static const JSCFunctionListEntry agent_methods[]={
     JS_CFUNC_DEF("moveTo",2,agent_move_to),JS_CFUNC_DEF("stop",0,agent_stop),JS_CFUNC_DEF("setPosition",3,agent_set_position),
+    JS_CFUNC_DEF("requestMoveTo",2,agent_request_move_to),
     JS_CFUNC_DEF("bind",1,agent_bind),JS_CFUNC_DEF("dispose",0,agent_dispose),
     JS_CGETSET_MAGIC_DEF("x",agent_prop,NULL,0),JS_CGETSET_MAGIC_DEF("y",agent_prop,NULL,1),JS_CGETSET_MAGIC_DEF("z",agent_prop,NULL,2),
     JS_CGETSET_MAGIC_DEF("state",agent_prop,NULL,3),JS_CGETSET_MAGIC_DEF("yaw",agent_prop,NULL,4),
     JS_CGETSET_MAGIC_DEF("velocity",agent_prop,NULL,5),JS_CGETSET_MAGIC_DEF("waypoints",agent_prop,NULL,6),
+    JS_CGETSET_MAGIC_DEF("planningState",agent_prop,NULL,8),JS_CGETSET_MAGIC_DEF("planningError",agent_prop,NULL,9),
     JS_CGETSET_DEF("speed",agent_get_speed,agent_set_speed)};
+static const JSCFunctionListEntry request_methods[]={
+    JS_CFUNC_DEF("getPath",0,request_get_path),JS_CFUNC_DEF("copyPath",1,request_copy_path),
+    JS_CFUNC_DEF("cancel",0,request_cancel),JS_CFUNC_DEF("dispose",0,request_dispose),
+    JS_CGETSET_MAGIC_DEF("state",request_prop,NULL,0),JS_CGETSET_MAGIC_DEF("phase",request_prop,NULL,1),
+    JS_CGETSET_MAGIC_DEF("error",request_prop,NULL,2),JS_CGETSET_MAGIC_DEF("revision",request_prop,NULL,3),
+    JS_CGETSET_MAGIC_DEF("expanded",request_prop,NULL,4),JS_CGETSET_MAGIC_DEF("workUnits",request_prop,NULL,5),
+    JS_CGETSET_MAGIC_DEF("pointCount",request_prop,NULL,6),JS_CGETSET_MAGIC_DEF("cost",request_prop,NULL,7),
+    JS_CGETSET_MAGIC_DEF("storageBytes",request_prop,NULL,8)};
 static const JSCFunctionListEntry exports[]={
+    JS_PROP_INT32_DEF("MAX_PENDING",ATHENA_NAV_MAX_PENDING,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("MAX_CELLS",ATHENA_NAV_MAX_CELLS,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("MAX_PATH",ATHENA_NAV_MAX_PATH,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("MAX_AGENTS",ATHENA_NAV_MAX_AGENTS,JS_PROP_ENUMERABLE)};
@@ -279,7 +437,8 @@ static int add_class(JSContext *ctx,JSModuleDef *m,JSClassID *id,JSClassDef *def
 static int init(JSContext *ctx,JSModuleDef *m) {
     if(add_class(ctx,m,&grid_id,&grid_class,grid_methods,countof(grid_methods),grid_ctor,"Grid")<0||
         add_class(ctx,m,&crowd_id,&crowd_class,crowd_methods,countof(crowd_methods),crowd_ctor,"Crowd")<0||
-        add_class(ctx,m,&agent_id,&agent_class,agent_methods,countof(agent_methods),NULL,"Agent")<0) return -1;
+        add_class(ctx,m,&agent_id,&agent_class,agent_methods,countof(agent_methods),NULL,"Agent")<0||
+        add_class(ctx,m,&request_id,&request_class,request_methods,countof(request_methods),NULL,"Request")<0) return -1;
     return JS_SetModuleExportList(ctx,m,exports,countof(exports));
 }
 JSModuleDef *athena_nav_js_init(JSContext *ctx) {

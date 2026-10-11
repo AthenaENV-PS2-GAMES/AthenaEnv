@@ -3,7 +3,7 @@
   "name": "Triggers3D",
   "description": "Trigger volumes: box and sphere zones that report bodies entering and leaving them, with layer masks and Scene3D node following. Pairs are tested in C; JavaScript runs only for the events.",
   "category": "Game",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": false,
   "sources": ["native/triggers3d.c"],

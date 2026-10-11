@@ -117,24 +117,23 @@ project_vertex:
                     nop                             fmand VI01, VI03
                     nop                             ilw.y VI09, 33(VI00)
                     nop                             ilw.z VI10, 33(VI00)
+                    nop                             lq.xyz VF11, 16(VI00)
                     nop                             iaddiu VI01, VI01, 0x7fe0
                     nop                             ior VI08, VI08, VI01
                     nop                             ilw.x VI01, 33(VI00)
-                    nop                             isw.x VI09, 33(VI00)
+                    mul.xyz VF10, VF10, VF11        isw.x VI09, 33(VI00)
                     nop                             isw.y VI10, 33(VI00)
-                    nop                             loi 0x437f0000
-                    muli.xyz VF10, VF10, i          sq VF00, 0(VI06)
-                    nop                             isw.z VI01, 33(VI00)
                     nop                             loi 0x43000000
-                    muli.w VF10, VF10, i            ior VI08, VI08, VI01
+                    muli.w VF10, VF10, i            sq VF00, 0(VI06)
+                    nop                             isw.z VI01, 33(VI00)
+                    nop                             ior VI08, VI08, VI01
                     nop                             iaddiu VI01, VI00, 0x7fff
-                    nop                             iaddiu VI01, VI01, 1
+                    ftoi0.xyzw VF11, VF10           iaddiu VI01, VI01, 1
                     nop                             iand VI09, VI08, VI01
-                    ftoi0.xyzw VF11, VF10           ilw.x VI01, 9(VI00)
-                    nop                             nop
-                    nop                             nop
+                    nop                             ilw.x VI01, 9(VI00)
                     nop                             nop
                     nop                             sq VF11, 1(VI06)
+                    nop                             nop
                     nop                             nop
                     nop                             ibeq VI01, VI00, fog_off
                     nop                             nop

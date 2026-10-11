@@ -148,8 +148,8 @@ shading_done:
     add.xyz projected, projected, screenOffset
     mulw.w projected, clip, vf00[w]
     sq projected, SCR_SCREEN(k)
-    lq.xyz colorScale, CLIPFAN_OFFSET(vi00)
-    mulx.xyz color, color, colorScale[x]
+    lq.xyz colorScale, 16(vi00)
+    mul.xyz color, color, colorScale
     loi 128.0
     muli.w color, color, i
     sq color, SCR_COL(k)

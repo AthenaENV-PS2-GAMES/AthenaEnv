@@ -66,6 +66,7 @@ struct AthenaSfx {
 static bool stereo_warned;
 
 static AthenaSfx *channel_owner[ATHENA_SOUND_CHANNELS];
+static uint32_t channel_generation[ATHENA_SOUND_CHANNELS];
 static int channel_volume[ATHENA_SOUND_CHANNELS];
 static int channel_pan[ATHENA_SOUND_CHANNELS];
 /* Muted by stop(): the voice may still run, but it no longer counts. */
@@ -647,6 +648,8 @@ static int sfx_start(AthenaSfx *sfx, int channel) {
     if (result == channel) {
         channel_owner[channel] = sfx;
         channel_stopped[channel] = false;
+        if (++channel_generation[channel] == 0)
+            channel_generation[channel] = 1;
         return channel;
     }
     if (result == -AUDSRV_ERR_NO_MORE_CHANNELS)
@@ -745,6 +748,14 @@ int athena_sfx_set_channel_levels(AthenaSfx *sfx, int channel, int volume, int p
         channel_pan[channel] = pan;
     }
     return 1;
+}
+
+uint32_t athena_sfx_voice_token(const AthenaSfx *sfx, int channel) {
+    if (!sfx || channel < 0 || channel >= ATHENA_SOUND_CHANNELS || !sfx_is_current(sfx))
+        return 0;
+    if (channel_owner[channel] != sfx || !sfx_channel_sounding(channel))
+        return 0;
+    return channel_generation[channel];
 }
 
 int athena_sfx_get_pan(const AthenaSfx *sfx) {

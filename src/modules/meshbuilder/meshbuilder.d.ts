@@ -60,6 +60,27 @@ declare namespace MeshBuilder {
             cell?: number; scale?: number; x?: number; y?: number; z?: number;
             low?: number[]; high?: number[];
         }): this;
+        /**
+         * Prism from a flat contour: `contour` holds x, z pairs (3 to 512 points, a simple
+         * polygon, no holes, first point not repeated) in the plane y = `y` (default 0).
+         * Extrude by `height` (along +Y; negative goes down) or by a slanted `vector`
+         * [x, y, z] (y not 0) - exactly one of them. The input winding does not matter:
+         * faces are always counter-clockwise from outside.
+         *
+         * Walls: one quad per edge with a flat normal, or with `smooth` shared vertices with
+         * averaged normals (seam duplicated); u runs along the contour by length (0..1), v is 1
+         * at the contour plane and 0 at the far end. Caps (`capStart` at the contour plane,
+         * `capEnd` at the far end; both default true) are ear-clipped, so concave outlines
+         * work; cap UVs are the contour's bounding box. The pen state applies.
+         *
+         * Throws RangeError (nothing is added) for fewer than 3 or too many points, non-finite
+         * values, repeated points, spikes, crossing or touching edges, zero area or an
+         * extrusion parallel to the plane.
+         */
+        extrude(contour: Float32Array, options: {
+            y?: number; height?: number; vector?: [number, number, number];
+            capStart?: boolean; capEnd?: boolean; smooth?: boolean;
+        }): this;
         /** Copies a mesh's triangles (colors, normals, UVs) under the transform; an Instance adds its own transform. */
         merge(source: Model3D.Mesh | Model3D.Instance): this;
         /** Drops the geometry, keeping color, transform and UV rectangle. */

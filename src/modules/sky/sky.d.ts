@@ -11,9 +11,10 @@
  * moon) as directional slot 0 and the horizon as fog colour. Colors are
  * linear [r, g, b] in [0, 1].
  *
- * Not covered: UNLIT meshes (and Voxel baked light) do not darken at night,
- * as Render3D has no per-draw tint yet; use DIFFUSE materials for lit
- * scenes. Not in the default build: `node tools/modules.js configure --modules=sky,...`
+ * `tint()` is the matching day/night RGB multiplier (white at noon, dark blue
+ * at night). Lights only darken DIFFUSE materials; for UNLIT meshes and Voxel
+ * baked light call `Render3D.setTint(...Sky.tint())` before drawing them (and
+ * restore white after): Sky does not touch Render3D itself. Not in the default build: `node tools/modules.js configure --modules=sky,...`
  *
  * Example:
  * ```js
@@ -23,7 +24,9 @@
  *     draw() {
  *         Screen.clear(Sky.clearColor());
  *         Sky.draw(camera);
+ *         Render3D.setTint(...Sky.tint());
  *         scene.draw(camera, Render3D.CULL_BACK, lights);
+ *         Render3D.setTint(1, 1, 1);
  *     },
  * });
  * ```
@@ -43,6 +46,8 @@ declare namespace Sky {
     function colorAt(elevation: number): RGB;
     /** The horizon as a Color.new() value, for Screen.clear(). */
     function clearColor(): number;
+    /** Day/night RGB multiplier in [0, 1] for Render3D.setTint(). */
+    function tint(): RGB;
     function state(): { time: number; zenith: RGB; horizon: RGB; ground: RGB; sunDirection: RGB; sunColor: RGB;
-        ambient: RGB; light: RGB; lightDirection: RGB };
+        ambient: RGB; light: RGB; lightDirection: RGB; tint: RGB };
 }

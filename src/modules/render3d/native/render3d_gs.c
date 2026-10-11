@@ -271,6 +271,9 @@ static struct {
     /* Lights in VU memory (10..21, 132..139): their stamp, valid since the
      * pass opened. Objects of one pass usually share them. */
     uint64_t lights_stamp; int lights_valid;
+    /* Per-object RGB multiplier in VU memory (quad 16): tint times the program's color
+     * scale (255, or 128 for GS MODULATE). Valid since the pass opened. */
+    float rgb[4] __attribute__((aligned(16))); int rgb_valid;
 } pass;
 /* Fog of a draw: from its lights, never with a 32-bit Z buffer (XYZF2 has
  * 24 bits of depth). Uploads the parameters and FOGCOL when they change. */
@@ -302,6 +305,18 @@ static int fog_prepare(const AthenaLightsView *lights,const GSCONTEXT *gs) {
         memcpy(pass.fog,fog.f,sizeof(pass.fog)); pass.fog_valid=1; pass.fog_on=on;
     }
     return on;
+}
+/* The draw's tint (athena_render3d_set_tint), uploaded when it differs from the one already in
+ * VU memory for this pass: draws of different tints never inherit each other's. Every program
+ * multiplies the final vertex RGB (after lighting) by quad 16. */
+static void upload_tint(int textured) {
+    float tint[3]; athena_render3d_get_tint(tint);
+    float scale=textured?128.0f:255.0f;
+    float rgb[4] __attribute__((aligned(16)))={tint[0]*scale,tint[1]*scale,tint[2]*scale,0};
+    if(pass.rgb_valid&&!memcmp(pass.rgb,rgb,sizeof(rgb))) return;
+    owl_packet *p=owl_query_packet(CHANNEL_VIF1,2);
+    owl_add_unpack_data_cnt(p,16,1,0); owl_add_uquad_ptr(p,(void *)rgb);
+    memcpy(pass.rgb,rgb,sizeof(rgb)); pass.rgb_valid=1;
 }
 static void pass_close(void) {
     if(!pass.open) return;
@@ -374,7 +389,7 @@ static int pass_open(vu_mpg **program,const AthenaTexture3D *texture,const Athen
     set_register(pass.test_reg,alpha?GS_SETREG_TEST(1,5,alpha-1,0,0,0,1,DEPTH_GEQUAL):
         GS_SETREG_TEST(0,1,0x80,0,0,0,1,DEPTH_GEQUAL));
     set_register(pass.zbuf_reg,pass.saved_zbuf&~(1ull<<32));
-    pass.open=1; pass.address=address; pass.context=gs->PrimContext; pass.fog_valid=0; pass.lights_valid=0;
+    pass.open=1; pass.address=address; pass.context=gs->PrimContext; pass.fog_valid=0; pass.lights_valid=0; pass.rgb_valid=0;
     pass.program=program; pass.camera_stamp=camera->stamp;
     pass.texture_stamp=athena_texture3d_stamp(texture); pass.alpha=alpha;
     stats->pipeline_passes++; return 0;
@@ -492,6 +507,7 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *model,
         inline_matrix(p,5,model);
     }
     if(vu_diffuse) upload_shade(&shade);
+    upload_tint(texture!=NULL);
     int fog=fog_prepare(athena_lights_peek(lights),gs);
     Submission submission={pass.address,gs->PrimContext,texture!=NULL,cull,stats,near||morph?(texture?128.0f:255.0f):1.0f,fog,dma};
     if(indexed) prepare_indexed(&submission,vu_diffuse);
@@ -629,6 +645,7 @@ int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *v,const Athen
     }
     /* Normal matrix, lights and the palette (four columns per joint). */
     upload_shade(&shade);
+    upload_tint(texture!=NULL);
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,1+joint_count*4);
     owl_add_unpack_data_cnt(p,R3D_SKIN_PALETTE,joint_count*4,0);
     for(uint32_t j=0;j<joint_count;j++) for(int c=0;c<4;c++) owl_add_uquad_ptr(p,(void *)&palette[j].value[c*4]);

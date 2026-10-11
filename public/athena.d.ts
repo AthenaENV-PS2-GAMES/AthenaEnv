@@ -738,6 +738,9 @@ declare namespace Model3D {
          * distinct GS RGBA colors when texture+CLUT is smaller than CT32.
          * Errors name the path and the reason. */
         static load(path: string, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
+        /** load() from PNG/JPEG/BMP bytes (ArrayBuffer/Uint8Array, borrowed for the
+         * call, subarrays honored): no file I/O, so a Thread read job can feed it. */
+        static loadMemory(bytes: ArrayBuffer | Uint8Array, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
         readonly width: number; readonly height: number; readonly wrap: 0 | 1 | 2 | 3;
         /** Makes the texture resident in VRAM now (one synchronous upload and
          * GS wait), e.g. on a loading screen, instead of at the first draw.
@@ -814,6 +817,62 @@ declare namespace Model3D {
     /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset.
      * Errors name the file and the exact unsupported feature. */
     function load(path: string, material?: Material): Mesh;
+    /** Self-contained GLB, at most 16 MiB. Borrows bytes for the call and
+     * copies all native data; honors Uint8Array.subarray(), including unaligned
+     * offsets. origin is a nonempty diagnostic name, not an I/O resolver.
+     * URI buffers and external images are rejected. No upload; synchronous
+     * parse/construction on the main thread, with the same static-mesh subset. */
+    function loadMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material): Mesh;
+    type LoaderPhase = 'copy' | 'parse' | 'dependencies' | 'validate' | 'build' | 'done';
+    /** Resumable loadMemory() of one static GLB mesh. The first steps ('copy',
+     * 256 KiB each) snapshot the bytes into memory the loader owns; do not
+     * modify the source before `phase` leaves 'copy'. Then the parse, the
+     * glTF validation and the primitive build (texture decode is one unit;
+     * vertex/index reads and the mesh stages are small slices). Dispose to
+     * abandon; unreferenced loaders are freed by GC. */
+    class Loader {
+        private constructor();
+        /** Phase names by native phase index (the order of phaseStatsInto). */
+        static readonly PHASES: readonly string[];
+        /** Runs up to `units` (1..64, default 1) consecutive units of the same
+         * phase. false while work remains, true once finished. Throws the load
+         * error, and keeps throwing it; then dispose(). */
+        step(units?: number): boolean;
+        /** Runs at least one unit, then more until `budgetMs` (0..1000, default 0 =
+         * one unit) has elapsed: a single call for a time slice, timed by the
+         * native loader. Same results as step(); false while work remains, true
+         * once finished; lastUnits is the number of units that ran. */
+        run(budgetMs?: number): boolean;
+        /** Units, total time and largest single unit per phase so far. */
+        /** Same numbers as `phaseStats`, written into a Float64Array (units, totalMs,
+         * maxMs at index 3 * phase index; at least 3 * PHASES.length elements): no allocation. */
+        phaseStatsInto(out: Float64Array): void;
+        readonly phaseStats: { [phase: string]: { units: number; totalMs: number; maxMs: number } };
+        /** The Mesh, after step() returned true. Spends the loader. */
+        finish(): Mesh;
+        dispose(): void;
+        readonly phase: LoaderPhase | 'disposed';
+        readonly lastPhase: LoaderPhase | 'disposed';
+        /** Native steps the last step() call ran (at most `units`). */
+        readonly lastUnits: number;
+        /** Files named by relative URI (external buffers and images), listed after
+         * the parse step when started with `{ dependencies: true }`; else empty.
+         * Read each one yourself (the loader does no I/O) and give it to provide(). */
+        readonly dependencies: { uri: string; image: boolean; provided: boolean }[];
+        /** Hands over the bytes of dependencies[index] (ArrayBuffer/Uint8Array,
+         * 1 byte to 16 MiB, once). They are used, not copied: do not modify the
+         * buffer until finish() or dispose(). While files are missing step()
+         * returns false and does nothing (phase 'dependencies'). Absolute, scheme,
+         * drive and ".." URIs are rejected, at most 64 files. */
+        provide(index: number, bytes: ArrayBuffer | Uint8Array): void;
+        readonly unitsDone: number;
+        readonly unitsTotal: number;
+    }
+    /** Starts a resumable loadMemory() (same rules and errors, found while stepping). *
+     * `options.borrow: true` uses the bytes in place (no 'copy' phase and no snapshot
+     * RAM) when they are 4-byte aligned, otherwise the snapshot is made as usual; the
+     * buffer is pinned and must not be modified until finish() or dispose(). */
+    function beginMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material, options?: { dependencies?: boolean; borrow?: boolean }): Loader;
     /** Bulk setters, one call per frame instead of one per instance: values holds
      * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
      * value is checked finite before any instance changes. Returns the count. */
@@ -878,6 +937,14 @@ declare namespace Render3D {
     /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
      * since the last reset (with or without per-call stats). `reset`
      * (default true) clears them, so call it once per frame. */
+    /** Linear RGB multiplier in [0, 1] (white by default) applied to the vertex colors of every
+     * following draw, after lighting and before fog: clamp(color * lighting) * tint, or
+     * color * tint for UNLIT. The mesh's colors are not touched and no VU1 time is added (one
+     * constant quad per object, sent when it changes). Global state: set it before each draw or
+     * group that needs another tint, and restore white (1, 1, 1). Texture/vertex alpha are
+     * unaffected. Throws RangeError for a component outside [0, 1]. */
+    function setTint(r: number, g: number, b: number): void;
+    function getTint(): [number, number, number];
     function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
     /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
      * camera, program and texture skip the barrier, program upload, camera
@@ -1604,928 +1671,6 @@ declare namespace Draw {
 }
 
 
-/* === Module: Screen (screen) === */
-/**
- * Display, frame synchronization, VRAM statistics and GS state controls.
- *
- * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
- * Most numeric constants are raw PS2 GS values and are intended to be passed
- * back to this module rather than interpreted as application-level units.
- */
-declare namespace Screen {
-    /** Current video configuration accepted by `getMode()` and `setMode()`. */
-    interface VideoMode {
-        /** Video mode identifier such as `NTSC` or `PAL`. */
-        mode: number;
-        /** Visible width in pixels. */
-        width: number;
-        /** Visible height in pixels. */
-        height: number;
-        /** Color pixel storage format such as `CT32` or `CT24`. */
-        psm: number;
-        /** Interlaced/progressive mode. */
-        interlace: number;
-        /** Field/frame timing mode. */
-        field: number;
-        /** Depth-buffer pixel storage format. */
-        psmz: number;
-        /** Enables depth buffering. */
-        zbuffering: boolean;
-        /** Enables double-buffered presentation. */
-        double_buffering: boolean;
-        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
-        pass_count?: number;
-    }
-
-    /** Arguments for the GS alpha blend equation. */
-    interface AlphaEquation {
-        a: number;
-        b: number;
-        c: number;
-        d: number;
-        fix: number;
-    }
-
-    /** Pixel bounds used by the GS scissor register. */
-    interface ScissorBounds {
-        x0: number;
-        y0: number;
-        x1: number;
-        y1: number;
-    }
-
-    /** Presents the completed draw buffer and synchronizes the frame. */
-    function flip(): void;
-    /** Clears the current draw buffer using a packed RGBA color. */
-    function clear(color?: number): void;
-    /** Blocks until the next vertical blank starts. */
-    function waitVblankStart(): void;
-    /** Enables or disables synchronization with vertical blank. */
-    function setVSync(enabled: boolean): void;
-    /** Enables or disables the on-screen frame counter. */
-    function setFrameCounter(enabled: boolean): void;
-    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
-    function getMemoryStats(mode?: number): number;
-    /** Returns currently unallocated VRAM in bytes. */
-    function getFreeVRAM(): number;
-    /** Returns the measured FPS over the requested positive frame interval. */
-    function getFPS(interval: number): number;
-    /** Returns the active video configuration. */
-    function getMode(): VideoMode;
-    /** Reconfigures the video mode and render targets; invalid modes throw. */
-    function setMode(mode: VideoMode): void;
-    /** Packs the five GS alpha-equation fields into a register value. */
-    function alphaEquation(a: number, b: number, c: number, d: number,
-        fix: number): bigint;
-    /** Reads a supported GS parameter by its `Screen` constant. */
-    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
-    /** Writes a supported GS parameter by its `Screen` constant. */
-    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
-    /** Switches the active GS context and returns its native result code. */
-    function switchContext(): number;
-    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
-    function flush(): void;
-
-    const VRAM_SIZE: number;
-    const VRAM_USED_TOTAL: number;
-    const VRAM_USED_STATIC: number;
-    const VRAM_USED_DYNAMIC: number;
-    const ALPHA_TEST_ENABLE: number;
-    const ALPHA_TEST_METHOD: number;
-    const ALPHA_TEST_REF: number;
-    const ALPHA_TEST_FAIL: number;
-    const DST_ALPHA_TEST_ENABLE: number;
-    const DST_ALPHA_TEST_METHOD: number;
-    const DEPTH_TEST_ENABLE: number;
-    const DEPTH_TEST_METHOD: number;
-    const ALPHA_BLEND_EQUATION: number;
-    const SCISSOR_BOUNDS: number;
-    const PIXEL_ALPHA_BLEND_ENABLE: number;
-    const COLOR_CLAMP_MODE: number;
-    const ALPHA_NEVER: number;
-    const ALPHA_ALWAYS: number;
-    const ALPHA_LESS: number;
-    const ALPHA_LEQUAL: number;
-    const ALPHA_EQUAL: number;
-    const ALPHA_GEQUAL: number;
-    const ALPHA_GREATER: number;
-    const ALPHA_NEQUAL: number;
-    const ALPHA_FAIL_NO_UPDATE: number;
-    const ALPHA_FAIL_FB_ONLY: number;
-    const ALPHA_FAIL_ZB_ONLY: number;
-    const ALPHA_FAIL_RGB_ONLY: number;
-    const DST_ALPHA_ZERO: number;
-    const DST_ALPHA_ONE: number;
-    const DEPTH_NEVER: number;
-    const DEPTH_ALWAYS: number;
-    const DEPTH_GEQUAL: number;
-    const DEPTH_GREATER: number;
-    const SRC_RGB: number;
-    const DST_RGB: number;
-    const ZERO_RGB: number;
-    const SRC_ALPHA: number;
-    const DST_ALPHA: number;
-    const ALPHA_FIX: number;
-    const BLEND_DEFAULT: bigint;
-    const BLEND_ADD_NOALPHA: bigint;
-    const BLEND_ADD: bigint;
-    const NTSC: number;
-    const PAL: number;
-    const DTV_480p: number;
-    const DTV_576p: number;
-    const DTV_720p: number;
-    const DTV_1080i: number;
-    const INTERLACED: number;
-    const PROGRESSIVE: number;
-    const FIELD: number;
-    const FRAME: number;
-    const CT32: number;
-    const CT24: number;
-    const CT16: number;
-    const CT16S: number;
-    const Z32: number;
-    const Z24: number;
-    const Z16: number;
-    const Z16S: number;
-    const DRAW_BUFFER: number;
-    const DISPLAY_BUFFER: number;
-    const DEPTH_BUFFER: number;
-}
-
-
-/* === Module: Scene (scene) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=scene,... */
-/**
- * Scenes and their assets.
- *
- * A scene is a screen of the game (title, level, pause menu): a class that
- * extends `Scene`, names the assets it needs in `static assets`, and gets
- * `enter`, `update`, `draw`, `pause`, `resume` and `exit` calls. The static
- * methods of `Scene` manage a stack of them:
- *
- * - `Scene.go(Level)` loads the level's assets in the background (while the
- *   current scene fades out, with `transition: "fade"`), exits the current
- *   scenes, releases what only they used, and enters the level;
- * - `Scene.push(Pause)` puts a scene over the current one, which pauses and
- *   keeps being drawn below; `Scene.pop({ result })` resumes it;
- * - a loading screen shows only when loading outlasts the transition.
- *
- * Assets are reference counted by kind and path: an asset two scenes use is
- * loaded once and survives going from one to the other (the next scene's
- * assets are acquired before the previous scene's are released). Images load
- * through an ImageList (decoded on a worker), sound effects, fonts and sprite
- * sheets through their background jobs, so frames keep coming while loading.
- *
- * Transitions and loading run on real time: a pause menu that sets
- * `Loop.setTimeScale(0)` can still go to another scene.
- *
- * @example
- * ```js
- * class Level1 extends Scene {
- *     static root = "assets/level1";
- *     static assets = {
- *         images: { tiles: { path: "tiles.png", upload: "lock" } },
- *         sheets: { hero: "hero.json" },                 // Aseprite / TexturePacker
- *         sfx:    { jump: "jump.adp" },
- *         music:  { theme: { path: "level1.ogg", loop: true } },
- *         fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
- *         data:   { map: "map.json" },
- *     };
- *     enter(assets) {
- *         this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" });
- *         assets.music.theme.play();
- *     }
- *     update(dt) {
- *         if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu);
- *     }
- *     draw() { this.hero.draw(this.x, this.y); }
- *     exit() { this.assets.music.theme.stop(); }
- * }
- *
- * Scene.run(Title);                                        // starts the Loop
- * // later, from a scene:
- * Scene.go(Level1, { transition: "fade", duration: 0.5 });
- * ```
- */
-/**
- * `A` types the loaded assets and `P` the params, for editors:
- * `class Level extends Scene<{ images: { tiles: Image } }, { number: number }>`.
- */
-declare class Scene<A = any, P = any> {
-    /** What `go()`/`push()` passed as `options.params`. */
-    readonly params: P;
-    /** The loaded assets, as the manifest names them; set before `enter()`, null after `exit()`. */
-    assets: A;
-
-    constructor(params?: P);
-
-    /** The assets are loaded; the scene starts. May return a promise (the loading screen stays). */
-    enter(assets: A, params: P): void | Promise<void>;
-    update(dt: number): void;
-    draw(alpha: number): void;
-    /** A scene was pushed over this one. */
-    pause(): void;
-    /** The scene above was popped, with its `pop({ result })`. */
-    resume(result?: any): void;
-    /** The scene leaves; its `defer()` clean-ups run and its assets are released after this. */
-    exit(): void;
-
-    /**
-     * Runs `fn` when the scene leaves, after `exit()`, last registered
-     * first: for what the scene started and would outlive it (tweens,
-     * sprites, Loop systems, music). Returns `fn`.
-     */
-    defer<F extends () => void>(fn: F): F;
-    /**
-     * More assets while the scene runs (the next area of a level): a group,
-     * released when the scene leaves. Paths are relative to the class's root
-     * unless `options` gives another (a string is the root).
-     */
-    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
-
-    /**
-     * The assets this scene needs: a manifest, or a function of the params
-     * that returns one. Paths are relative to `root`.
-     */
-    static assets?: Scene.Manifest | ((params: any) => Scene.Manifest);
-    /** Directory the manifest's paths are relative to. */
-    static root?: string;
-
-    /**
-     * Replaces every scene with a new one: loads its assets (during the
-     * fade-out), exits the old scenes and releases their assets, then enters
-     * the new one. Resolves with the new scene once it runs. Requests made
-     * meanwhile wait their turn.
-     */
-    static go<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions): Promise<T>;
-    /** A scene over the current one, which pauses: a pause menu, a dialog. */
-    static push<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /** Leaves the top scene; the one below resumes with `options.result`. Resolves with it. */
-    static pop(options?: Scene.PopOptions): Promise<Scene | null>;
-    /**
-     * Replaces only the top scene; the ones below stay (and are not resumed).
-     * `drawBelow`/`updateBelow` default to the replaced scene's. With an
-     * empty stack it is a `go()`.
-     */
-    static replace<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /**
-     * Starts loading a scene's assets now (the level while the title runs),
-     * so `go()`/`push()` find them loaded. The group is released when that
-     * scene class enters, by `reset()`, or with `release()`.
-     */
-    static preload(SceneClass: new (params?: any) => Scene, params?: any): Scene.AssetGroup;
-    /**
-     * Starts `Loop.run()` with the manager's update and draw, and goes to the
-     * first scene. `loopOptions` go to `Loop.run()` (fixedStep, clearColor...).
-     * @throws TypeError when the Loop already runs: call `Scene.update()` and
-     * `Scene.draw()` from its handlers instead.
-     */
-    static run<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions,
-        loopOptions?: Loop.Options): Promise<T>;
-    /**
-     * For a custom loop: updates the running scenes (the top one, and those
-     * below it that asked for `updateBelow`). Throws the error of a scene
-     * that could not load when there is no `onError`. An exception of a
-     * scene's `enter()`, `exit()`, `pause()` or `resume()` during a switch
-     * is thrown too (inside `Loop.run()` it stops the Loop); the switch is
-     * cancelled, a scene whose `enter()` threw leaves without `exit()`, and
-     * the manager goes on with the next request.
-     */
-    static update(dt: number): void;
-    /** For a custom loop: draws the visible scenes, then the transition and loading screen. */
-    static draw(alpha?: number): void;
-    /** Leaves every scene at once and releases their assets and preloads. */
-    static reset(): void;
-    /**
-     * A named transition for go/push/pop/replace: `draw(amount, info)`
-     * covers `amount` (0..1) of the screen, in screen space.
-     */
-    static defineTransition(name: string, draw: Scene.TransitionDraw): void;
-
-    /** The top scene, or null. */
-    static readonly current: Scene | null;
-    /** Every scene, bottom first. */
-    static readonly stack: Scene[];
-    /** A go, push or pop is in progress. */
-    static readonly busy: boolean;
-    /** Loading progress of the scene being loaded, 0..1. */
-    static readonly progress: number;
-    /**
-     * Draws the loading screen in screen space while a scene loads: `null`
-     * shows nothing. The default is a progress bar.
-     */
-    static loadingScreen: ((progress: number, info: Scene.LoadingInfo) => void) | null;
-    /** Seconds of loading before the loading screen shows. Default 0.15. */
-    static loadingDelay: number;
-    /** Seconds a loading screen that showed stays at least. Default 0.3. */
-    static minLoadingTime: number;
-    /**
-     * Seconds of loading after which the scene's pending assets are logged
-     * once, each named: the file that hangs. Default 10; 0 never.
-     */
-    static slowLoadWarning: number;
-    /**
-     * Seconds after which a scene that has not loaded fails like a missing
-     * file (`onError`, or thrown from the next update) with a
-     * `Scene.TimeoutError` listing what was still loading. `timeout` in
-     * the request's options overrides it. Default 0: never.
-     */
-    static loadTimeout: number;
-    /**
-     * Called when a scene cannot load (a missing file): the current scene
-     * stays. The error names the request and scene (`"Scene.go(Level1):
-     * cannot load image 'x.png'"`), with the original as `cause`. Without
-     * it, the error is thrown from the next `update`, which stops the Loop.
-     */
-    static onError: ((error: Error, SceneClass: (new (params?: any) => Scene) | null) => void) | null;
-}
-
-declare namespace Scene {
-    /** A path, or the path with options. */
-    type Spec<T = {}> = string | ({ path: string } & T);
-
-    interface ImageSpec {
-        /** When the texture goes to VRAM: at first draw (default), now, or now and locked. */
-        upload?: "draw" | "bind" | "lock";
-        /** Same as `upload: "lock"`. */
-        lock?: boolean;
-        /** ImageList priority. */
-        priority?: number;
-    }
-
-    /**
-     * What a scene needs, by kind and name: `assets.images.hero` and so on.
-     * Built-in kinds:
-     * - `images`: `Image`, through an ImageList with a decoder thread;
-     * - `sheets`: `Sprite.Sheet`, from a `.json` (Aseprite, TexturePacker)
-     *   or an image with the options of `Sprite.Sheet.fromGrid()`;
-     * - `sfx`: `Sound.Sfx`; `music`: `Sound.Stream` (`{ path, loop }`);
-     * - `fonts`: `Font` (`{ path, size, preload }`);
-     * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
-     *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
-     *   (`data` and `text` fall back to `std.loadFile()` without Thread).
-     *   JSON is parsed on the script thread (objects can only be built
-     *   there): keep data files small, or split a large level.
-     * `Scene.Assets.define()` adds kinds.
-     */
-    interface Manifest {
-        images?: Record<string, Spec<ImageSpec>>;
-        sheets?: Record<string, Spec<Record<string, any>>>;
-        sfx?: Record<string, Spec>;
-        music?: Record<string, Spec<{ loop?: boolean }>>;
-        fonts?: Record<string, Spec<{ size?: number; preload?: boolean | string }>>;
-        data?: Record<string, Spec>;
-        text?: Record<string, Spec>;
-        binary?: Record<string, Spec>;
-        [kind: string]: Record<string, Spec<any>> | undefined;
-    }
-
-    /** What a transition's draw gets, besides the amount of screen to cover (0..1). */
-    interface TransitionInfo {
-        /** "out" while the amount rises, "hold" while loading, "in" while it falls. */
-        phase: "out" | "hold" | "in";
-        color: number;
-        width: number;
-        height: number;
-        direction: "left" | "right" | "up" | "down";
-    }
-
-    type TransitionDraw = (amount: number, info: TransitionInfo) => void;
-
-    interface TransitionOptions {
-        /**
-         * Default "none". "fade" blends `color` over the switch; "wipe" slides
-         * a band of it across (see `direction`); a name from
-         * `Scene.defineTransition()`, or `{ draw(amount, info) }` drawn in
-         * screen space.
-         */
-        transition?: "none" | "fade" | "wipe" | string | { draw: TransitionDraw };
-        /** Seconds of the whole transition, out and in. Default 0.4. */
-        duration?: number;
-        /** Transition color (`Color.new()`); default black. */
-        color?: number;
-        /** The way a wipe's edge moves. Default "left". */
-        direction?: "left" | "right" | "up" | "down";
-    }
-
-    interface RequestOptions {
-        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
-        timeout?: number;
-    }
-
-    interface GoOptions extends TransitionOptions, RequestOptions {
-        /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
-        params?: any;
-        /**
-         * Exits and releases the old scenes before loading the new one: for
-         * scenes that do not fit in memory together (shared assets reload).
-         */
-        unloadFirst?: boolean;
-    }
-
-    interface PushOptions extends TransitionOptions, RequestOptions {
-        params?: any;
-        /** The scenes below keep being drawn. Default true. */
-        drawBelow?: boolean;
-        /** The scenes below keep being updated. Default false. */
-        updateBelow?: boolean;
-    }
-
-    interface PopOptions extends TransitionOptions {
-        /** Given to the `resume()` of the scene below. */
-        result?: any;
-    }
-
-    interface LoadingInfo {
-        scene: (new (params?: any) => Scene) | null;
-        loaded: number;
-        total: number;
-    }
-
-    interface LoadOptions {
-        /** Directory the paths are relative to. */
-        root?: string;
-        /**
-         * Seconds to wait: past it the group fails (or `load()` rejects) with
-         * a `TimeoutError`. The loads themselves go on, and are freed when
-         * they end if nobody holds them.
-         */
-        timeout?: number;
-    }
-
-    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
-    interface TimeoutError extends Error {
-        code: "TIMEOUT";
-        /** What was still loading. */
-        pending: { kind: string; name: string; path: string; state: string }[];
-    }
-
-    /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
-    interface AssetGroup {
-        /** What is still loading. */
-        pending(): { kind: string; name: string; path: string; state: string }[];
-        /** The manifest's names with the loaded values. */
-        readonly assets: any;
-        readonly loaded: number;
-        readonly total: number;
-        /** 0..1. */
-        readonly progress: number;
-        readonly done: boolean;
-        readonly failed: boolean;
-        readonly error: Error | null;
-        /** Resolves with `assets`, or rejects with the first error. */
-        readonly ready: Promise<any>;
-        /** Lets go of every asset; each is freed once nobody else holds it. */
-        release(): void;
-    }
-
-    interface Loader<T = any> {
-        /** Applies what a later holder of a cached asset asks for (images: a lock). */
-        reuse?(asset: T, spec: any): void;
-        /** Loads the asset: the value, or a promise (a Job) of it. */
-        load(path: string, spec: any): T | PromiseLike<T>;
-        /**
-         * Releases it once nobody holds it. Asked for while a frame is being
-         * drawn, it runs at the start of the next frame (the frame's GS
-         * packet may still use the asset).
-         */
-        free(asset: T, spec: any): void;
-        /** Tells apart loads of one path with different options (e.g. a font size). */
-        key?(path: string, spec: any): string;
-    }
-
-    namespace Assets {
-        /** Milliseconds of ImageList work per frame while images load. Default 4. */
-        let budgetMs: number;
-        /**
-         * Seconds without images to load before the ImageList's decoder
-         * thread (and its stack) closes; it opens again when needed. Default 5.
-         */
-        let imageListIdleTime: number;
-        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
-        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
-        /** One asset; release it with `release(asset)`. A string option is the root. */
-        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
-        /**
-         * Releases one hold of an asset from `load()`; false if it is not
-         * held. A load released before it ends keeps running and is reused if
-         * the asset is asked for again (queued images are cancelled).
-         */
-        function release(asset: object): boolean;
-        /** The same, by the kind and spec it was loaded with: for strings (`text`). */
-        function release(kind: string, spec: Spec<any>, root?: string): boolean;
-        /** A new kind of asset for manifests. */
-        function define(kind: string, loader: Loader): void;
-        /**
-         * For `Debug.watch()`: held assets, still loading, holders, by kind,
-         * and frees waiting for the next frame.
-         */
-        function stats(): { entries: number; loading: number; refs: number; byKind: Record<string, number>;
-            pendingFrees: number; imageListOpen: boolean };
-        /** Every held asset, for finding leaks. */
-        function list(): { kind: string; path: string; refs: number; state: string }[];
-        /**
-         * The ImageList work, deferred frees and idle close of a frame `dt`
-         * seconds long, for games without `Loop.run()`.
-         */
-        function update(dt?: number): void;
-    }
-}
-
-
-/* === Module: Assets3D (assets3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=assets3d,... */
-/**
- * 3D asset kinds for `Scene.Assets` manifests, reference counted like the
- * built-in kinds: shared by scenes, disposed when the last holder lets go.
- *
- * - `meshes`: `Model3D.Mesh`, `"ship.obj"` or `{ path, material }`
- *   (`baseColor` may be a plain array);
- * - `textures3d`: `Model3D.Texture`, `{ path, filter, wrap, upload }`
- *   (`upload: true` makes it resident in VRAM during the loading screen);
- * - `gltf`: `GLTF3D.Asset`, `{ path, material }` (needs GLTF3D); freeing it
- *   disposes its nodes and clips and detaches its root.
- *
- * Model3D and GLTF3D parse synchronously: loads are queued and run between
- * frames for up to `budgetMs` (at least one per frame), so the loading
- * screen keeps drawing. Importing the module registers the kinds.
- *
- * Not in the default build: `node tools/modules.js configure --modules=assets3d,...`
- *
- * Example:
- * ```js
- * class Level extends Scene {
- *     static root = "assets/level1";
- *     static assets = {
- *         meshes: { ship: { path: "ship.obj", material: { shading: Model3D.DIFFUSE } } },
- *         textures3d: { rock: { path: "rock.png", filter: 1, wrap: 3, upload: true } },
- *         gltf: { hero: "hero.glb" },
- *     };
- *     enter(assets) { this.scene.root.add(assets.gltf.hero.root); }
- * }
- * ```
- */
-declare namespace Assets3D {
-    /** Milliseconds of loading per frame (default 8). */
-    const budgetMs: number;
-    function setBudget(ms: number): void;
-    /** Runs queued loads (the Loop system does it); returns how many ran. */
-    function update(): number;
-    function stats(): { queued: number; completed: number; failed: number; lastFrameMs: number; budgetMs: number };
-    const KINDS: string[];
-}
-
-
-/* === Module: Sound (sound) === */
-/**
- * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
- * one streamed music track (WAV or Ogg Vorbis).
- *
- * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
- * first time a sound is created or played. `audsrv = true` in athena.ini is
- * still accepted and loads them at boot instead.
- *
- * Streams:
- * - one plays at a time; `play()` on another stream replaces it (there is no
- *   crossfade: audsrv has a single stream voice);
- * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
- *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
- *   float) is converted on the EE while it plays; see `converted`;
- * - `pause()` keeps the position heard, so `play()` resumes exactly there;
- * - seeking, or switching to a stream of the same format, has no gap: the
- *   new audio follows the ~0.1 s audsrv already holds (other formats pause
- *   ~0.15 s while audsrv is reconfigured);
- * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
- * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
- *   does not interrupt the music; the frame loop only has to keep calling
- *   `Screen.flip()` (or otherwise block) for audio to flow;
- * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
- *
- * Sound effects:
- * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
- *   (or `adpenc`; `-L` for a looping sample). Files that would make the
- *   SPU2 play past their end are refused (`CORRUPT`);
- * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
- *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
- * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
- *   does not stall the frame;
- * - after `IOP.reset()` a sample is uploaded again from its file the next
- *   time it plays.
- *
- * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
- * for wrong argument types, `RangeError` for values out of range,
- * `InternalError` for I/O, format or IOP failures.
- *
- * @example
- * ```js
- * const music = new Sound.Stream("music/theme.ogg");
- * music.loop = true;
- * music.onLoop = () => console.log("theme looped");
- * music.play({ fade: 1000 });
- *
- * const jump = new Sound.Sfx("sfx/jump.adp");
- * jump.volume = 80;
- * jump.pan = -30;
- *
- * const pad = Gamepad.player(0);
- * Loop.run(() => {
- *     Gamepad.update();
- *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
- *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
- *     Sound.process();
- * });
- * ```
- */
-declare namespace Sound {
-    type ErrorCode =
-        | 'INVALID_ARGUMENT'
-        /** The file could not be opened. */
-        | 'NOT_FOUND'
-        | 'IO'
-        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
-        | 'BAD_FORMAT'
-        /** ADPCM data the SPU2 would play past its end (truncated file). */
-        | 'CORRUPT'
-        | 'NO_MEMORY'
-        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
-        | 'SPU_MEMORY'
-        /** audsrv could not be loaded or started on the IOP. */
-        | 'IOP'
-        /** The streaming thread could not be started. */
-        | 'THREAD'
-        /** Sfx.pitch, or assigning Sfx.loop. */
-        | 'UNSUPPORTED'
-        /** The object was used after free(). */
-        | 'FREED'
-        /** The loadSfxAsync() job was cancelled. */
-        | 'CANCELLED';
-
-    interface Error {
-        code: ErrorCode;
-        message: string;
-    }
-
-    /** SPU2 sample memory in bytes. */
-    interface MemoryStats {
-        /** Sample memory in SPU2 RAM (~2 MiB). */
-        total: number;
-        /** From the start of sample memory to the end of the last sample. */
-        used: number;
-        /** After the last sample: the largest sample that still fits. */
-        free: number;
-        /**
-         * Freed but not reusable yet: audsrv only reclaims memory at the end,
-         * so a sample freed before later ones leaves a hole until those are
-         * freed too. Load long-lived samples first.
-         */
-        wasted: number;
-        /** Samples loaded. */
-        samples: number;
-    }
-
-    interface FadeOptions {
-        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
-        fade?: number;
-    }
-
-    /** Number of SPU2 voices available to sound effects (24). */
-    const CHANNELS: number;
-
-    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
-    function setVolume(volume: number): void;
-    /** Music stream volume set with `setVolume()`. */
-    function getVolume(): number;
-    /**
-     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
-     * still sounding follow at once.
-     */
-    function setSfxVolume(volume: number): void;
-    function getSfxVolume(): number;
-    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
-    function findChannel(): number;
-    /** SPU2 sample memory use. */
-    function getMemoryStats(): MemoryStats;
-    /**
-     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
-     * since the last call, each at most once per call, and returns how many
-     * ran. An exception thrown by a callback propagates.
-     */
-    function process(): number;
-
-    /**
-     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
-     * Dropping it cancels the job (and frees the sample if nobody took it).
-     */
-    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
-        readonly __brand: 'SoundJob';
-    }
-
-    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
-
-    interface JobStatus<T> {
-        state: JobState;
-        /** When `state` is `'done'`. The same object on every later poll. */
-        result?: T;
-        /** When `state` is `'failed'` or `'cancelled'`. */
-        error?: Error;
-    }
-
-    /**
-     * Starts loading a sound effect: a worker thread reads and checks the
-     * file while the frame loop runs, then the `poll()` that sees it read
-     * uploads it to SPU2 memory (a short DMA, on the script thread).
-     *
-     * @example
-     * ```js
-     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
-     * // each frame:
-     * const status = Sound.poll(job);
-     * if (status.state === "done") boom = status.result;
-     * ```
-     */
-    function loadSfxAsync(path: string): Job<Sfx>;
-    /** The job's state without blocking; uploads the sample once it was read. */
-    function poll<T>(job: Job<T>): JobStatus<T>;
-    /**
-     * Blocks until the job is no longer running or `timeoutMs` passes
-     * (default: no limit), letting other threads run meanwhile, then
-     * returns `poll(job)`.
-     */
-    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
-    /** The job ends as `'cancelled'` unless it already finished. */
-    function cancel(job: Job<unknown>): void;
-
-    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
-    class Stream {
-        /** Opens `path`; also callable without `new`. Does not start playback. */
-        constructor(path: string);
-        /**
-         * Starts, or resumes from `position`. Stops the stream that was
-         * playing. With `fade` it starts silent and rises to full volume;
-         * during a fade-out it cancels the fade.
-         */
-        play(options?: FadeOptions): void;
-        /**
-         * Pauses at the position heard. With `fade` it keeps playing (and
-         * `playing()` stays true) until the fade-out ends.
-         */
-        pause(options?: FadeOptions): void;
-        /** Pauses and rewinds to the start, after the fade-out if any. */
-        stop(options?: FadeOptions): void;
-        /** True from `play()` until paused, stopped, or its last sample is heard. */
-        playing(): boolean;
-        /** Moves to the start; keeps playing if it was. */
-        rewind(): void;
-        /** Closes the file. Using the object afterwards throws `FREED`. */
-        free(): void;
-        /** Restart from the beginning at the end instead of stopping. */
-        loop: boolean;
-        /**
-         * Playback position heard, in milliseconds; assigning seeks (clamped
-         * to 0..length). Right after a seek it reads the target, and starts
-         * moving once the new audio is heard (~0.1 s later).
-         */
-        position: number;
-        /**
-         * Called by `Sound.process()` after the stream's last sample was
-         * heard (without `loop`); `this` is the stream.
-         */
-        onEnd: ((this: Stream) => void) | null;
-        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
-        onLoop: ((this: Stream) => void) | null;
-        /**
-         * The stream's last sample was heard (without `loop`); cleared by
-         * `play()`, a seek or `rewind()`.
-         */
-        readonly ended: boolean;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate of the file in Hz. */
-        readonly rate: number;
-        /** 1 (mono) or 2 (stereo). */
-        readonly channels: number;
-        readonly format: 'wav' | 'ogg';
-        /**
-         * audsrv cannot play the file's format, so it is converted to 16-bit
-         * at a supported rate on the EE (a little CPU while playing).
-         */
-        readonly converted: boolean;
-    }
-
-    /** An ADPCM sample resident in SPU2 memory. */
-    class Sfx {
-        /** Loads and uploads `path` (.adp); also callable without `new`. */
-        constructor(path: string);
-        /**
-         * Plays on `channel` (0-23), or on any free channel when omitted.
-         * Returns the channel used, or -1 when that channel (or every channel)
-         * is busy. The volume and pan are applied to the channel first.
-         */
-        play(channel?: number): number;
-        /**
-         * Whether this sample is still playing on `channel`. A looping
-         * sample plays until `stop()`, `free()` or `IOP.reset()`.
-         */
-        playing(channel: number): boolean;
-        /**
-         * Silences this sample on `channel`, or on every channel it plays on.
-         * audsrv cannot key a voice off, so it is muted: `playing()` turns
-         * false at once and the channel is free for the next `play()`.
-         */
-        stop(channel?: number): void;
-        /**
-         * Releases the SPU2 memory. Using the object afterwards throws.
-         * Voices still playing this sample are stopped as with `stop()`.
-         */
-        free(): void;
-        /** 0 to 100, applied on the next `play()`. Default 100. */
-        volume: number;
-        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
-        pan: number;
-        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
-        readonly loop: boolean;
-        /**
-         * Always 0. audsrv plays samples at the rate they were encoded with;
-         * assigning throws `UNSUPPORTED`.
-         */
-        readonly pitch: number;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate in Hz. */
-        readonly rate: number;
-    }
-}
-
-
-/* === Module: Audio3D (audio3d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=audio3d,... */
-/**
- * Positional sound: footsteps, engines, rivers, monsters off screen.
- *
- * A Source plays a Sound.Sfx at a world position (or on a Scene3D node);
- * the listener is usually the camera. Every frame a Loop system (after the
- * scene updates) computes, in C, each playing source's volume from its
- * distance (1 up to minDistance, 0 from maxDistance; "inverse" falls like
- * minDistance / distance, "linear" in a straight line) and its stereo pan
- * from the listener's right axis, and applies them to the SPU2 voice. The
- * sample's own volume and pan are left for its other plays.
- *
- * The SPU2 mixes stereo only: sounds behind the listener are not muffled
- * or told apart from those in front. Not in the default build:
- * `node tools/modules.js configure --modules=audio3d,...`
- *
- * Example:
- * ```js
- * Audio3D.setListener(camera);
- * const river = new Audio3D.Source(waterLoop, { x: 10, y: 0, z: -4, minDistance: 2, maxDistance: 25 });
- * river.play();
- * const growl = new Audio3D.Source(growlSfx, { node: monster, maxDistance: 40 });
- * if (aggro) growl.play();
- * ```
- */
-declare namespace Audio3D {
-    interface SourceOptions {
-        x?: number; y?: number; z?: number;
-        /** Follow this node's world position (of the last scene update); null stops. */
-        node?: Scene3D.Node | null;
-        /** Full volume up to here (default 1). */
-        minDistance?: number;
-        /** Silent from here (default 30). */
-        maxDistance?: number;
-        rolloff?: "inverse" | "linear";
-        /** At full gain, 0-100 (default 100). */
-        volume?: number;
-        /** 0 (mono) to 1 (hard left/right); default 0.8. */
-        panStrength?: number;
-    }
-    class Source {
-        /** Keeps the Sfx alive; a freed Sfx stops the source. */
-        constructor(sfx: Sound.Sfx, options?: SourceOptions);
-        readonly playing: boolean;
-        /** Voice in use, -1 when not playing. */
-        readonly channel: number;
-        /** Levels applied last. */
-        readonly volume: number;
-        readonly pan: number;
-        /** Starts at the current levels; returns the channel, or -1 when beyond maxDistance (unless force) or no voice is free. */
-        play(options?: { force?: boolean }): number;
-        stop(): this;
-        setPosition(x: number, y: number, z: number): this;
-        configure(options: SourceOptions): this;
-        /** Stops and releases the source. */
-        dispose(): void;
-    }
-    /** Listens from the camera (retained; null keeps the last position). */
-    function setListener(camera: Camera3D.Camera | null): void;
-    /** Listens from a point with a right-hand axis. */
-    function setListener(x: number, y: number, z: number, rightX: number, rightY: number, rightZ: number): void;
-    /** Levels a source at (x, y, z) would get now, without playing. */
-    function levels(x: number, y: number, z: number, options?: SourceOptions): { volume: number; pan: number; distance: number };
-    /** Applies every source's levels now (the Loop system does it each frame). */
-    function update(): void;
-}
-
-
 /* === Module: Font (font) === */
 /**
  * Font loading and text rendering.
@@ -2955,6 +2100,155 @@ declare namespace Gamepad {
         typeof TYPE_DIGITAL | typeof TYPE_ANALOG | typeof TYPE_NAMCOGUN |
         typeof TYPE_DUALSHOCK | typeof TYPE_JOGCON | typeof TYPE_DUALSHOCK3 |
         typeof TYPE_DUALSHOCK4;
+}
+
+
+/* === Module: Screen (screen) === */
+/**
+ * Display, frame synchronization, VRAM statistics and GS state controls.
+ *
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
+ */
+declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
+    interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
+        mode: number;
+        /** Visible width in pixels. */
+        width: number;
+        /** Visible height in pixels. */
+        height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
+        psm: number;
+        /** Interlaced/progressive mode. */
+        interlace: number;
+        /** Field/frame timing mode. */
+        field: number;
+        /** Depth-buffer pixel storage format. */
+        psmz: number;
+        /** Enables depth buffering. */
+        zbuffering: boolean;
+        /** Enables double-buffered presentation. */
+        double_buffering: boolean;
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
+        pass_count?: number;
+    }
+
+    /** Arguments for the GS alpha blend equation. */
+    interface AlphaEquation {
+        a: number;
+        b: number;
+        c: number;
+        d: number;
+        fix: number;
+    }
+
+    /** Pixel bounds used by the GS scissor register. */
+    interface ScissorBounds {
+        x0: number;
+        y0: number;
+        x1: number;
+        y1: number;
+    }
+
+    /** Presents the completed draw buffer and synchronizes the frame. */
+    function flip(): void;
+    /** Clears the current draw buffer using a packed RGBA color. */
+    function clear(color?: number): void;
+    /** Blocks until the next vertical blank starts. */
+    function waitVblankStart(): void;
+    /** Enables or disables synchronization with vertical blank. */
+    function setVSync(enabled: boolean): void;
+    /** Enables or disables the on-screen frame counter. */
+    function setFrameCounter(enabled: boolean): void;
+    /** Returns the total or used VRAM amount for the selected `VRAM_*` accounting mode. */
+    function getMemoryStats(mode?: number): number;
+    /** Returns currently unallocated VRAM in bytes. */
+    function getFreeVRAM(): number;
+    /** Returns the measured FPS over the requested positive frame interval. */
+    function getFPS(interval: number): number;
+    /** Returns the active video configuration. */
+    function getMode(): VideoMode;
+    /** Reconfigures the video mode and render targets; invalid modes throw. */
+    function setMode(mode: VideoMode): void;
+    /** Packs the five GS alpha-equation fields into a register value. */
+    function alphaEquation(a: number, b: number, c: number, d: number,
+        fix: number): bigint;
+    /** Reads a supported GS parameter by its `Screen` constant. */
+    function getParam(param: number): number | bigint | AlphaEquation | ScissorBounds;
+    /** Writes a supported GS parameter by its `Screen` constant. */
+    function setParam(param: number, value: number | bigint | AlphaEquation | ScissorBounds): void;
+    /** Switches the active GS context and returns its native result code. */
+    function switchContext(): number;
+    /** Sends queued graphics commands without waiting for DMA, VIF/GIF completion, or VBlank. */
+    function flush(): void;
+
+    const VRAM_SIZE: number;
+    const VRAM_USED_TOTAL: number;
+    const VRAM_USED_STATIC: number;
+    const VRAM_USED_DYNAMIC: number;
+    const ALPHA_TEST_ENABLE: number;
+    const ALPHA_TEST_METHOD: number;
+    const ALPHA_TEST_REF: number;
+    const ALPHA_TEST_FAIL: number;
+    const DST_ALPHA_TEST_ENABLE: number;
+    const DST_ALPHA_TEST_METHOD: number;
+    const DEPTH_TEST_ENABLE: number;
+    const DEPTH_TEST_METHOD: number;
+    const ALPHA_BLEND_EQUATION: number;
+    const SCISSOR_BOUNDS: number;
+    const PIXEL_ALPHA_BLEND_ENABLE: number;
+    const COLOR_CLAMP_MODE: number;
+    const ALPHA_NEVER: number;
+    const ALPHA_ALWAYS: number;
+    const ALPHA_LESS: number;
+    const ALPHA_LEQUAL: number;
+    const ALPHA_EQUAL: number;
+    const ALPHA_GEQUAL: number;
+    const ALPHA_GREATER: number;
+    const ALPHA_NEQUAL: number;
+    const ALPHA_FAIL_NO_UPDATE: number;
+    const ALPHA_FAIL_FB_ONLY: number;
+    const ALPHA_FAIL_ZB_ONLY: number;
+    const ALPHA_FAIL_RGB_ONLY: number;
+    const DST_ALPHA_ZERO: number;
+    const DST_ALPHA_ONE: number;
+    const DEPTH_NEVER: number;
+    const DEPTH_ALWAYS: number;
+    const DEPTH_GEQUAL: number;
+    const DEPTH_GREATER: number;
+    const SRC_RGB: number;
+    const DST_RGB: number;
+    const ZERO_RGB: number;
+    const SRC_ALPHA: number;
+    const DST_ALPHA: number;
+    const ALPHA_FIX: number;
+    const BLEND_DEFAULT: bigint;
+    const BLEND_ADD_NOALPHA: bigint;
+    const BLEND_ADD: bigint;
+    const NTSC: number;
+    const PAL: number;
+    const DTV_480p: number;
+    const DTV_576p: number;
+    const DTV_720p: number;
+    const DTV_1080i: number;
+    const INTERLACED: number;
+    const PROGRESSIVE: number;
+    const FIELD: number;
+    const FRAME: number;
+    const CT32: number;
+    const CT24: number;
+    const CT16: number;
+    const CT16S: number;
+    const Z32: number;
+    const Z24: number;
+    const Z16: number;
+    const Z16S: number;
+    const DRAW_BUFFER: number;
+    const DISPLAY_BUFFER: number;
+    const DEPTH_BUFFER: number;
 }
 
 
@@ -3432,6 +2726,894 @@ declare namespace Profiler {
 }
 
 
+/* === Module: Scene (scene) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=scene,... */
+/**
+ * Scenes and their assets.
+ *
+ * A scene is a screen of the game (title, level, pause menu): a class that
+ * extends `Scene`, names the assets it needs in `static assets`, and gets
+ * `enter`, `update`, `draw`, `pause`, `resume` and `exit` calls. The static
+ * methods of `Scene` manage a stack of them:
+ *
+ * - `Scene.go(Level)` loads the level's assets in the background (while the
+ *   current scene fades out, with `transition: "fade"`), exits the current
+ *   scenes, releases what only they used, and enters the level;
+ * - `Scene.push(Pause)` puts a scene over the current one, which pauses and
+ *   keeps being drawn below; `Scene.pop({ result })` resumes it;
+ * - a loading screen shows only when loading outlasts the transition.
+ *
+ * Assets are reference counted by kind and path: an asset two scenes use is
+ * loaded once and survives going from one to the other (the next scene's
+ * assets are acquired before the previous scene's are released). Images load
+ * through an ImageList (decoded on a worker), sound effects, fonts and sprite
+ * sheets through their background jobs, so frames keep coming while loading.
+ *
+ * Transitions and loading run on real time: a pause menu that sets
+ * `Loop.setTimeScale(0)` can still go to another scene.
+ *
+ * @example
+ * ```js
+ * class Level1 extends Scene {
+ *     static root = "assets/level1";
+ *     static assets = {
+ *         images: { tiles: { path: "tiles.png", upload: "lock" } },
+ *         sheets: { hero: "hero.json" },                 // Aseprite / TexturePacker
+ *         sfx:    { jump: "jump.adp" },
+ *         music:  { theme: { path: "level1.ogg", loop: true } },
+ *         fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
+ *         data:   { map: "map.json" },
+ *     };
+ *     enter(assets) {
+ *         this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" });
+ *         assets.music.theme.play();
+ *     }
+ *     update(dt) {
+ *         if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu);
+ *     }
+ *     draw() { this.hero.draw(this.x, this.y); }
+ *     exit() { this.assets.music.theme.stop(); }
+ * }
+ *
+ * Scene.run(Title);                                        // starts the Loop
+ * // later, from a scene:
+ * Scene.go(Level1, { transition: "fade", duration: 0.5 });
+ * ```
+ */
+/**
+ * `A` types the loaded assets and `P` the params, for editors:
+ * `class Level extends Scene<{ images: { tiles: Image } }, { number: number }>`.
+ */
+declare class Scene<A = any, P = any> {
+    /** What `go()`/`push()` passed as `options.params`. */
+    readonly params: P;
+    /** The loaded assets, as the manifest names them; set before `enter()`, null after `exit()`. */
+    assets: A;
+
+    constructor(params?: P);
+
+    /** The assets are loaded; the scene starts. May return a promise (the loading screen stays). */
+    enter(assets: A, params: P): void | Promise<void>;
+    update(dt: number): void;
+    draw(alpha: number): void;
+    /** A scene was pushed over this one. */
+    pause(): void;
+    /** The scene above was popped, with its `pop({ result })`. */
+    resume(result?: any): void;
+    /** The scene leaves; its `defer()` clean-ups run and its assets are released after this. */
+    exit(): void;
+
+    /**
+     * Runs `fn` when the scene leaves, after `exit()`, last registered
+     * first: for what the scene started and would outlive it (tweens,
+     * sprites, Loop systems, music). Returns `fn`.
+     */
+    defer<F extends () => void>(fn: F): F;
+    /**
+     * More assets while the scene runs (the next area of a level): a group,
+     * released when the scene leaves. Paths are relative to the class's root
+     * unless `options` gives another (a string is the root).
+     */
+    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
+
+    /**
+     * The assets this scene needs: a manifest, or a function of the params
+     * that returns one. Paths are relative to `root`.
+     */
+    static assets?: Scene.Manifest | ((params: any) => Scene.Manifest);
+    /** Directory the manifest's paths are relative to. */
+    static root?: string;
+
+    /**
+     * Replaces every scene with a new one: loads its assets (during the
+     * fade-out), exits the old scenes and releases their assets, then enters
+     * the new one. Resolves with the new scene once it runs. Requests made
+     * meanwhile wait their turn.
+     */
+    static go<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions): Promise<T>;
+    /** A scene over the current one, which pauses: a pause menu, a dialog. */
+    static push<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
+    /** Leaves the top scene; the one below resumes with `options.result`. Resolves with it. */
+    static pop(options?: Scene.PopOptions): Promise<Scene | null>;
+    /**
+     * Replaces only the top scene; the ones below stay (and are not resumed).
+     * `drawBelow`/`updateBelow` default to the replaced scene's. With an
+     * empty stack it is a `go()`.
+     */
+    static replace<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
+    /**
+     * Starts loading a scene's assets now (the level while the title runs),
+     * so `go()`/`push()` find them loaded. The group is released when that
+     * scene class enters, by `reset()`, or with `release()`.
+     */
+    static preload(SceneClass: new (params?: any) => Scene, params?: any): Scene.AssetGroup;
+    /**
+     * Starts `Loop.run()` with the manager's update and draw, and goes to the
+     * first scene. `loopOptions` go to `Loop.run()` (fixedStep, clearColor...).
+     * @throws TypeError when the Loop already runs: call `Scene.update()` and
+     * `Scene.draw()` from its handlers instead.
+     */
+    static run<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions,
+        loopOptions?: Loop.Options): Promise<T>;
+    /**
+     * For a custom loop: updates the running scenes (the top one, and those
+     * below it that asked for `updateBelow`). Throws the error of a scene
+     * that could not load when there is no `onError`. An exception of a
+     * scene's `enter()`, `exit()`, `pause()` or `resume()` during a switch
+     * is thrown too (inside `Loop.run()` it stops the Loop); the switch is
+     * cancelled, a scene whose `enter()` threw leaves without `exit()`, and
+     * the manager goes on with the next request.
+     */
+    static update(dt: number): void;
+    /** For a custom loop: draws the visible scenes, then the transition and loading screen. */
+    static draw(alpha?: number): void;
+    /** Leaves every scene at once and releases their assets and preloads. */
+    static reset(): void;
+    /**
+     * A named transition for go/push/pop/replace: `draw(amount, info)`
+     * covers `amount` (0..1) of the screen, in screen space.
+     */
+    static defineTransition(name: string, draw: Scene.TransitionDraw): void;
+
+    /** The top scene, or null. */
+    static readonly current: Scene | null;
+    /** Every scene, bottom first. */
+    static readonly stack: Scene[];
+    /** A go, push or pop is in progress. */
+    static readonly busy: boolean;
+    /** Loading progress of the scene being loaded, 0..1. */
+    static readonly progress: number;
+    /**
+     * Draws the loading screen in screen space while a scene loads: `null`
+     * shows nothing. The default is a progress bar.
+     */
+    static loadingScreen: ((progress: number, info: Scene.LoadingInfo) => void) | null;
+    /** Seconds of loading before the loading screen shows. Default 0.15. */
+    static loadingDelay: number;
+    /** Seconds a loading screen that showed stays at least. Default 0.3. */
+    static minLoadingTime: number;
+    /**
+     * Seconds of loading after which the scene's pending assets are logged
+     * once, each named: the file that hangs. Default 10; 0 never.
+     */
+    static slowLoadWarning: number;
+    /**
+     * Seconds after which a scene that has not loaded fails like a missing
+     * file (`onError`, or thrown from the next update) with a
+     * `Scene.TimeoutError` listing what was still loading. `timeout` in
+     * the request's options overrides it. Default 0: never.
+     */
+    static loadTimeout: number;
+    /**
+     * Called when a scene cannot load (a missing file): the current scene
+     * stays. The error names the request and scene (`"Scene.go(Level1):
+     * cannot load image 'x.png'"`), with the original as `cause`. Without
+     * it, the error is thrown from the next `update`, which stops the Loop.
+     */
+    static onError: ((error: Error, SceneClass: (new (params?: any) => Scene) | null) => void) | null;
+}
+
+declare namespace Scene {
+    /** A path, or the path with options. */
+    type Spec<T = {}> = string | ({ path: string } & T);
+
+    interface ImageSpec {
+        /** When the texture goes to VRAM: at first draw (default), now, or now and locked. */
+        upload?: "draw" | "bind" | "lock";
+        /** Same as `upload: "lock"`. */
+        lock?: boolean;
+        /** ImageList priority. */
+        priority?: number;
+    }
+
+    /**
+     * What a scene needs, by kind and name: `assets.images.hero` and so on.
+     * Built-in kinds:
+     * - `images`: `Image`, through an ImageList with a decoder thread;
+     * - `sheets`: `Sprite.Sheet`, from a `.json` (Aseprite, TexturePacker)
+     *   or an image with the options of `Sprite.Sheet.fromGrid()`;
+     * - `sfx`: `Sound.Sfx`; `music`: `Sound.Stream` (`{ path, loop }`);
+     * - `fonts`: `Font` (`{ path, size, preload }`);
+     * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
+     *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
+     *   (`data` and `text` fall back to `std.loadFile()` without Thread).
+     *   JSON is parsed on the script thread (objects can only be built
+     *   there): keep data files small, or split a large level.
+     * `Scene.Assets.define()` adds kinds.
+     */
+    interface Manifest {
+        images?: Record<string, Spec<ImageSpec>>;
+        sheets?: Record<string, Spec<Record<string, any>>>;
+        sfx?: Record<string, Spec>;
+        music?: Record<string, Spec<{ loop?: boolean }>>;
+        fonts?: Record<string, Spec<{ size?: number; preload?: boolean | string }>>;
+        data?: Record<string, Spec>;
+        text?: Record<string, Spec>;
+        binary?: Record<string, Spec>;
+        [kind: string]: Record<string, Spec<any>> | undefined;
+    }
+
+    /** What a transition's draw gets, besides the amount of screen to cover (0..1). */
+    interface TransitionInfo {
+        /** "out" while the amount rises, "hold" while loading, "in" while it falls. */
+        phase: "out" | "hold" | "in";
+        color: number;
+        width: number;
+        height: number;
+        direction: "left" | "right" | "up" | "down";
+    }
+
+    type TransitionDraw = (amount: number, info: TransitionInfo) => void;
+
+    interface TransitionOptions {
+        /**
+         * Default "none". "fade" blends `color` over the switch; "wipe" slides
+         * a band of it across (see `direction`); a name from
+         * `Scene.defineTransition()`, or `{ draw(amount, info) }` drawn in
+         * screen space.
+         */
+        transition?: "none" | "fade" | "wipe" | string | { draw: TransitionDraw };
+        /** Seconds of the whole transition, out and in. Default 0.4. */
+        duration?: number;
+        /** Transition color (`Color.new()`); default black. */
+        color?: number;
+        /** The way a wipe's edge moves. Default "left". */
+        direction?: "left" | "right" | "up" | "down";
+    }
+
+    interface RequestOptions {
+        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
+        timeout?: number;
+    }
+
+    interface GoOptions extends TransitionOptions, RequestOptions {
+        /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
+        params?: any;
+        /**
+         * Exits and releases the old scenes before loading the new one: for
+         * scenes that do not fit in memory together (shared assets reload).
+         */
+        unloadFirst?: boolean;
+    }
+
+    interface PushOptions extends TransitionOptions, RequestOptions {
+        params?: any;
+        /** The scenes below keep being drawn. Default true. */
+        drawBelow?: boolean;
+        /** The scenes below keep being updated. Default false. */
+        updateBelow?: boolean;
+    }
+
+    interface PopOptions extends TransitionOptions {
+        /** Given to the `resume()` of the scene below. */
+        result?: any;
+    }
+
+    interface LoadingInfo {
+        scene: (new (params?: any) => Scene) | null;
+        loaded: number;
+        total: number;
+    }
+
+    interface LoadOptions {
+        /** Directory the paths are relative to. */
+        root?: string;
+        /**
+         * Seconds to wait: past it the group fails (or `load()` rejects) with
+         * a `TimeoutError`. The loads themselves go on, and are freed when
+         * they end if nobody holds them.
+         */
+        timeout?: number;
+    }
+
+    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
+    interface TimeoutError extends Error {
+        code: "TIMEOUT";
+        /** What was still loading. */
+        pending: { kind: string; name: string; path: string; state: string }[];
+    }
+
+    /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
+    interface AssetGroup {
+        /** What is still loading. */
+        pending(): { kind: string; name: string; path: string; state: string }[];
+        /** The manifest's names with the loaded values. */
+        readonly assets: any;
+        readonly loaded: number;
+        readonly total: number;
+        /** 0..1. */
+        readonly progress: number;
+        readonly done: boolean;
+        readonly failed: boolean;
+        readonly error: Error | null;
+        /** Resolves with `assets`, or rejects with the first error. */
+        readonly ready: Promise<any>;
+        /** Lets go of every asset; each is freed once nobody else holds it. */
+        release(): void;
+    }
+
+    interface Loader<T = any> {
+        /** Set cancel() to abort pending work when its last holder releases. */
+        load(path: string, spec: any, handle: { cancel?: () => void }): T | PromiseLike<T>;
+        /** Applies what a later holder of a cached asset asks for (images: a lock). */
+        reuse?(asset: T, spec: any): void;
+        /**
+         * Releases it once nobody holds it. Asked for while a frame is being
+         * drawn, it runs at the start of the next frame (the frame's GS
+         * packet may still use the asset).
+         */
+        free(asset: T, spec: any): void;
+        /** Tells apart loads of one path with different options (e.g. a font size). */
+        key?(path: string, spec: any): string;
+    }
+
+    namespace Assets {
+        /** Milliseconds of ImageList work per frame while images load. Default 4. */
+        let budgetMs: number;
+        /**
+         * Seconds without images to load before the ImageList's decoder
+         * thread (and its stack) closes; it opens again when needed. Default 5.
+         */
+        let imageListIdleTime: number;
+        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
+        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
+        /** One asset; release it with `release(asset)`. A string option is the root. */
+        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
+        /**
+         * Releases one hold of an asset from `load()`; false if it is not
+         * held. A load released before it ends keeps running and is reused if
+         * the asset is asked for again (queued images are cancelled).
+         */
+        function release(asset: object): boolean;
+        /** The same, by the kind and spec it was loaded with: for strings (`text`). */
+        function release(kind: string, spec: Spec<any>, root?: string): boolean;
+        /** A new kind of asset for manifests. */
+        function define(kind: string, loader: Loader): void;
+        /**
+         * For `Debug.watch()`: held assets, still loading, holders, by kind,
+         * and frees waiting for the next frame.
+         */
+        function stats(): { entries: number; loading: number; refs: number; byKind: Record<string, number>;
+            pendingFrees: number; imageListOpen: boolean };
+        /** Every held asset, for finding leaks. */
+        function list(): { kind: string; path: string; refs: number; state: string }[];
+        /**
+         * The ImageList work, deferred frees and idle close of a frame `dt`
+         * seconds long, for games without `Loop.run()`.
+         */
+        function update(dt?: number): void;
+    }
+}
+
+
+/* === Module: Assets3D (assets3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=assets3d,... */
+/**
+ * 3D asset kinds for `Scene.Assets` manifests, reference counted like the
+ * built-in kinds: shared by scenes, disposed when the last holder lets go.
+ *
+ * - `meshes`: `Model3D.Mesh`, `"ship.obj"` or `{ path, material }`
+ *   (`baseColor` may be a plain array);
+ * - `textures3d`: `Model3D.Texture` (PNG/JPEG/BMP files are read and decoded by a job, then
+ *   adopted in O(1): a job-pool worker reads and decodes the file, so neither file I/O nor the decode
+ *   (about 80 ms for 256x256 on the EE) runs inside update(); `asyncRead: false` selects `Texture.load`), `{ path, filter, wrap, upload }`
+ *   (`upload: true` makes it resident in VRAM during the loading screen);
+ * - `gltf`: `GLTF3D.Asset`, `{ path, material }` (needs GLTF3D); freeing it
+ *   disposes its nodes and clips and detaches its root.
+ *
+ * GLB mesh/scene reads use Thread jobs by default, one read at a time
+ * (16 MiB maximum). `gltf` scenes are then built in resumable units by
+ * `GLTF3D.Loader` (parse, validation, one primitive or node, links, one skin
+ * or animation) spread across update() calls; single GLB meshes use
+ * `Model3D.Loader` (copy, parse, validate, build). Under a budget, update()
+ * runs as many units as fit (the native loader times each unit; one unit can
+ * overshoot). Loaders borrow the bytes read by the job (no copy). The `stepped`
+ * option (`false`) builds a whole GLB per update() call instead, and
+ * `Assets3D.setStepped()` changes the default; it does not affect the cache key.
+ * `.gltf` files and GLBs that name relative external buffers/images are
+ * resolved explicitly: the loader lists the files, Assets3D reads each one on a
+ * Thread job (paths relative to the model, no ".." or absolute URIs, at most 64
+ * files) and hands the bytes over. `{ asyncRead: false }` selects the existing
+ * path loader. `{ maxBytes }` lowers the per-file job limit and is part of
+ * cache identity. OBJ/MTL and standalone textures use path loaders. Without
+ * `GLTF3D.beginMemory`/`Model3D.beginMemory` only `.glb` goes through jobs.
+ * The budget is soft: one unit (a texture decode, a large primitive, a mesh,
+ * an upload) can exceed it; stats().phases reports each phase's largest. Releasing the last
+ * holder cancels queued/read jobs; another holder keeps the shared load alive.
+ * Importing the module registers the kinds. Call update() without Loop.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=assets3d,...`
+ *
+ * Example:
+ * ```js
+ * class Level extends Scene {
+ *     static root = "assets/level1";
+ *     static assets = {
+ *         meshes: { ship: { path: "ship.obj", material: { shading: Model3D.DIFFUSE } } },
+ *         textures3d: { rock: { path: "rock.png", filter: 1, wrap: 3, upload: true } },
+ *         gltf: { hero: "hero.glb" },
+ *     };
+ *     enter(assets) { this.scene.root.add(assets.gltf.hero.root); }
+ * }
+ * ```
+ */
+declare namespace Assets3D {
+    /** Soft main-thread budget in milliseconds (default 8); no strict bound. */
+    const budgetMs: number;
+    function setBudget(ms: number): void;
+    /** Default of the per-asset `stepped` option (default true). */
+    function setStepped(stepped: boolean): void;
+    /** Polls reads without waiting and starts/constructs work. Returns operations run. */
+    function update(): number;
+    /** Read progress (bytes) is separate from construction progress (units,
+     * only for resumable gltf loads; unitsTotal is 0 until validation counts them). */
+    function pending(): { path: string; phase: 'queued' | 'reading' | 'dependencies' | 'construct'; bytesDone: number; bytesTotal: number;
+        constructPhase: GLTF3D.LoaderPhase | Model3D.LoaderPhase | 'disposed' | null; unitsDone: number; unitsTotal: number }[];
+    interface LoadMetrics {
+        path: string; mode: 'job-memory' | 'job-memory-steps' | 'job-decode' | 'path'; bytes: number;
+        /** External files read for a .gltf or a GLB with relative URIs, and their wall time. */
+        dependencies?: number; dependencyWaitMs?: number;
+        /** Elapsed wall time waiting for read/poll, including intervening frames. */
+        readWaitMs: number;
+        /** Parse + native/JS construction (also I/O/decode for path loaders). */
+        constructMs: number;
+        /** Resumable loads: units run (begin, steps and finish). */
+        steps?: number;
+        uploadMs: number;
+    }
+    /** CPU clocks include instrumentation; spans must finish before EE wrap (~14.5s).
+     * Maxima are cumulative for this runtime. Cached texture upload requests
+     * contribute to maxUploadMs, even when no new load runs. maxConstructionMs is
+     * the largest single construction unit; phases lists each resumable unit kind
+     * (count = units run, maxMs = the largest single unit; 'begin' creates the loader, 'finish' wraps the result in JS handles; no 'copy' phase for job reads). */
+    function stats(): { queued: number; reading: number; completed: number; failed: number; cancelled: number;
+        lastFrameMs: number; maxFrameMs: number; maxConstructionMs: number; maxUploadMs: number;
+        lastLoad: LoadMetrics | null; budgetMs: number;
+        phases: { [phase: string]: { count: number; totalMs: number; maxMs: number } } };
+    /** Clears lastLoad, the frame/construction/upload maxima and phases; counters and the queue stay. */
+    function resetStats(): void;
+    const KINDS: string[];
+}
+
+
+/* === Module: Sound (sound) === */
+/**
+ * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
+ * one streamed music track (WAV or Ogg Vorbis).
+ *
+ * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
+ * first time a sound is created or played. `audsrv = true` in athena.ini is
+ * still accepted and loads them at boot instead.
+ *
+ * Streams:
+ * - one plays at a time; `play()` on another stream replaces it (there is no
+ *   crossfade: audsrv has a single stream voice);
+ * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
+ *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
+ *   float) is converted on the EE while it plays; see `converted`;
+ * - `pause()` keeps the position heard, so `play()` resumes exactly there;
+ * - seeking, or switching to a stream of the same format, has no gap: the
+ *   new audio follows the ~0.1 s audsrv already holds (other formats pause
+ *   ~0.15 s while audsrv is reconfigured);
+ * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
+ * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
+ *   does not interrupt the music; the frame loop only has to keep calling
+ *   `Screen.flip()` (or otherwise block) for audio to flow;
+ * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
+ *
+ * Sound effects:
+ * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
+ *   (or `adpenc`; `-L` for a looping sample). Files that would make the
+ *   SPU2 play past their end are refused (`CORRUPT`);
+ * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
+ *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
+ * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
+ *   does not stall the frame;
+ * - after `IOP.reset()` a sample is uploaded again from its file the next
+ *   time it plays.
+ *
+ * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
+ * for wrong argument types, `RangeError` for values out of range,
+ * `InternalError` for I/O, format or IOP failures.
+ *
+ * @example
+ * ```js
+ * const music = new Sound.Stream("music/theme.ogg");
+ * music.loop = true;
+ * music.onLoop = () => console.log("theme looped");
+ * music.play({ fade: 1000 });
+ *
+ * const jump = new Sound.Sfx("sfx/jump.adp");
+ * jump.volume = 80;
+ * jump.pan = -30;
+ *
+ * const pad = Gamepad.player(0);
+ * Loop.run(() => {
+ *     Gamepad.update();
+ *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
+ *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
+ *     Sound.process();
+ * });
+ * ```
+ */
+declare namespace Sound {
+    type ErrorCode =
+        | 'INVALID_ARGUMENT'
+        /** The file could not be opened. */
+        | 'NOT_FOUND'
+        | 'IO'
+        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
+        | 'BAD_FORMAT'
+        /** ADPCM data the SPU2 would play past its end (truncated file). */
+        | 'CORRUPT'
+        | 'NO_MEMORY'
+        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
+        | 'SPU_MEMORY'
+        /** audsrv could not be loaded or started on the IOP. */
+        | 'IOP'
+        /** The streaming thread could not be started. */
+        | 'THREAD'
+        /** Sfx.pitch, or assigning Sfx.loop. */
+        | 'UNSUPPORTED'
+        /** The object was used after free(). */
+        | 'FREED'
+        /** The loadSfxAsync() job was cancelled. */
+        | 'CANCELLED';
+
+    interface Error {
+        code: ErrorCode;
+        message: string;
+    }
+
+    /** SPU2 sample memory in bytes. */
+    interface MemoryStats {
+        /** Sample memory in SPU2 RAM (~2 MiB). */
+        total: number;
+        /** From the start of sample memory to the end of the last sample. */
+        used: number;
+        /** After the last sample: the largest sample that still fits. */
+        free: number;
+        /**
+         * Freed but not reusable yet: audsrv only reclaims memory at the end,
+         * so a sample freed before later ones leaves a hole until those are
+         * freed too. Load long-lived samples first.
+         */
+        wasted: number;
+        /** Samples loaded. */
+        samples: number;
+    }
+
+    interface FadeOptions {
+        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
+        fade?: number;
+    }
+
+    /** Number of SPU2 voices available to sound effects (24). */
+    const CHANNELS: number;
+
+    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
+    function setVolume(volume: number): void;
+    /** Music stream volume set with `setVolume()`. */
+    function getVolume(): number;
+    /**
+     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
+     * still sounding follow at once.
+     */
+    function setSfxVolume(volume: number): void;
+    function getSfxVolume(): number;
+    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
+    function findChannel(): number;
+    /** SPU2 sample memory use. */
+    function getMemoryStats(): MemoryStats;
+    /**
+     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
+     * since the last call, each at most once per call, and returns how many
+     * ran. An exception thrown by a callback propagates.
+     */
+    function process(): number;
+
+    /**
+     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
+     * Dropping it cancels the job (and frees the sample if nobody took it).
+     */
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
+        readonly __brand: 'SoundJob';
+    }
+
+    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
+
+    interface JobStatus<T> {
+        state: JobState;
+        /** When `state` is `'done'`. The same object on every later poll. */
+        result?: T;
+        /** When `state` is `'failed'` or `'cancelled'`. */
+        error?: Error;
+    }
+
+    /**
+     * Starts loading a sound effect: a worker thread reads and checks the
+     * file while the frame loop runs, then the `poll()` that sees it read
+     * uploads it to SPU2 memory (a short DMA, on the script thread).
+     *
+     * @example
+     * ```js
+     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
+     * // each frame:
+     * const status = Sound.poll(job);
+     * if (status.state === "done") boom = status.result;
+     * ```
+     */
+    function loadSfxAsync(path: string): Job<Sfx>;
+    /** The job's state without blocking; uploads the sample once it was read. */
+    function poll<T>(job: Job<T>): JobStatus<T>;
+    /**
+     * Blocks until the job is no longer running or `timeoutMs` passes
+     * (default: no limit), letting other threads run meanwhile, then
+     * returns `poll(job)`.
+     */
+    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    function cancel(job: Job<unknown>): void;
+
+    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
+    class Stream {
+        /** Opens `path`; also callable without `new`. Does not start playback. */
+        constructor(path: string);
+        /**
+         * Starts, or resumes from `position`. Stops the stream that was
+         * playing. With `fade` it starts silent and rises to full volume;
+         * during a fade-out it cancels the fade.
+         */
+        play(options?: FadeOptions): void;
+        /**
+         * Pauses at the position heard. With `fade` it keeps playing (and
+         * `playing()` stays true) until the fade-out ends.
+         */
+        pause(options?: FadeOptions): void;
+        /** Pauses and rewinds to the start, after the fade-out if any. */
+        stop(options?: FadeOptions): void;
+        /** True from `play()` until paused, stopped, or its last sample is heard. */
+        playing(): boolean;
+        /** Moves to the start; keeps playing if it was. */
+        rewind(): void;
+        /** Closes the file. Using the object afterwards throws `FREED`. */
+        free(): void;
+        /** Restart from the beginning at the end instead of stopping. */
+        loop: boolean;
+        /**
+         * Playback position heard, in milliseconds; assigning seeks (clamped
+         * to 0..length). Right after a seek it reads the target, and starts
+         * moving once the new audio is heard (~0.1 s later).
+         */
+        position: number;
+        /**
+         * Called by `Sound.process()` after the stream's last sample was
+         * heard (without `loop`); `this` is the stream.
+         */
+        onEnd: ((this: Stream) => void) | null;
+        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
+        onLoop: ((this: Stream) => void) | null;
+        /**
+         * The stream's last sample was heard (without `loop`); cleared by
+         * `play()`, a seek or `rewind()`.
+         */
+        readonly ended: boolean;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate of the file in Hz. */
+        readonly rate: number;
+        /** 1 (mono) or 2 (stereo). */
+        readonly channels: number;
+        readonly format: 'wav' | 'ogg';
+        /**
+         * audsrv cannot play the file's format, so it is converted to 16-bit
+         * at a supported rate on the EE (a little CPU while playing).
+         */
+        readonly converted: boolean;
+    }
+
+    /** An ADPCM sample resident in SPU2 memory. */
+    class Sfx {
+        /** Loads and uploads `path` (.adp); also callable without `new`. */
+        constructor(path: string);
+        /**
+         * Plays on `channel` (0-23), or on any free channel when omitted.
+         * Returns the channel used, or -1 when that channel (or every channel)
+         * is busy. The volume and pan are applied to the channel first.
+         */
+        play(channel?: number): number;
+        /**
+         * Whether this sample is still playing on `channel`. A looping
+         * sample plays until `stop()`, `free()` or `IOP.reset()`.
+         */
+        playing(channel: number): boolean;
+        /**
+         * Silences this sample on `channel`, or on every channel it plays on.
+         * audsrv cannot key a voice off, so it is muted: `playing()` turns
+         * false at once and the channel is free for the next `play()`.
+         */
+        stop(channel?: number): void;
+        /**
+         * Releases the SPU2 memory. Using the object afterwards throws.
+         * Voices still playing this sample are stopped as with `stop()`.
+         */
+        free(): void;
+        /** 0 to 100, applied on the next `play()`. Default 100. */
+        volume: number;
+        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
+        pan: number;
+        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
+        readonly loop: boolean;
+        /**
+         * Always 0. audsrv plays samples at the rate they were encoded with;
+         * assigning throws `UNSUPPORTED`.
+         */
+        readonly pitch: number;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate in Hz. */
+        readonly rate: number;
+    }
+}
+
+
+/* === Module: Audio3D (audio3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=audio3d,... */
+/**
+ * Positional sound: footsteps, engines, rivers, monsters off screen.
+ *
+ * A Source plays a Sound.Sfx at a world position (or on a Scene3D node);
+ * the listener is usually the camera. Every frame a Loop system (after the
+ * scene updates) computes, in C, each playing source's volume from its
+ * distance (1 up to minDistance, 0 from maxDistance; "inverse" falls like
+ * minDistance / distance, "linear" in a straight line) and its stereo pan
+ * from the listener's right axis, and applies them to the SPU2 voice. The
+ * sample's own volume and pan are left for its other plays.
+ *
+ * Voices: sources share up to `setMaxVoices(n)` SPU2 channels (default 24). Each update the
+ * sources that want to sound are ranked by `priority`, then loudness (gain * volume, after
+ * occlusion), then distance, then creation order: deterministic, with no random stealing. The best
+ * hold voices; the others are culled by their `cull` policy: "stop" ends the source, "virtual" keeps it
+ * pending and restarts it from the beginning when it ranks again (the SPU2 cannot seek). The default
+ * is "virtual" for looping samples and "stop" for one-shots. A source remembers the Sound voice it
+ * started and only controls that voice: a channel that ended, was muted or reused by another sample
+ * (yours or another Sound user's) is never touched. The SPU2 cannot key a voice off, so a channel
+ * taken from a source is reusable once its sample has played one pass; a start that finds no free
+ * channel counts as culled and a virtual source retries on the next update.
+ *
+ * Occlusion (opt-in, `setOcclusion`): a provider (a Collision3D.World, or a function) tells how blocked
+ * the line from the listener to a voiced source is; at most `maxQueries` sources are asked per
+ * update, the stalest first, and the answer is eased in so the gain never jumps. No provider means
+ * no cost; Collision3D is not required by this module.
+ *
+ * The SPU2 mixes stereo only: sounds behind the listener are not muffled
+ * or told apart from those in front. Not in the default build:
+ * `node tools/modules.js configure --modules=audio3d,...`
+ *
+ * Example:
+ * ```js
+ * Audio3D.setListener(camera);
+ * const river = new Audio3D.Source(waterLoop, { x: 10, y: 0, z: -4, minDistance: 2, maxDistance: 25 });
+ * river.play();
+ * const growl = new Audio3D.Source(growlSfx, { node: monster, maxDistance: 40 });
+ * if (aggro) growl.play();
+ * ```
+ */
+declare namespace Audio3D {
+    interface SourceOptions {
+        x?: number; y?: number; z?: number;
+        /** Follow this node's world position (of the last scene update); null stops. */
+        node?: Scene3D.Node | null;
+        /** Full volume up to here (default 1). */
+        minDistance?: number;
+        /** Silent from here (default 30). */
+        maxDistance?: number;
+        rolloff?: "inverse" | "linear";
+        /** At full gain, 0-100 (default 100). */
+        volume?: number;
+        /** 0 (mono) to 1 (hard left/right); default 0.8. */
+        panStrength?: number;
+        /** -1000 to 1000, default 0: higher wins a voice before loudness is compared. */
+        priority?: number;
+        /** What happens when the source loses its voice: default "virtual" for loops, "stop" for one-shots. */
+        cull?: "default" | "stop" | "virtual";
+    }
+    class Source {
+        /** Keeps the Sfx alive; a freed Sfx stops the source. */
+        constructor(sfx: Sound.Sfx, options?: SourceOptions);
+        readonly playing: boolean;
+        /** Voice in use, -1 when not playing. */
+        readonly channel: number;
+        /** Levels applied last. */
+        readonly volume: number;
+        readonly pan: number;
+        /** Wants to sound but holds no voice (a "virtual" source that was outranked or out of range). */
+        readonly pending: boolean;
+        /** Current smoothed occlusion, 0 (clear) to 1 (blocked). */
+        readonly occlusion: number;
+        /** Starts at the current levels; may take the voice of a lower-ranked source. Returns the channel, or -1
+         * when beyond maxDistance (unless force), no voice is free or it was outranked (a "virtual" source then waits). */
+        play(options?: { force?: boolean }): number;
+        stop(): this;
+        setPosition(x: number, y: number, z: number): this;
+        configure(options: SourceOptions): this;
+        /** Stops and releases the source. */
+        dispose(): void;
+    }
+    /** Listens from the camera (retained; null keeps the last position). */
+    function setListener(camera: Camera3D.Camera | null): void;
+    /** Listens from a point with a right-hand axis. */
+    function setListener(x: number, y: number, z: number, rightX: number, rightY: number, rightZ: number): void;
+    /** Levels a source at (x, y, z) would get now, without playing. */
+    function levels(x: number, y: number, z: number, options?: SourceOptions): { volume: number; pan: number; distance: number };
+    const MAX_VOICES: 24;
+    /** Voices Audio3D may hold at once, 1 to 24 (default 24); the rest of the channels stay for other Sound users. */
+    function setMaxVoices(count: number): void;
+    interface Stats {
+        /** Sources that want to sound (playing or pending). */
+        sources: number;
+        /** Of those, the audible ones competing for voices. */
+        candidates: number;
+        /** Voices held after the update. */
+        voices: number;
+        /** Voices taken from a lower-ranked source. */
+        stolen: number;
+        /** Sources that lost or could not get a voice (any reason). */
+        culled: number;
+        /** Voices started by the update. */
+        started: number;
+        /** Occlusion queries asked, and how many failed (the previous value is kept). */
+        queries: number; queryErrors: number;
+        /** Updates since the stalest occlusion answer of a voiced source. */
+        oldestResult: number;
+    }
+    /** Counters of the last update (the Loop system's, or yours). */
+    function stats(): Stats;
+    interface OcclusionOptions {
+        /** Sources asked per update, 1 to 256 (default 4). */
+        maxQueries?: number;
+        /** Updates before a source is asked again, 1 to 3600 (default 6). */
+        interval?: number;
+        /** How much a fully blocked source is attenuated, 0 to 1 (default 0.8). */
+        strength?: number;
+        /** Easing toward the answer per update, (0, 1] (default 0.25). */
+        smoothing?: number;
+        /** Collision3D layer mask of the world provider (default all). */
+        mask?: number;
+    }
+    /**
+     * Turns occlusion on with a provider, or off with null. A Collision3D.World blocks a source when its
+     * ray from the listener meets geometry before the source; a function (x0, y0, z0, x1, y1, z1) returns
+     * the blocked fraction 0..1 (an exception or a non-finite answer counts as a failed query).
+     * Throws TypeError for anything else (or a World when Collision3D is not built).
+     */
+    function setOcclusion(provider: Collision3D.World | ((x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number) | null,
+        options?: OcclusionOptions): void;
+    /** Applies every source's levels now (the Loop system does it each frame); returns the counters. */
+    function update(): Stats;
+}
+
+
 /* === Module: Bench (bench) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=bench,... */
 /**
@@ -3453,6 +3635,14 @@ declare namespace Bench {
         run(context: T, iteration: number): unknown;
         /** Called once even when setup/run fails; context may be undefined after a failed setup. */
         teardown?(context: T | undefined): void;
+        /** Per-batch preparation outside the work timer, including warmup. */
+        beforeBatch?(context: T): void;
+        /** Runs even if beforeBatch/run throws or cancels; outside the work timer. */
+        afterBatch?(context: T): void;
+        /** Once before teardown, even on error/cancel. Snapshot counters/memory here. */
+        inspect?(context: T | undefined): unknown;
+        /** Scene, data sizes, phase boundaries and explicit GS-wait policy. */
+        metadata?: Record<string, unknown>;
         warmup?: number;
         samples?: number;
         iterations?: number;
@@ -3462,10 +3652,24 @@ declare namespace Bench {
         status: "completed" | "error" | "cancelled";
         warmup: number; samples: number; iterations: number;
         averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+        metadata: Record<string, unknown>;
+        /** Successful measured batches in execution order, without warmup or failed batches. */
+        sampleTicks: number[];
+        /** Work time per invocation, i.e. sampleTicks converted and divided by iterations. */
+        sampleMs: number[];
+        /** Total batch CPU time, including beforeBatch/afterBatch, never divided by iterations.
+         * Excludes setup, inspect, teardown, checkpoints and the rest of the application frame.
+         * This is a lower bound on frame CPU cost, not a total frame measurement. */
+        batchCpu: {
+            averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+            sampleMs: number[]; overBudget: number;
+        };
+        metrics?: unknown;
         error?: string;
     }
     interface Report {
-        version: 1; label: string; metadata: Record<string, unknown>;
+        version: 2; label: string; metadata: Record<string, unknown>;
+        frameBudgetMs: number;
         status: "running" | "completed" | "cancelled" | "error";
         results: Result[];
     }
@@ -3478,6 +3682,9 @@ declare namespace Bench {
         samples?: number;
         /** Work invocations per batch, default 1; 1..10000. */
         iterations?: number;
+        /** Total target frame budget in ms, default 1000/60. Used for batchCpu.overBudget.
+         * Each batch AND its preparation/cleanup must finish before the EE clock wraps. */
+        frameBudgetMs?: number;
         /** Rewrites JSON between tasks; writable device required, not an atomic save. */
         path?: string;
         onResult?(result: Result, report: Report): void;
@@ -5538,7 +5745,9 @@ declare namespace Collision3D {
  *
  * Shapes become line segments queued in C; each frame they are projected
  * with a Camera3D and clipped (near plane and screen edges) on the EE, then
- * drawn as GS lines over the frame, without depth test (always on top). A
+ * drawn as GS lines over the frame, without depth test (always on top).
+ * Far-plane clipping is disabled for distant diagnostics; transformed
+ * non-finite endpoints are discarded. A
  * segment lasts one frame (`seconds` omitted or 0) or `seconds` of real
  * time. At most MAX_LINES segments are queued; more are dropped and counted
  * by dropped(). Colors are Color.new() values (default green).
@@ -5582,6 +5791,8 @@ declare namespace Debug3D {
     /**
      * Normals of a mesh, `length` units long (default 0.25), from each
      * vertex: an Instance uses its transform unless `matrix` is given.
+     * Uses inverse transpose under non-uniform scale. Singular/ill-conditioned
+     * linear matrices (scaled determinant <=1e-7) throw before queueing.
      * Meshes without normals queue nothing.
      */
     function normals(target: Model3D.Instance | Model3D.Mesh, length?: number, color?: Color.Value,
@@ -5599,6 +5810,21 @@ declare namespace Debug3D {
     function dropped(): number;
     /** Turns the module on or off (off: queueing does nothing and the queue is emptied). Returns whether on. */
     function show(on?: boolean): boolean;
+    /** Enables native phase timers (default off, no clock reads). */
+    function profile(enabled: boolean): void;
+    /** Latest projection/draw. Transform includes packing and VU0 perspective/
+     * viewport mapping; clip includes C clipping/mapping of adjusted endpoints.
+     * Emit includes callbacks and GS packet construction
+     * without a GS wait. Total excludes 2D-view save/restore and age().
+     * Reading creates a JS object outside native phase timers.
+     * Clock spans must finish before the EE wrap (~14.5 seconds). */
+    function stats(): {
+        input: number; emitted: number; rejected: number; batches: number;
+        transformTicks: number; clipTicks: number; emitTicks: number; totalTicks: number;
+        /** EE batches using C for extreme operands (VU0 overflow/denormal behavior differs). */
+        fallbackBatches: number;
+        ticksPerMs: number; profiling: boolean; backend: "c" | "vu0";
+    };
 }
 
 
@@ -5703,8 +5929,8 @@ declare namespace Ease {
  * every triangle primitive a Model3D mesh (extra primitives of a mesh become
  * child nodes), and every animation an Animation3D clip whose targets are
  * node indices. Skins deform their meshes every draw (in C) from the joint
- * nodes, which the clips animate. Morph targets are not supported;
- * CUBICSPLINE samplers keep their keyframe values and play linearly.
+ * nodes, which the clips animate. Morph targets and CUBICSPLINE tracks are
+ * supported within the limits of Model3D/Animation3D.
  * ```js
  * const hero = GLTF3D.load("models/hero.glb");
  * scene.root.add(hero.root);
@@ -5724,6 +5950,71 @@ declare namespace GLTF3D {
     }
     /** material, as in Model3D.load(), replaces every primitive's material. */
     function load(path: string, material?: Model3D.Material): Asset;
+    /** Self-contained GLB, at most 16 MiB. Borrows ArrayBuffer/Uint8Array
+     * bytes only for this synchronous main-thread call; all scene data and
+     * decoded pixels are copied. Subarrays may be unaligned (temporary copy).
+     * origin is a nonempty diagnostic name. URI buffers/external images are
+     * rejected before construction; no file I/O or GS upload. */
+    function loadMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Model3D.Material): Asset;
+
+    type LoaderPhase = 'copy' | 'parse' | 'dependencies' | 'validate' | 'nodes' | 'links' | 'skins' | 'clips' | 'done';
+    /** Resumable GLB load: each step() runs one bounded unit on the main
+     * thread. The first steps ('copy', 256 KiB each) snapshot the bytes into
+     * memory the loader owns; the source is pinned until the phase leaves
+     * 'copy', so do not modify it before that. Later units are atomic: the
+     * parse, the validation, one primitive (including decoding its embedded
+     * textures) or meshless node, the hierarchy links, one skin or one
+     * animation. Dispose it to abandon the load; unreferenced loaders are
+     * freed by GC. */
+    class Loader {
+        private constructor();
+        /** Phase names by native phase index (the order of phaseStatsInto). */
+        static readonly PHASES: readonly string[];
+        /** Runs up to `units` (1..64, default 1) consecutive units of the same
+         * phase. false while work remains, true once finished. Throws the load
+         * error, and keeps throwing it; then dispose(). */
+        step(units?: number): boolean;
+        /** Runs at least one unit, then more until `budgetMs` (0..1000, default 0 =
+         * one unit) has elapsed: a single call for a time slice, timed by the
+         * native loader. Same results as step(); false while work remains, true
+         * once finished; lastUnits is the number of units that ran. */
+        run(budgetMs?: number): boolean;
+        /** Units, total time and largest single unit per phase so far. */
+        /** Same numbers as `phaseStats`, written into a Float64Array (units, totalMs,
+         * maxMs at index 3 * phase index; at least 3 * PHASES.length elements): no allocation. */
+        phaseStatsInto(out: Float64Array): void;
+        readonly phaseStats: { [phase: string]: { units: number; totalMs: number; maxMs: number } };
+        /** The Asset, after step() returned true. Spends the loader. */
+        finish(): Asset;
+        /** Frees whatever was not delivered; idempotent. */
+        dispose(): void;
+        /** The next unit's phase ('disposed' once finished or disposed). */
+        readonly phase: LoaderPhase | 'disposed';
+        /** The phase the last step() ran. */
+        readonly lastPhase: LoaderPhase | 'disposed';
+        /** Native steps the last step() call ran (at most `units`). */
+        readonly lastUnits: number;
+        /** Files named by relative URI (external buffers and images), listed after
+         * the parse step when started with `{ dependencies: true }`; else empty.
+         * Read each one yourself (the loader does no I/O) and give it to provide(). */
+        readonly dependencies: { uri: string; image: boolean; provided: boolean }[];
+        /** Hands over the bytes of dependencies[index] (ArrayBuffer/Uint8Array,
+         * 1 byte to 16 MiB, once). They are used, not copied: do not modify the
+         * buffer until finish() or dispose(). While files are missing step()
+         * returns false and does nothing (phase 'dependencies'). Absolute, scheme,
+         * drive and ".." URIs are rejected, at most 64 files. */
+        provide(index: number, bytes: ArrayBuffer | Uint8Array): void;
+        readonly unitsDone: number;
+        /** 0 until validation has counted the units. */
+        readonly unitsTotal: number;
+    }
+    /** Starts a resumable load of a self-contained GLB (see loadMemory for the
+     * input rules, checked while stepping). Snapshots bytes <= 16 MiB while
+     * the loader is in its 'copy' phase. *
+     * `options.borrow: true` uses the bytes in place (no 'copy' phase and no snapshot
+     * RAM) when they are 4-byte aligned, otherwise the snapshot is made as usual; the
+     * buffer is pinned and must not be modified until finish() or dispose(). */
+    function beginMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Model3D.Material, options?: { dependencies?: boolean; borrow?: boolean }): Loader;
 }
 
 
@@ -5929,6 +6220,10 @@ declare class ImageList {
  * their own radial dead zone, so a Map sets its Gamepad player's
  * `deadzone` to 0 and reads raw values.
  *
+ * `Input.pressure(Gamepad.R2, { threshold: 0.3 })` binds the analog pressure of a button (DualShock 2/3
+ * face, shoulder and d-pad buttons, DualShock 4 L2/R2); `value()` gives 0..1 and sources without pressure
+ * fall back to the digital bit.
+ *
  * Bindings are plain data: save `map.bindings()` with the settings and
  * restore them with `map.load()`.
  *
@@ -5965,14 +6260,31 @@ declare namespace Input {
         /** Use the d-pad while the stick rests in its dead zone. */
         dpad?: boolean;
     }
-    type Binding = ButtonBinding | AxisBinding | StickBinding;
+    interface PressureBinding {
+        /** One Gamepad button bit. */
+        pressure: number;
+        /** Held from this pressure, in (0, 1] (default 0.5). */
+        threshold: number;
+        /** Stays held until the pressure falls below this, in (0, threshold] (default threshold). */
+        release: number;
+    }
+    type Binding = ButtonBinding | AxisBinding | StickBinding | PressureBinding;
     /** What a Map reads; Gamepad.Player fits. */
-    interface Source { buttons: number; leftX: number; leftY: number; rightX: number; rightY: number }
+    interface Source {
+        buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** Optional: how hard one button bit is pressed, 0..1. Without it pressure actions read the digital bit (1 while held). */
+        pressure?(button: number): number;
+    }
 
     /** Held while every bit of any mask is held (`L1 | R1` is a combination; several masks are alternatives). */
     function button(...masks: number[]): ButtonBinding;
     /** -1 while `negative` is held, +1 while `positive` is held. */
     function axis(negative: number, positive: number): AxisBinding;
+    /**
+     * Pressure of one button (value() is 0..1), held from `threshold` until it falls below `release`.
+     * Sources or buttons without pressure give 1 while held, so the action works digitally.
+     */
+    function pressure(button: number, options?: { threshold?: number; release?: number }): PressureBinding;
     function stick(side: "left" | "right", options?: Omit<StickBinding, "stick">): StickBinding;
     /** New bindings of a common layout. */
     function preset(name: "platformer" | "shooter" | "menu"): Record<string, Binding>;
@@ -5992,7 +6304,7 @@ declare namespace Input {
         justReleased(action: string): boolean;
         /** Consecutive updates held (0 when released). */
         heldFrames(action: string): number;
-        /** 0/1 for buttons, -1/0/1 for axes, the processed magnitude for sticks. */
+        /** 0/1 for buttons, -1/0/1 for axes, 0..1 for pressure, the processed magnitude for sticks. */
         value(action: string): number;
         /** A stick's processed vector (y negative upwards, like Gamepad); the same object every call. */
         axis(action: string): { readonly x: number; readonly y: number };
@@ -6095,13 +6407,19 @@ declare namespace LOD {
         /** Used while the distance is below this (increasing, > 0). */
         until: number;
     }
-    interface Stats { groups: number; hidden: number; changes: number; perLevel: number[] }
+    interface Stats {
+        groups: number; hidden: number; changes: number; perLevel: number[];
+        /** Groups whose level was computed this update (groups - the ones inside skipped cells). */
+        evaluated: number;
+        /** Grid cells visited / skipped whole (0 without setGrid). */
+        cells: number; cellsSkipped: number;
+    }
     class Group {
         /** Retains the node and meshes. hysteresis: 0 to 0.5 of each threshold (default 0.1). */
         constructor(node: Scene3D.Node, levels: Level[], options?: { hysteresis?: number });
         /** Current level, HIDDEN, or -2 before the first selection. */
         readonly level: number;
-        /** Distance at the last selection. */
+        /** Distance at the last evaluation (not refreshed while the grid skips the group's cell). */
         readonly distance: number;
         /** Disabled groups leave the node alone. */
         enabled: boolean;
@@ -6114,6 +6432,16 @@ declare namespace LOD {
     function update<T extends object>(camera: Camera3D.Camera, stats: T): T & Stats;
     /** Of the last selection. */
     function stats<T extends object = Stats>(out?: T): T & Stats;
+    /**
+     * Optional spatial index for many groups (0 turns it off, the default). Groups are binned by the
+     * world position of their node into cells of `cellSize`; static groups cost nothing per update, and
+     * a cell is skipped whole when all its groups are already hidden by distance and the cell lies
+     * beyond their farthest threshold. The selection (levels, hysteresis, visibility) is identical to
+     * the full traversal; `capacity` (default 1024) bounds the cells, extra groups are still evaluated
+     * every update. Pick `cellSize` near the largest `until`. Moved nodes are noticed through Scene3D
+     * updates, so nodes moved after the last `scene.update()` are seen one frame late, as without the grid.
+     */
+    function setGrid(cellSize: number, options?: { capacity?: number }): void;
     /** Multiplies every threshold (quality setting, default 1). */
     function setBias(bias: number): void;
     /**
@@ -6523,6 +6851,27 @@ declare namespace MeshBuilder {
             cell?: number; scale?: number; x?: number; y?: number; z?: number;
             low?: number[]; high?: number[];
         }): this;
+        /**
+         * Prism from a flat contour: `contour` holds x, z pairs (3 to 512 points, a simple
+         * polygon, no holes, first point not repeated) in the plane y = `y` (default 0).
+         * Extrude by `height` (along +Y; negative goes down) or by a slanted `vector`
+         * [x, y, z] (y not 0) - exactly one of them. The input winding does not matter:
+         * faces are always counter-clockwise from outside.
+         *
+         * Walls: one quad per edge with a flat normal, or with `smooth` shared vertices with
+         * averaged normals (seam duplicated); u runs along the contour by length (0..1), v is 1
+         * at the contour plane and 0 at the far end. Caps (`capStart` at the contour plane,
+         * `capEnd` at the far end; both default true) are ear-clipped, so concave outlines
+         * work; cap UVs are the contour's bounding box. The pen state applies.
+         *
+         * Throws RangeError (nothing is added) for fewer than 3 or too many points, non-finite
+         * values, repeated points, spikes, crossing or touching edges, zero area or an
+         * extrusion parallel to the plane.
+         */
+        extrude(contour: Float32Array, options: {
+            y?: number; height?: number; vector?: [number, number, number];
+            capStart?: boolean; capEnd?: boolean; smooth?: boolean;
+        }): this;
         /** Copies a mesh's triangles (colors, normals, UVs) under the transform; an Instance adds its own transform. */
         merge(source: Model3D.Mesh | Model3D.Instance): this;
         /** Drops the geometry, keeping color, transform and UV rectangle. */
@@ -6577,7 +6926,8 @@ declare namespace Nav {
         diagonal?: boolean;
         /** Shortcuts across visible cost-1 cells (default true); preserves weighted detours. */
         smooth?: boolean;
-        /** Integer 0..MAX_CELLS; 0/default searches the whole grid. Exhaustion returns null. */
+        /** Integer 0..MAX_CELLS; 0/default searches the whole grid.
+         * Exhaustion returns null in findPath, or iterationLimit in a Request. */
         maxIterations?: number;
     }
     class Grid {
@@ -6596,14 +6946,68 @@ declare namespace Nav {
         lineOfSight(x0: number, z0: number, x1: number, z1: number): boolean;
         /** World x, z pairs from the start to the exact target, or null when unreachable. */
         findPath(x0: number, z0: number, x1: number, z1: number, options?: PathOptions): Float32Array | null;
+        /** FIFO incremental query; allocates request/output at creation.
+         * At most MAX_PENDING pending queries. Throws on full queue/invalid input.
+         * findPath and Crowd Agent.moveTo throw while this queue is nonempty;
+         * moveTo preserves the agent's previous path on that conflict. */
+        requestPath(x0: number, z0: number, x1: number, z1: number, options?: RequestOptions): Request;
+        /** Advances the FIFO, including initialization, A*, reconstruction and smoothing.
+         * maxWork defaults to 256 (integer 1..MAX_CELLS); budgetMs defaults to 0
+         * (no clock limit), otherwise finite, positive and <=1000. One work unit
+         * is an expansion, trace/output point or smoothing cell, not just A*.
+         * Stops at either limit; at most one unit plus call overhead may exceed
+         * the CPU budget. Returns work units, with no native allocation. */
+        stepRequests(maxWork?: number, budgetMs?: number): number;
+        /** Cancels all pending requests; completed results stay valid. */
+        cancelRequests(): void;
+        readonly pendingRequests: number;
+        /** Changes only when costs change; mutations invalidate pending requests. */
+        readonly revision: number;
         /** Centre of the nearest walkable cell within radius cells (default 8), or null. */
         nearestWalkable(x: number, z: number, radius?: number): { x: number; z: number } | null;
+        /** Cancels pending requests; retained Crowds and completed results remain safe. */
+        dispose(): void;
+    }
+    const MAX_PENDING: number;
+    interface RequestOptions extends PathOptions {
+        /** Owned result capacity in points (2..MAX_CELLS+1), default MAX_PATH.
+         * Native output uses 8 bytes per point; the six grid arrays are shared.
+         * Exceeding this capacity produces error pathTooLong, with no partial result. */
+        maxPoints?: number;
+    }
+    class Request {
+        private constructor();
+        readonly state: "pending" | "found" | "noPath" | "cancelled" | "error";
+        readonly phase: "queued" | "initialize" | "clearStamps" | "search" | "countPath" | "tracePath" | "emitPath" | "smoothPath" | "finished";
+        readonly error: "gridChanged" | "pathTooLong" | "iterationLimit" | "invalid" | null;
+        readonly revision: number;
+        readonly expanded: number;
+        readonly workUnits: number;
+        readonly pointCount: number;
+        /** Native request state plus owned output, excluding allocator and JS overhead. */
+        readonly storageBytes: number;
+        /** Weighted A* cost in cell units; 0 unless found. */
+        readonly cost: number;
+        /** Allocates an owned JS result, or null unless found. Outside step's budget. */
+        getPath(): Float32Array | null;
+        /** Writes to reusable storage (honors subarray), returns valid float length
+         * pointCount * 2, or 0 unless found. Insufficient capacity throws before
+         * any write. Copying is outside step's budget. */
+        copyPath(out: Float32Array): number;
+        cancel(): void;
+        /** Cancels/unlinks if pending (including an agent's owned plan), then
+         * releases this observer's output/grid reference. Idempotent.
+         * GC only drops ownership: an agent's plan continues without an observer. */
         dispose(): void;
     }
     class Agent {
         private constructor();
         readonly x: number; readonly y: number; readonly z: number;
-        readonly state: "idle" | "moving" | "arrived";
+        readonly state: "idle" | "moving" | "arrived" | "planning";
+        /** Last incremental outcome; synchronous moveTo resets it to none.
+         * Movement/separation pause while pending to preserve the search start. */
+        readonly planningState: "none" | "pending" | "found" | "noPath" | "cancelled" | "error";
+        readonly planningError: Request["error"];
         /** Facing angle about Y (radians), from the last movement. */
         readonly yaw: number;
         /** Distance per second of the last update. */
@@ -6614,19 +7018,30 @@ declare namespace Nav {
         speed: number;
         /** Plans a path; false when unreachable (the agent stops). */
         moveTo(x: number, z: number): boolean;
+        /** Plans incrementally using this Crowd's PathOptions. Advance once per
+         * frame with grid.stepRequests(); crowd.update(dt) only moves agents.
+         * Successful creation abandons the previous route and enters planning.
+         * Found paths are adopted during step (bounded copy <=MAX_PATH points);
+         * other outcomes leave the agent idle. Creation failure preserves motion.
+         * Replaces its previous plan at the FIFO tail, including at queue capacity.
+         * The agent owns planning even if the returned Request is garbage-collected.
+         * Request.cancel/dispose, stop/setPosition, Agent.dispose/GC, Crowd.dispose
+         * and grid changes cancel/invalidate pending plans. */
+        requestMoveTo(x: number, z: number): Request;
         stop(): this;
         setPosition(x: number, y: number, z: number): this;
         /** Drives a node (retained); null stops. */
         bind(node: Scene3D.Node | null): this;
-        /** Leaves the crowd. */
+        /** Cancels planning and leaves the crowd. */
         dispose(): void;
     }
     class Crowd {
-        /** options: the PathOptions used by moveTo(). */
+        /** options: the PathOptions used by moveTo() and snapshotted by requestMoveTo(). */
         constructor(grid: Grid, options?: PathOptions);
         add(options: { x?: number; y?: number; z?: number; speed?: number; radius?: number; face?: boolean; node?: Scene3D.Node }): Agent;
         /** Moves every agent; returns how many arrived in this update. */
         update(dt: number): number;
+        /** Cancels this crowd's pending plans; retained Agents remain usable. */
         dispose(): void;
     }
 }
@@ -7225,7 +7640,7 @@ declare namespace Physics3D {
  *
  * Record: capture the inputs once per update step and let the game read the
  * recorder's sources, which hold the values exactly as stored (sticks
- * quantized to 1/127). Play back: read a Playback's sources instead and
+ * quantized to 1/127, pressure to 1/255 when recorded with `pressure: true`). Play back: read a Playback's sources instead and
  * call advance() once per step. Seed the game's generators with `seed` in
  * both runs, use a fixed step, and the game repeats itself (PCSX2 runs are
  * deterministic), which turns a bug or a benchmark path into a file.
@@ -7248,10 +7663,18 @@ declare namespace Physics3D {
  */
 declare namespace Replay {
     const MAX_PLAYERS: 8;
-    interface Source { connected: boolean; buttons: number; leftX: number; leftY: number; rightX: number; rightY: number }
+    interface Source {
+        connected: boolean; buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** True when the recording stores pressure. */
+        readonly hasPressure: boolean;
+        /** 0..1 (quantized to 1/255 when stored); 1 while the button is held when pressure was not stored, 0 when released. */
+        pressure(button: number): number;
+    }
     class Recorder {
         /** inputs default to Gamepad player 0. seed: u32 stored in the file; maxFrames default 216000 (1 h at 60 Hz). */
-        constructor(inputs?: Input.Source[], options?: { seed?: number; maxFrames?: number });
+        constructor(inputs?: Input.Source[], options?: { seed?: number; maxFrames?: number; pressure?: boolean });
+        /** Whether button pressure is recorded (file version 2, 18 bytes per player per frame instead of 6). */
+        readonly pressure: boolean;
         readonly seed: number;
         readonly frames: number;
         /** The stored (quantized) snapshot of input i, updated by capture(). */
@@ -7267,6 +7690,9 @@ declare namespace Replay {
         readonly seed: number;
         readonly frames: number;
         readonly players: number;
+        /** File version read: 1 (no pressure) or 2. */
+        readonly version: number;
+        readonly pressure: boolean;
         /** Frames played so far. */
         readonly frame: number;
         readonly done: boolean;
@@ -7359,9 +7785,10 @@ declare namespace SaveGame {
  * moon) as directional slot 0 and the horizon as fog colour. Colors are
  * linear [r, g, b] in [0, 1].
  *
- * Not covered: UNLIT meshes (and Voxel baked light) do not darken at night,
- * as Render3D has no per-draw tint yet; use DIFFUSE materials for lit
- * scenes. Not in the default build: `node tools/modules.js configure --modules=sky,...`
+ * `tint()` is the matching day/night RGB multiplier (white at noon, dark blue
+ * at night). Lights only darken DIFFUSE materials; for UNLIT meshes and Voxel
+ * baked light call `Render3D.setTint(...Sky.tint())` before drawing them (and
+ * restore white after): Sky does not touch Render3D itself. Not in the default build: `node tools/modules.js configure --modules=sky,...`
  *
  * Example:
  * ```js
@@ -7371,7 +7798,9 @@ declare namespace SaveGame {
  *     draw() {
  *         Screen.clear(Sky.clearColor());
  *         Sky.draw(camera);
+ *         Render3D.setTint(...Sky.tint());
  *         scene.draw(camera, Render3D.CULL_BACK, lights);
+ *         Render3D.setTint(1, 1, 1);
  *     },
  * });
  * ```
@@ -7391,8 +7820,10 @@ declare namespace Sky {
     function colorAt(elevation: number): RGB;
     /** The horizon as a Color.new() value, for Screen.clear(). */
     function clearColor(): number;
+    /** Day/night RGB multiplier in [0, 1] for Render3D.setTint(). */
+    function tint(): RGB;
     function state(): { time: number; zenith: RGB; horizon: RGB; ground: RGB; sunDirection: RGB; sunColor: RGB;
-        ambient: RGB; light: RGB; lightDirection: RGB };
+        ambient: RGB; light: RGB; lightDirection: RGB; tint: RGB };
 }
 
 
@@ -8261,7 +8692,16 @@ declare namespace Timer {
  * call `update()` after `scene.update()` (or let the attached Loop update the
  * scene first).
  *
- * Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
+ * Stay: `onStay(body, zone)` (opt-in per zone by passing or assigning a function, or world-wide with
+ * `world.onStay`) runs every update for each body that was already inside at the previous update and
+ * still is; a body that enters in an update gets ENTER only, STAY from the next one. Per update the
+ * callbacks run in this order: every ENTER/EXIT (by zone id, then body id), then every STAY (same order).
+ * Each STAY is one JavaScript call, so opt in only the zones that need it.
+ *
+ * Many zones and bodies: `world.setGrid(cellSize)` adds a broad phase (bodies binned by their bounds; each
+ * zone tests only the bodies of the cells it covers; still bodies cost nothing per update; a body that
+ * leaves a zone's neighbourhood still gets its EXIT). Events and their order are identical with and
+ * without it; `world.stats()` shows how many pairs were considered. Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
  *
  * Example:
  * ```js
@@ -8282,6 +8722,8 @@ declare namespace Triggers3D {
         mask?: number;
         onEnter?(body: Body, zone: Zone): void;
         onExit?(body: Body, zone: Zone): void;
+        /** Every update while a body stays inside (opt-in). */
+        onStay?(body: Body, zone: Zone): void;
         data?: any;
     }
     class Zone {
@@ -8291,6 +8733,8 @@ declare namespace Triggers3D {
         mask: number;
         onEnter?: (body: Body, zone: Zone) => void;
         onExit?: (body: Body, zone: Zone) => void;
+        /** Assigning a function turns STAY events on for this zone; undefined turns them off. */
+        onStay?: (body: Body, zone: Zone) => void;
         data: any;
         setBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): this;
         setSphere(x: number, y: number, z: number, radius: number): this;
@@ -8319,11 +8763,22 @@ declare namespace Triggers3D {
         /** Called for every event after the zone's own callbacks. */
         onEnter?: (zone: Zone, body: Body) => void;
         onExit?: (zone: Zone, body: Body) => void;
+        /** STAY for every zone, after the zone's own callbacks (opt-in: assigning a function turns it on). */
+        onStay?: (zone: Zone, body: Body) => void;
+        /**
+         * Broad phase: cellSize near the typical zone size; 0 turns it off (default). `capacity` (default 4096)
+         * bounds the body-cell entries: bodies that do not fit, or cover more than 64 cells, are tested against
+         * every zone; zones covering more than 256 cells test every body.
+         */
+        setGrid(cellSize: number, options?: { capacity?: number }): this;
+        /** Of the last update(): pairs considered and tested, events, occupied pairs and grid occupancy. */
+        stats(): { zones: number; bodies: number; candidates: number; tested: number; events: number; stayEvents: number;
+            occupiedPairs: number; dirtyBodies: number; cells: number; entries: number; largeBodies: number; largeZones: number };
         box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, options?: ZoneOptions): Zone;
         sphere(x: number, y: number, z: number, radius: number, options?: ZoneOptions): Zone;
         body(x: number, y: number, z: number, options?: { radius?: number; layers?: number; data?: any }): Body;
         /**
-         * Tests every pair and runs callbacks; returns events generated.
+         * Tests the pairs and runs callbacks; returns events generated (ENTER, EXIT and STAY).
          * Callbacks may remove/create bodies or zones: pending events for
          * removed objects are skipped, new objects are tested next update.
          * Recursive update() throws; callback errors propagate.
@@ -8733,7 +9188,9 @@ declare class Video {
  * ambient occlusion and atlas tiles; "greedy" merges equal coplanar faces
  * into rectangles (far fewer triangles, colors only, no AO). Faces are
  * shaded by direction (`bakedLight`, UNLIT, cheapest) or lit by Render3D
- * (`shading: Model3D.DIFFUSE`).
+ * (`shading: Model3D.DIFFUSE`). Baked light does not follow the time of day:
+ * call `Render3D.setTint(...Sky.tint())` before `draw()` and restore
+ * `Render3D.setTint(1, 1, 1)` after, with no rebuild of the chunks.
  *
  * Coordinates are in blocks: block (x, y, z) fills [x, x+1) x [y, y+1) x
  * [z, z+1). Chunks that surround the camera are clipped in C on the EE

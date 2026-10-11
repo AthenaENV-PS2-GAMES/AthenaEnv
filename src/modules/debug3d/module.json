@@ -3,7 +3,7 @@
   "name": "Debug3D",
   "description": "World-space debug lines for 3D: lines, boxes, spheres, axes, grids, camera frustums and mesh normals, projected and clipped on the EE and drawn as GS lines over the frame, for one frame or N seconds.",
   "category": "Graphics",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": false,
   "sources": [

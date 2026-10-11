@@ -1,4 +1,4 @@
-// Visual checks for the 3D improvements of portingDocs/3D_IMPROVEMENTS.md.
+// Visual regression checks for portingDocs/3D_EXISTING_MODULES_PLAN.md.
 // Fixtures: node tools/make_3d_features_asset.js. Each stage lasts 180 frames
 // and logs "3D_FEATURES {json}" once; the run ends with "3D features complete".
 //   0 wrap         left: CLAMP, right: REPEAT, same UVs -1..2 (3x3 tiles right)

@@ -86,6 +86,14 @@ int athena_node3d_world(const AthenaNode3D *node,AthenaMatrix4 *out);
  * stale: for systems that run before update() and accept one frame of
  * latency, such as LOD selection. Identity (origin) before the first update. */
 void athena_node3d_last_world_position(const AthenaNode3D *node,float out[3]);
+/* Listeners of world recomputation: fn(user, node) runs inside athena_scene3d_update() each time the
+ * node's world matrix is recomputed (its own or an ancestor's change), after the matrix is current.
+ * Several listeners per node (the same fn+user pair is added once); they must not call into Scene3D.
+ * The node is not retained: remove the hook before dropping your reference. Spatial indices (LOD
+ * cells, trigger grids) use it to touch only the nodes that moved. ENOMEM/EINVAL on error. */
+typedef void (*AthenaNode3DMovedFn)(void *user,AthenaNode3D *node);
+int athena_node3d_add_moved_hook(AthenaNode3D *node,AthenaNode3DMovedFn fn,void *user);
+void athena_node3d_remove_moved_hook(AthenaNode3D *node,AthenaNode3DMovedFn fn,void *user);
 /* World AABB of visible meshes in the subtree. Returns 1 with bounds, 0 for
  * an empty subtree or a negative result. */
 int athena_node3d_world_bounds(const AthenaNode3D *node,float minimum[3],float maximum[3]);

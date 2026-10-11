@@ -9,6 +9,8 @@
  * descendant needs update; set on every ancestor of a flagged node, so update
  * only descends flagged paths and draw checks staleness at the root in O(1). */
 enum { NODE_LOCAL=1, NODE_WORLD=2, NODE_SUBTREE=4 };
+typedef struct { AthenaNode3DMovedFn fn; void *user; } NodeHook;
+struct NodeHooks { NodeHook *items; uint32_t count,capacity; };
 struct AthenaNode3D {
     AthenaMatrix4 local,world;
     AthenaVector4 position,scale;
@@ -44,6 +46,8 @@ struct AthenaNode3D {
     uint32_t pipeline; const AthenaTexture3D *texture;
     /* Follows its parent's morph weights (extra glTF primitives of a mesh). */
     uint8_t morph_follower;
+    /* Listeners of world recomputation (LOD cells, trigger indices): lazily allocated. */
+    struct NodeHooks *hooks;
 };
 typedef struct { AthenaNode3D *node; uint32_t pipeline,contained,order; } QueueItem;
 struct AthenaSkin3D {
@@ -114,6 +118,7 @@ void athena_node3d_release(AthenaNode3D *n) {
         AthenaSkin3D *k=n->skins[i];
         for(uint32_t j=0;j<k->count;j++) if(k->joints[j]==n) k->joints[j]=NULL;
     }
+    if(n->hooks) { free(n->hooks->items); free(n->hooks); }
     free(n->skins); free(n->children); athena_mesh3d_release(n->mesh); athena_skin3d_release(n->skin); free(n);
 }
 AthenaSkin3D *athena_skin3d_create(AthenaNode3D *const *joints,uint32_t count,const AthenaMatrix4 *inverse_bind) {
@@ -337,6 +342,23 @@ void athena_node3d_last_world_position(const AthenaNode3D *n,float out[3]) {
     if(!n||!out) return;
     out[0]=n->world.value[12]; out[1]=n->world.value[13]; out[2]=n->world.value[14];
 }
+int athena_node3d_add_moved_hook(AthenaNode3D *n,AthenaNode3DMovedFn fn,void *user) {
+    if(!n||!fn) return ATHENA_SCENE3D_EINVAL;
+    if(!n->hooks) { n->hooks=calloc(1,sizeof(*n->hooks)); if(!n->hooks) return ATHENA_SCENE3D_ENOMEM; }
+    struct NodeHooks *h=n->hooks;
+    for(uint32_t i=0;i<h->count;i++) if(h->items[i].fn==fn&&h->items[i].user==user) return 0;
+    if(h->count==h->capacity) {
+        uint32_t capacity=h->capacity?h->capacity*2:2; NodeHook *items=realloc(h->items,capacity*sizeof(*items));
+        if(!items) return ATHENA_SCENE3D_ENOMEM;
+        h->items=items; h->capacity=capacity;
+    }
+    h->items[h->count++]=(NodeHook){fn,user}; return 0;
+}
+void athena_node3d_remove_moved_hook(AthenaNode3D *n,AthenaNode3DMovedFn fn,void *user) {
+    if(!n||!n->hooks) return;
+    struct NodeHooks *h=n->hooks;
+    for(uint32_t i=0;i<h->count;i++) if(h->items[i].fn==fn&&h->items[i].user==user) { h->items[i]=h->items[--h->count]; return; }
+}
 int athena_node3d_world_bounds(const AthenaNode3D *n,float minimum[3],float maximum[3]) {
     if(!n||!minimum||!maximum) return ATHENA_SCENE3D_EINVAL;
     if((n->flags&NODE_SUBTREE)||!world_current(n)) return ATHENA_SCENE3D_ESTALE;
@@ -373,6 +395,7 @@ static int update_node(AthenaNode3D *n,const AthenaMatrix4 *parent_world,int par
         if(parent_world) ath_matrix4_multiply(&world,parent_world,&n->local); else world=n->local;
         for(int i=0;i<16;i++) if(!athena_float_isfinite(world.value[i])) return ATHENA_SCENE3D_EINVAL;
         n->world=world; s->world_updates++;
+        if(n->hooks) for(uint32_t i=0;i<n->hooks->count;i++) n->hooks->items[i].fn(n->hooks->items[i].user,n);
     }
     for(uint32_t i=0;i<n->child_count;i++) {
         AthenaNode3D *c=n->children[i];

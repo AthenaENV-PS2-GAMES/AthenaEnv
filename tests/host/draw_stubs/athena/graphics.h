@@ -111,6 +111,8 @@ typedef struct {
 void draw_point_list(float x, float y, prim_point *list, int list_size);
 
 void draw_line_list(float x, float y, prim_line *list, int list_size);
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list,int list_size);
 
 void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size);
 

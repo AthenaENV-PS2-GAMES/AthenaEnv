@@ -11,13 +11,15 @@
  * built-in keyframes (night, dawn, day, dusk) into the colors, the sun and
  * the light colors that apply() writes into a Lights set (ambient,
  * directional slot 0 toward the sun or the moon, fog colour). Colors are
- * linear RGB in [0,1]. Main thread only. */
+ * linear RGB in [0,1]. tint is the matching day/night multiplier for unlit and baked-light draws:
+ * pass it to athena_render3d_set_tint() yourself (Sky does not depend on Render3D). Main thread only. */
 typedef struct {
     float zenith[3],horizon[3],ground[3];
     float sun_direction[3];   /* unit, toward the sun */
     float sun_color[3];       /* disc color; black hides it */
     float sun_size;           /* disc radius in pixels */
     float ambient[3],light[3],light_direction[3];
+    float tint[3];            /* day/night RGB multiplier in [0,1] for Render3D tint; white at noon */
     float time;               /* hours, after set_time() */
 } AthenaSkyState;
 void athena_sky_get(AthenaSkyState *out);

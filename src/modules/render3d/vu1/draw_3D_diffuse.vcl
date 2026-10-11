@@ -119,8 +119,10 @@ lights_done:
     isw.y kickThird, KICK_CYCLE(vi00)
     isw.z kickFirst, KICK_CYCLE(vi00)
     ; Untextured RGB uses the full 8-bit range; GS alpha uses 0..128.
-    loi 255.0
-    mul.xyz color, color, i
+    ; Per-object RGB multiplier (EE: tint * 255, or * 128 for GS MODULATE), reloaded per vertex:
+    ; OpenVCL does not keep it live across the loop's back edge.
+    lq.xyz rgbScale, 16(vi00)
+    mul.xyz color, color, rgbScale
     loi 128.0
     mul.w color, color, i
     ColorFPtoGsRGBAQ intColor, color

@@ -49,6 +49,44 @@ if (typeof std !== "undefined" && typeof std.open === "function") {
     check("save without std.open explains", error !== null && /std.open/.test(error.message));
 }
 
+// Version 1 stays byte for byte as before and flags must be 0 there.
+const v1 = new DataView(bytes);
+check("without pressure: version 1, flags 0", v1.getUint8(4) === 1 && v1.getUint16(6, true) === 0 && !rec.pressure && !play.pressure && play.version === 1);
+check("version 1 source: digital pressure", !play.source(0).hasPressure && play.restart().advance() && play.source(0).pressure(0x4000) === 1 && play.source(0).pressure(0x0200) === 0);
+const badFlags = bytes.slice(0); new DataView(badFlags).setUint16(6, 1, true);
+throws("version 1 with a flag", () => new Replay.Playback(badFlags), RangeError);
+const futureVersion = bytes.slice(0); new DataView(futureVersion).setUint8(4, 3);
+throws("future version", () => new Replay.Playback(futureVersion), RangeError);
+
+// Version 2: pressure recorded per button.
+const analog = { buttons: 0, leftX: 0, leftY: 0, rightX: 0, rightY: 0, levels: {}, pressure(b) { return (this.buttons & b) ? (this.levels[b] ?? 1) : 0; } };
+const plain = { buttons: 0x0200, leftX: 0, leftY: 0, rightX: 0, rightY: 0 };
+const prec = new Replay.Recorder([analog, plain, { connected: false, buttons: 0xFFFF }], { seed: 7, pressure: true });
+const pmap = new Input.Map({ fire: Input.pressure(0x0200, { threshold: 0.5, release: 0.25 }) }, { source: prec.source(0) });
+const plive = [];
+for (let f = 0; f < 120; f++) {
+    analog.buttons = f % 40 < 30 ? 0x0200 | 0x4000 : 0; analog.levels[0x0200] = (f % 40) / 30; analog.levels[0x4000] = 0.5;
+    prec.capture(); pmap.update(); plive.push(`${pmap.justPressed("fire") ? 1 : 0}${pmap.pressed("fire") ? 1 : 0}:${pmap.value("fire").toFixed(6)}`);
+}
+const pbytes = prec.toArrayBuffer(), pv = new DataView(pbytes);
+check("pressure: version 2, flag 1", pv.getUint8(4) === 2 && pv.getUint16(6, true) === 1 && prec.pressure);
+check("pressure size: 18 bytes x players x frames", pbytes.byteLength === 16 + 18 * 3 * 120);
+check("recorder source is quantized to 1/255", prec.source(0).hasPressure && Math.abs(prec.source(0).pressure(0x0200) * 255 - Math.round(prec.source(0).pressure(0x0200) * 255)) < 1e-9);
+check("a source without pressure() records its digital bit", prec.source(1).pressure(0x0200) === 1 && prec.source(1).pressure(0x4000) === 0);
+check("disconnected records zero pressure", prec.source(2).pressure(0x0200) === 0);
+const pplay = new Replay.Playback(pbytes);
+check("pressure header", pplay.version === 2 && pplay.pressure && pplay.players === 3 && pplay.frames === 120 && pplay.source(0).hasPressure);
+const pmap2 = new Input.Map({ fire: Input.pressure(0x0200, { threshold: 0.5, release: 0.25 }) }, { source: pplay.source(0) });
+const ptrace = [];
+while (pplay.advance()) { pmap2.update(); ptrace.push(`${pmap2.justPressed("fire") ? 1 : 0}${pmap2.pressed("fire") ? 1 : 0}:${pmap2.value("fire").toFixed(6)}`); }
+check("pressure playback reproduces the live run exactly", ptrace.length === 120 && ptrace.join() === plive.join());
+check("pressure released at the end", pplay.source(0).pressure(0x0200) === 0 && pplay.source(0).buttons === 0);
+pplay.restart(); pplay.advance();
+check("pressure values restart", Math.abs(pplay.source(0).pressure(0x0200) - 0) < 1e-9 && Math.abs(pplay.source(0).pressure(0x4000) - 128/255) < 1e-9);
+throws("version 2 truncated", () => new Replay.Playback(pbytes.slice(0, pbytes.byteLength - 1)), RangeError);
+const badFlags2 = pbytes.slice(0); new DataView(badFlags2).setUint16(6, 3, true);
+throws("version 2 unknown flag", () => new Replay.Playback(badFlags2), RangeError);
+
 throws("bad magic", () => new Replay.Playback(new ArrayBuffer(32)), RangeError);
 throws("truncated", () => new Replay.Playback(bytes.slice(0, bytes.byteLength - 1)), RangeError);
 throws("not a buffer", () => new Replay.Playback([]), TypeError);

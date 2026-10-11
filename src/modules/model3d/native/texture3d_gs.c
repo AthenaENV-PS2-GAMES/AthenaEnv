@@ -17,12 +17,19 @@ static uint32_t gs_to_alpha(uint32_t pixel) {
     uint32_t a=pixel>>24; a=a>=0x80?255:a*2+(a>>6);
     return (pixel&0xffffffu)|a<<24;
 }
-static int expand_buffer(AthenaImageBuffer *buffer,uint32_t **pixels,uint32_t *width,uint32_t *height);
-int athena_texture3d_decode(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height) {
+static int expand_buffer(AthenaImageBuffer *buffer,uint32_t **pixels,uint32_t *width,uint32_t *height,int quiet);
+static int decode_file(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height,int quiet) {
     AthenaImageBuffer buffer;
     if(athena_image_decode(path,&buffer)<0)
         return buffer.error==ATHENA_IMAGE_LOAD_OPEN?ATHENA_MODEL3D_EIO:ATHENA_MODEL3D_EFORMAT;
-    return expand_buffer(&buffer,pixels,width,height);
+    return expand_buffer(&buffer,pixels,width,height,quiet);
+}
+int athena_texture3d_decode(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height) {
+    return decode_file(path,pixels,width,height,0);
+}
+/* Thread-safe: no detail string, no other shared state (the worker half of a texture load). */
+int athena_texture3d_decode_quiet(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height) {
+    return decode_file(path,pixels,width,height,1);
 }
 int athena_texture3d_decode_memory(const void *data,size_t size,uint32_t **pixels,uint32_t *width,uint32_t *height) {
     AthenaImageBuffer buffer;
@@ -30,20 +37,20 @@ int athena_texture3d_decode_memory(const void *data,size_t size,uint32_t **pixel
         athena_model3d_set_detail("embedded image is not a decodable PNG/JPEG/BMP");
         return ATHENA_MODEL3D_EFORMAT;
     }
-    return expand_buffer(&buffer,pixels,width,height);
+    return expand_buffer(&buffer,pixels,width,height,0);
 }
 /* Consumes buffer: 32-bit pixels from any decoded format. */
-static int expand_buffer(AthenaImageBuffer *b,uint32_t **pixels,uint32_t *width,uint32_t *height) {
+static int expand_buffer(AthenaImageBuffer *b,uint32_t **pixels,uint32_t *width,uint32_t *height,int quiet) {
     AthenaImageBuffer buffer=*b;
     int result=ATHENA_MODEL3D_EUNSUPPORTED;
     int paletted=buffer.psm==GS_PSM_T8||buffer.psm==GS_PSM_T4;
     if(buffer.width>ATHENA_TEXTURE3D_MAX_SIZE||buffer.height>ATHENA_TEXTURE3D_MAX_SIZE) {
-        athena_model3d_set_detail("texture %ux%u exceeds %u",(unsigned)buffer.width,(unsigned)buffer.height,(unsigned)ATHENA_TEXTURE3D_MAX_SIZE);
+        if(!quiet) athena_model3d_set_detail("texture %ux%u exceeds %u",(unsigned)buffer.width,(unsigned)buffer.height,(unsigned)ATHENA_TEXTURE3D_MAX_SIZE);
         goto done;
     }
     if((buffer.psm!=GS_PSM_CT32&&buffer.psm!=GS_PSM_CT24&&buffer.psm!=GS_PSM_CT16&&!paletted)||
         (paletted&&(!buffer.clut||buffer.clut_psm!=GS_PSM_CT32))) {
-        athena_model3d_set_detail("texture pixel format 0x%x is not supported",(unsigned)buffer.psm);
+        if(!quiet) athena_model3d_set_detail("texture pixel format 0x%x is not supported",(unsigned)buffer.psm);
         goto done;
     }
     uint32_t count=buffer.width*buffer.height;

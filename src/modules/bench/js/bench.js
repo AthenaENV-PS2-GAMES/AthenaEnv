@@ -19,6 +19,18 @@ function sync(value) {
     if (value && typeof value.then === "function") throw new TypeError("Bench callbacks must be synchronous");
     return value;
 }
+function positive(value, name) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0)
+        throw new RangeError(`Bench ${name} must be finite and positive`);
+    return value;
+}
+function statistics(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const n = sorted.length;
+    return { averageMs: n ? sorted.reduce((sum, v) => sum + v, 0) / n : 0,
+        p95Ms: n ? sorted[Math.ceil(n * .95) - 1] : 0,
+        minMs: n ? sorted[0] : 0, maxMs: n ? sorted[n - 1] : 0 };
+}
 
 /** Write a checkpoint between tasks, on a writable device. */
 export function save(report, path) {
@@ -48,6 +60,9 @@ export class Runner {
             names.add(task.name);
             return { name: task.name, run: callback(task.run, "run", true),
                 setup: callback(task.setup, "setup"), teardown: callback(task.teardown, "teardown"),
+                beforeBatch: callback(task.beforeBatch, "beforeBatch"),
+                afterBatch: callback(task.afterBatch, "afterBatch"),
+                inspect: callback(task.inspect, "inspect"), metadata: task.metadata ?? {},
                 warmup: integer(task.warmup ?? warmup, 0, 10000, "warmup"),
                 samples: integer(task.samples ?? samples, 1, 10000, "samples"),
                 iterations: integer(task.iterations ?? iterations, 1, 10000, "iterations") };
@@ -56,12 +71,15 @@ export class Runner {
         if (options.path !== undefined && (typeof options.path !== "string" || !options.path.length))
             throw new TypeError("Bench path must be a nonempty string");
         this._path = options.path;
-        this.report = { version: 1, label: options.label ?? "", metadata: options.metadata ?? {},
+        this._frameBudgetMs = positive(options.frameBudgetMs ?? 1000 / 60, "frameBudgetMs");
+        this.report = { version: 2, label: options.label ?? "", metadata: options.metadata ?? {},
+            frameBudgetMs: this._frameBudgetMs,
             status: "running", results: [] };
         this._index = 0; this._frame = 0; this._active = false; this._busy = false;
         this._cancel = false; this._context = undefined;
         // Allocate all sample storage once; step() reuses it across tasks.
         this._times = new Uint32Array(Math.max(...this._tasks.map(t => t.samples)));
+        this._batchTimes = new Uint32Array(this._times.length);
     }
     get done() { return this.report.status !== "running"; }
     cancel() {
@@ -72,17 +90,22 @@ export class Runner {
     _finish(error) {
         const task = this._tasks[this._index];
         this._active = false;
+        let metrics;
+        try { if (task.inspect) metrics = sync(task.inspect(this._context)); }
+        catch (e) { if (!error) error = e || new Error(String(e)); }
         try { if (task.teardown) sync(task.teardown(this._context)); }
         catch (e) { if (!error) error = e || new Error(String(e)); }
         const count = Math.max(0, this._frame - task.warmup);
         const scale = ticksToMilliseconds(1) / task.iterations;
-        const values = Array.from(this._times.subarray(0, count), t => t * scale).sort((a, b) => a - b);
-        let total = 0;
-        for (const value of values) total += value;
+        const values = Array.from(this._times.subarray(0, count), t => t * scale);
+        const batchValues = Array.from(this._batchTimes.subarray(0, count), t => ticksToMilliseconds(t));
         const result = { name: task.name, status: error ? "error" : this._cancel ? "cancelled" : "completed",
             warmup: task.warmup, samples: count, iterations: task.iterations,
-            averageMs: count ? total / count : 0, p95Ms: count ? values[Math.ceil(count * .95) - 1] : 0,
-            minMs: count ? values[0] : 0, maxMs: count ? values[count - 1] : 0 };
+            ...statistics(values), metadata: task.metadata,
+            sampleTicks: Array.from(this._times.subarray(0, count)), sampleMs: values,
+            batchCpu: { ...statistics(batchValues), sampleMs: batchValues,
+                overBudget: batchValues.filter(v => v > this._frameBudgetMs).length } };
+        if (metrics !== undefined) result.metrics = metrics;
         if (error) result.error = String(error) + (error.stack ? "\n" + error.stack : "");
         this.report.results.push(result);
         this._context = undefined;
@@ -112,11 +135,24 @@ export class Runner {
                     this._context = task.setup ? sync(task.setup()) : undefined;
                 }
                 if (!this._cancel) {
-                    const start = ticks();
-                    for (let i = 0; i < task.iterations && !this._cancel; i++) sync(task.run(this._context, i));
-                    const elapsed = (ticks() - start) >>> 0;
-                    if (!this._cancel) {
+                    const batchStart = ticks();
+                    let elapsed = 0;
+                    try {
+                        if (task.beforeBatch) sync(task.beforeBatch(this._context));
+                        if (!this._cancel) {
+                            const start = ticks();
+                            for (let i = 0; i < task.iterations && !this._cancel; i++) sync(task.run(this._context, i));
+                            elapsed = (ticks() - start) >>> 0;
+                        }
+                    } catch (e) { error = e || new Error(String(e)); }
+                    finally {
+                        try { if (task.afterBatch) sync(task.afterBatch(this._context)); }
+                        catch (e) { if (!error) error = e || new Error(String(e)); }
+                    }
+                    const batchElapsed = (ticks() - batchStart) >>> 0;
+                    if (!error && !this._cancel) {
                         if (this._frame >= task.warmup) this._times[this._frame - task.warmup] = elapsed;
+                        if (this._frame >= task.warmup) this._batchTimes[this._frame - task.warmup] = batchElapsed;
                         this._frame++;
                     }
                 }

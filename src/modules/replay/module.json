@@ -1,9 +1,9 @@
 {
   "id": "replay",
   "name": "Replay",
-  "description": "Frame-by-frame recording and playback of controller input with a seed, in a compact binary format, for reproducible bugs, regression tests, attract demos and benchmarks. Written in JavaScript.",
+  "description": "Frame-by-frame recording and playback of controller input with a seed, in a compact binary format (optional button pressure, file version 2; version 1 files still load), for reproducible bugs, regression tests, attract demos and benchmarks. Written in JavaScript.",
   "category": "Game",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "required": false,
   "default": false,
   "dependencies": {

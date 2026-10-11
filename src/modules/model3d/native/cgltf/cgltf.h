@@ -1835,7 +1835,7 @@ static void cgltf_free_extras(cgltf_data* data, cgltf_extras* extras)
 
 static void cgltf_free_extensions(cgltf_data* data, cgltf_extension* extensions, cgltf_size extensions_count)
 {
-	for (cgltf_size i = 0; i < extensions_count; ++i)
+	for (cgltf_size i = 0; extensions && i < extensions_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, extensions[i].name);
 		data->memory.free_func(data->memory.user_data, extensions[i].data);
@@ -1843,6 +1843,8 @@ static void cgltf_free_extensions(cgltf_data* data, cgltf_extension* extensions,
 	data->memory.free_func(data->memory.user_data, extensions);
 }
 
+/* Athena: parsing can publish counts before a backing allocation succeeds.
+ * Keep cleanup safe for every partial-parse/OOM allocation boundary. */
 void cgltf_free(cgltf_data* data)
 {
 	if (!data)
@@ -1860,7 +1862,7 @@ void cgltf_free(cgltf_data* data)
 	cgltf_free_extensions(data, data->asset.extensions, data->asset.extensions_count);
 	cgltf_free_extras(data, &data->asset.extras);
 
-	for (cgltf_size i = 0; i < data->accessors_count; ++i)
+	for (cgltf_size i = 0; data->accessors && i < data->accessors_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->accessors[i].name);
 
@@ -1869,7 +1871,7 @@ void cgltf_free(cgltf_data* data)
 	}
 	data->memory.free_func(data->memory.user_data, data->accessors);
 
-	for (cgltf_size i = 0; i < data->buffer_views_count; ++i)
+	for (cgltf_size i = 0; data->buffer_views && i < data->buffer_views_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->buffer_views[i].name);
 		data->memory.free_func(data->memory.user_data, data->buffer_views[i].data);
@@ -1879,7 +1881,7 @@ void cgltf_free(cgltf_data* data)
 	}
 	data->memory.free_func(data->memory.user_data, data->buffer_views);
 
-	for (cgltf_size i = 0; i < data->buffers_count; ++i)
+	for (cgltf_size i = 0; data->buffers && i < data->buffers_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->buffers[i].name);
 
@@ -1899,22 +1901,22 @@ void cgltf_free(cgltf_data* data)
 	}
 	data->memory.free_func(data->memory.user_data, data->buffers);
 
-	for (cgltf_size i = 0; i < data->meshes_count; ++i)
+	for (cgltf_size i = 0; data->meshes && i < data->meshes_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->meshes[i].name);
 
-		for (cgltf_size j = 0; j < data->meshes[i].primitives_count; ++j)
+		for (cgltf_size j = 0; data->meshes[i].primitives && j < data->meshes[i].primitives_count; ++j)
 		{
-			for (cgltf_size k = 0; k < data->meshes[i].primitives[j].attributes_count; ++k)
+			for (cgltf_size k = 0; data->meshes[i].primitives[j].attributes && k < data->meshes[i].primitives[j].attributes_count; ++k)
 			{
 				data->memory.free_func(data->memory.user_data, data->meshes[i].primitives[j].attributes[k].name);
 			}
 
 			data->memory.free_func(data->memory.user_data, data->meshes[i].primitives[j].attributes);
 
-			for (cgltf_size k = 0; k < data->meshes[i].primitives[j].targets_count; ++k)
+			for (cgltf_size k = 0; data->meshes[i].primitives[j].targets && k < data->meshes[i].primitives[j].targets_count; ++k)
 			{
-				for (cgltf_size m = 0; m < data->meshes[i].primitives[j].targets[k].attributes_count; ++m)
+				for (cgltf_size m = 0; data->meshes[i].primitives[j].targets[k].attributes && m < data->meshes[i].primitives[j].targets[k].attributes_count; ++m)
 				{
 					data->memory.free_func(data->memory.user_data, data->meshes[i].primitives[j].targets[k].attributes[m].name);
 				}
@@ -1926,7 +1928,7 @@ void cgltf_free(cgltf_data* data)
 
 			if (data->meshes[i].primitives[j].has_draco_mesh_compression)
 			{
-				for (cgltf_size k = 0; k < data->meshes[i].primitives[j].draco_mesh_compression.attributes_count; ++k)
+				for (cgltf_size k = 0; data->meshes[i].primitives[j].draco_mesh_compression.attributes && k < data->meshes[i].primitives[j].draco_mesh_compression.attributes_count; ++k)
 				{
 					data->memory.free_func(data->memory.user_data, data->meshes[i].primitives[j].draco_mesh_compression.attributes[k].name);
 				}
@@ -1934,7 +1936,7 @@ void cgltf_free(cgltf_data* data)
 				data->memory.free_func(data->memory.user_data, data->meshes[i].primitives[j].draco_mesh_compression.attributes);
 			}
 
-			for (cgltf_size k = 0; k < data->meshes[i].primitives[j].mappings_count; ++k)
+			for (cgltf_size k = 0; data->meshes[i].primitives[j].mappings && k < data->meshes[i].primitives[j].mappings_count; ++k)
 			{
 				cgltf_free_extras(data, &data->meshes[i].primitives[j].mappings[k].extras);
 			}
@@ -1948,7 +1950,7 @@ void cgltf_free(cgltf_data* data)
 		data->memory.free_func(data->memory.user_data, data->meshes[i].primitives);
 		data->memory.free_func(data->memory.user_data, data->meshes[i].weights);
 
-		for (cgltf_size j = 0; j < data->meshes[i].target_names_count; ++j)
+		for (cgltf_size j = 0; data->meshes[i].target_names && j < data->meshes[i].target_names_count; ++j)
 		{
 			data->memory.free_func(data->memory.user_data, data->meshes[i].target_names[j]);
 		}
@@ -1961,7 +1963,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->meshes);
 
-	for (cgltf_size i = 0; i < data->materials_count; ++i)
+	for (cgltf_size i = 0; data->materials && i < data->materials_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->materials[i].name);
 
@@ -1971,7 +1973,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->materials);
 
-	for (cgltf_size i = 0; i < data->images_count; ++i)
+	for (cgltf_size i = 0; data->images && i < data->images_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->images[i].name);
 		data->memory.free_func(data->memory.user_data, data->images[i].uri);
@@ -1983,7 +1985,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->images);
 
-	for (cgltf_size i = 0; i < data->textures_count; ++i)
+	for (cgltf_size i = 0; data->textures && i < data->textures_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->textures[i].name);
 
@@ -1993,7 +1995,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->textures);
 
-	for (cgltf_size i = 0; i < data->samplers_count; ++i)
+	for (cgltf_size i = 0; data->samplers && i < data->samplers_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->samplers[i].name);
 
@@ -2003,7 +2005,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->samplers);
 
-	for (cgltf_size i = 0; i < data->skins_count; ++i)
+	for (cgltf_size i = 0; data->skins && i < data->skins_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->skins[i].name);
 		data->memory.free_func(data->memory.user_data, data->skins[i].joints);
@@ -2014,7 +2016,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->skins);
 
-	for (cgltf_size i = 0; i < data->cameras_count; ++i)
+	for (cgltf_size i = 0; data->cameras && i < data->cameras_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->cameras[i].name);
 
@@ -2033,7 +2035,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->cameras);
 
-	for (cgltf_size i = 0; i < data->lights_count; ++i)
+	for (cgltf_size i = 0; data->lights && i < data->lights_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->lights[i].name);
 
@@ -2042,7 +2044,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->lights);
 
-	for (cgltf_size i = 0; i < data->nodes_count; ++i)
+	for (cgltf_size i = 0; data->nodes && i < data->nodes_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->nodes[i].name);
 		data->memory.free_func(data->memory.user_data, data->nodes[i].children);
@@ -2050,7 +2052,7 @@ void cgltf_free(cgltf_data* data)
 
 		if (data->nodes[i].has_mesh_gpu_instancing)
 		{
-			for (cgltf_size j = 0; j < data->nodes[i].mesh_gpu_instancing.attributes_count; ++j)
+			for (cgltf_size j = 0; data->nodes[i].mesh_gpu_instancing.attributes && j < data->nodes[i].mesh_gpu_instancing.attributes_count; ++j)
 			{
 				data->memory.free_func(data->memory.user_data, data->nodes[i].mesh_gpu_instancing.attributes[j].name);
 			}
@@ -2064,7 +2066,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->nodes);
 
-	for (cgltf_size i = 0; i < data->scenes_count; ++i)
+	for (cgltf_size i = 0; data->scenes && i < data->scenes_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->scenes[i].name);
 		data->memory.free_func(data->memory.user_data, data->scenes[i].nodes);
@@ -2075,17 +2077,17 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->scenes);
 
-	for (cgltf_size i = 0; i < data->animations_count; ++i)
+	for (cgltf_size i = 0; data->animations && i < data->animations_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->animations[i].name);
-		for (cgltf_size j = 0; j <  data->animations[i].samplers_count; ++j)
+		for (cgltf_size j = 0; data->animations[i].samplers && j < data->animations[i].samplers_count; ++j)
 		{
 			cgltf_free_extensions(data, data->animations[i].samplers[j].extensions, data->animations[i].samplers[j].extensions_count);
 			cgltf_free_extras(data, &data->animations[i].samplers[j].extras);
 		}
 		data->memory.free_func(data->memory.user_data, data->animations[i].samplers);
 
-		for (cgltf_size j = 0; j <  data->animations[i].channels_count; ++j)
+		for (cgltf_size j = 0; data->animations[i].channels && j < data->animations[i].channels_count; ++j)
 		{
 			cgltf_free_extensions(data, data->animations[i].channels[j].extensions, data->animations[i].channels[j].extensions_count);
 			cgltf_free_extras(data, &data->animations[i].channels[j].extras);
@@ -2098,7 +2100,7 @@ void cgltf_free(cgltf_data* data)
 
 	data->memory.free_func(data->memory.user_data, data->animations);
 
-	for (cgltf_size i = 0; i < data->variants_count; ++i)
+	for (cgltf_size i = 0; data->variants && i < data->variants_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->variants[i].name);
 
@@ -2110,14 +2112,14 @@ void cgltf_free(cgltf_data* data)
 	cgltf_free_extensions(data, data->data_extensions, data->data_extensions_count);
 	cgltf_free_extras(data, &data->extras);
 
-	for (cgltf_size i = 0; i < data->extensions_used_count; ++i)
+	for (cgltf_size i = 0; data->extensions_used && i < data->extensions_used_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->extensions_used[i]);
 	}
 
 	data->memory.free_func(data->memory.user_data, data->extensions_used);
 
-	for (cgltf_size i = 0; i < data->extensions_required_count; ++i)
+	for (cgltf_size i = 0; data->extensions_required && i < data->extensions_required_count; ++i)
 	{
 		data->memory.free_func(data->memory.user_data, data->extensions_required[i]);
 	}

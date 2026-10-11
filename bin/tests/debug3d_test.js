@@ -42,6 +42,10 @@ check("normals of a mesh", Debug3D.normals(mesh) === 3);
 check("normals of an instance", Debug3D.normals(instance, 0.5) === 3);
 const bare = Model3D.Mesh.fromGeometry({ positions: new Float32Array([0,0,0, 1,0,0, 0,1,0]) });
 check("no normals, no segments", Debug3D.normals(bare) === 0);
+const singular = new Matrix4(); singular.set(0, 0);
+const normalCount = Debug3D.count();
+throws("singular normal transform", () => Debug3D.normals(mesh, .5, undefined, 0, singular), RangeError);
+check("singular normals are atomic", Debug3D.count() === normalCount);
 check("bulk lines", Debug3D.lines(new Float32Array([0,0,0, 0,1,0, 0,0,0, 0,0,1])) === 2);
 const queued = Debug3D.count();
 check("queue count", queued === 1 + 12 + 12 + 48 + 12 + 3 + 10 + 12 + 3 + 3 + 2);
@@ -90,6 +94,20 @@ if (host) {
     d = draws();
     check("batches of at most 256 lines", d.lines === 600 && d.lineLists === 3);
 }
+Debug3D.clear();
+Debug3D.profile(true);
+Debug3D.line(0, 0, -1000, 1, 0, -1000); // overlay deliberately ignores far
+Debug3D.line(0, 0, 20, 0, 0, 30);
+check("far overlay survives; behind rejected", Debug3D.draw(camera) === 1);
+let stats = Debug3D.stats();
+check("phase counts", stats.input === 2 && stats.emitted === 1 && stats.rejected === 1 && stats.batches === 1);
+check("native phase timers", stats.profiling && stats.totalTicks >= stats.transformTicks + stats.clipTicks + stats.emitTicks);
+check("native backend", (host ? stats.backend === "c" : stats.backend === "vu0") && stats.ticksPerMs === (host ? 1000 : 294912));
+Debug3D.profile(false); Debug3D.draw(camera);
+stats = Debug3D.stats();
+check("empty draw resets stats and clocks stay off", stats.input === 0 && stats.emitted === 0 && !stats.profiling && stats.totalTicks === 0);
+throws("profile argument required", () => Debug3D.profile(), TypeError);
+throws("stats takes no arguments", () => Debug3D.stats(1), TypeError);
 
 // Full queue: drops are counted.
 Debug3D.clear();

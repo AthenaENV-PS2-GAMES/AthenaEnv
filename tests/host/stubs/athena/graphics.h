@@ -74,6 +74,8 @@ typedef struct {
 	Color rgba;
 } prim_line;
 void draw_line_list(float x, float y, prim_line *list, int list_size);
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list,int list_size);
 
 /* Textured sprites of one texture, for Image.drawList and Sprite batches. */
 typedef struct {

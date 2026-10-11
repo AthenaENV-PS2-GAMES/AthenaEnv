@@ -5,6 +5,8 @@
 /* Private platform boundary; core ownership is also tested without hardware. */
 typedef struct { uint64_t tex0,tex1,clamp; } AthenaTexture3DBinding;
 int athena_texture3d_decode(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height);
+/* Same as athena_texture3d_decode, but safe on a worker thread (no detail string). */
+int athena_texture3d_decode_quiet(const char *path,uint32_t **pixels,uint32_t *width,uint32_t *height);
 int athena_texture3d_decode_memory(const void *data,size_t size,uint32_t **pixels,uint32_t *width,uint32_t *height);
 void *athena_texture3d_backend_create(const AthenaTexture3DPixels *pixels);
 int athena_texture3d_backend_bind(void *backend,AthenaTexture3DBinding *out);

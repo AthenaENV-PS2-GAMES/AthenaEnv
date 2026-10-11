@@ -22,6 +22,7 @@ int athena_texture3d_decode(const char *path,uint32_t **p,uint32_t *w,uint32_t *
     for(uint32_t i=0;i<count;i++) (*p)[i]=0x80ffffffu;
     return 0;
 }
+int athena_texture3d_decode_quiet(const char *path,uint32_t **p,uint32_t *w,uint32_t *h) { return athena_texture3d_decode(path,p,w,h); }
 /* Embedded images: the same fixture, read from the PNG header in memory. */
 int athena_texture3d_decode_memory(const void *data,size_t size,uint32_t **p,uint32_t *w,uint32_t *h) {
     const unsigned char *header=data;

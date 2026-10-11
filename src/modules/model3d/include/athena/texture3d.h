@@ -31,6 +31,13 @@ int athena_texture3d_load_ex(const char *path,AthenaTexture3DFilter filter,Athen
 /* load_ex() from PNG/JPEG/BMP bytes in memory (borrowed for the call). */
 int athena_texture3d_load_memory(const void *data,size_t size,AthenaTexture3DFilter filter,AthenaTexture3DWrap wrap,
     AthenaTexture3D **out);
+/* The two halves of load_ex() for background loading. decode_prepared() is thread-safe (no shared
+ * state, no detail string): it decodes a PNG/JPEG/BMP file and builds the retained pixel copy
+ * (128-byte aligned, GS alpha) that create() would make; free it with free(). adopt() runs on the
+ * main thread in O(1): on success the texture owns `prepared` (an error leaves it with the caller). */
+int athena_texture3d_decode_prepared(const char *path,uint32_t **prepared,uint32_t *width,uint32_t *height);
+int athena_texture3d_adopt(uint32_t *prepared,uint32_t width,uint32_t height,AthenaTexture3DFilter filter,AthenaTexture3DWrap wrap,
+    AthenaTexture3D **out);
 void athena_texture3d_retain(AthenaTexture3D *texture);
 void athena_texture3d_release(AthenaTexture3D *texture);
 /* Makes the texture resident in VRAM now (uploading it and waiting for the

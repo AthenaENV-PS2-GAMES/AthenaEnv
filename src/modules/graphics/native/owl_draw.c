@@ -174,12 +174,12 @@ void draw_point_list(float x, float y, prim_point *list, int list_size)
 	}
 } 
 
-void draw_line_list(float x, float y, prim_line *list, int list_size) 
+static void line_list(float x, float y, prim_line *list, int list_size, const AthenaScreenLine *screen)
 {
 	int offset = 0;
 	int capacity;
 
-	if (!list || list_size <= 0)
+	if ((!list && !screen) || list_size <= 0)
 		return;
 	capacity = draw_list_capacity(3, 2);
 	if (capacity <= 0)
@@ -206,15 +206,42 @@ void draw_line_list(float x, float y, prim_line *list, int list_size)
 	uint64_t prim = VU_GS_PRIM(GS_PRIM_PRIM_LINE, 0, 0, gsGlobal->PrimFogEnable, gsGlobal->PrimAlphaEnable, gsGlobal->PrimAAEnable, 1, gsGlobal->PrimContext, 0);
 
 		for (int i = 0; i < count; i++) {
-			prim_line *item = &list[offset + i];
 			int x1, y1, x2, y2;
-			view_point(x + item->x, y + item->y, &x1, &y1);
-			view_point(x + item->x2, y + item->y2, &x2, &y2);
-			owl_add_tag(packet, item->rgba, prim);
+			Color color;
+			if (screen) {
+				const AthenaScreenLine *item = &screen[offset + i];
+				/* Power-of-two scaling is exact for bounded floats. Truncate
+				 * to 12.4, then round the integer half away from zero.
+				 * Adding .5f first would misround floats just below a tie. */
+#define SCREEN_COORD(dst,src) do { \
+					int fixed = (int)((src) * 16.0f); \
+					(dst) = fixed < 0 ? -((-fixed + 8) >> 4) : (fixed + 8) >> 4; \
+				} while (0)
+				SCREEN_COORD(x1,item->x0); SCREEN_COORD(y1,item->y0);
+				SCREEN_COORD(x2,item->x1); SCREEN_COORD(y2,item->y1);
+				color=item->color;
+#undef SCREEN_COORD
+			} else {
+				prim_line *item = &list[offset + i];
+				view_point(x + item->x, y + item->y, &x1, &y1);
+				view_point(x + item->x2, y + item->y2, &x2, &y2);
+				color=item->rgba;
+			}
+			owl_add_tag(packet, color, prim);
 			owl_add_xy_2x(packet, x1, y1, x2, y2);
 		}
 		offset += count;
 	}
+}
+
+void draw_line_list(float x, float y, prim_line *list, int list_size)
+{
+	line_list(x, y, list, list_size, NULL);
+}
+
+void draw_screen_line_list(const AthenaScreenLine *list, int list_size)
+{
+	line_list(0, 0, NULL, list_size, list);
 }
 
 void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size) 

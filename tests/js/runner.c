@@ -53,6 +53,7 @@ void athena_particles2d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_particles3d_js_init(JSContext *ctx);
 void athena_particles3d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
+JSModuleDef *athena_assets3d_native_js_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
 JSModuleDef *athena_profiler_js_init(JSContext *ctx);
 JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
@@ -134,6 +135,12 @@ void draw_line_list(float x, float y, StubLine *list, int list_size) {
         draw_line(x + list[i].x, y + list[i].y, x + list[i].x2, y + list[i].y2, list[i].rgba);
 }
 static int stub_quads;
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list,int count) {
+    if(count<=0||count>256) abort();
+    stub_line_lists++;
+    for(int i=0;i<count;i++) draw_line(list[i].x0,list[i].y0,list[i].x1,list[i].y1,list[i].color);
+}
 static StubColor stub_last_quad[4];
 void draw_quad_gouraud(float x, float y, float x2, float y2, float x3, float y3, float x4, float y4,
     StubColor c1, StubColor c2, StubColor c3, StubColor c4) {
@@ -588,6 +595,7 @@ static int run_script(int argc, char **argv) {
     athena_particles2d_js_init(ctx);
     athena_particles3d_js_init(ctx);
     athena_noise_init(ctx);
+    athena_assets3d_native_js_init(ctx);
     athena_debug_init(ctx);
     athena_profiler_js_init(ctx);
     athena_debug3d_js_init(ctx);

@@ -14,6 +14,12 @@ throws("duplicate names", () => new Bench.Runner([task, task]), TypeError);
 throws("samples positive", () => new Bench.Runner([task], { samples: 0 }), RangeError);
 throws("warmup integer", () => new Bench.Runner([task], { warmup: .5 }), RangeError);
 throws("iterations bounded", () => new Bench.Runner([task], { iterations: 10001 }), RangeError);
+for (const budget of [0, -1, NaN, Infinity, "16"]) {
+    throws("invalid frame budget", () => new Bench.Runner([task], { frameBudgetMs: budget }), RangeError);
+}
+for (const key of ["beforeBatch", "afterBatch", "inspect"]) {
+    throws("invalid " + key, () => new Bench.Runner([{ ...task, [key]: 1 }]), TypeError);
+}
 
 let setups = 0, calls = 0, cleanups = 0, checkpoints = 0;
 const runner = new Bench.Runner([{
@@ -29,6 +35,10 @@ check("one batch per step", frames === 6 && calls === 18 && setups === 1 && clea
 check("warmup excluded", r.samples === 4 && r.iterations === 3 && runner.report.status === "completed");
 check("ordered statistics", r.minMs <= r.averageMs + 1e-6 && r.averageMs <= r.maxMs + 1e-6 && r.p95Ms >= r.minMs && r.p95Ms <= r.maxMs);
 check("report serializable", JSON.parse(JSON.stringify(runner.report)).results.length === 1);
+check("report v2 stores frame budget", runner.report.version === 2 && runner.report.frameBudgetMs > 16);
+check("all successful raw samples retained", r.sampleTicks.length === 4 && r.sampleMs.length === 4 && r.batchCpu.sampleMs.length === 4);
+check("sample summaries match raw data", Math.abs(r.sampleMs.reduce((a, b) => a + b, 0) / 4 - r.averageMs) < 1e-6);
+check("batch times include all iterations", r.batchCpu.sampleMs.every((v, i) => v + .001 >= r.sampleMs[i] * 3));
 check("finished step does no work", !runner.step() && calls === 18);
 
 let teardown = 0, next = 0;
@@ -60,6 +70,37 @@ check("recursive step fails safely", /recursively/.test(recursive.report.results
 const checkpointError = new Bench.Runner([task], { warmup: 0, samples: 1, onResult() { throw new Error("write failed"); } });
 throws("checkpoint failure propagates", () => checkpointError.step(), Error);
 check("checkpoint failure sets status", checkpointError.report.status === "error");
+
+const order = [];
+const phases = new Bench.Runner([{
+    name: "phases", metadata: { bytes: 64, gsWait: false }, setup() { order.push("setup"); return { calls: 0 }; },
+    beforeBatch(s) { order.push("prepare"); check("prepare retains context", s.calls % 2 === 0); },
+    run(s) { order.push("work"); s.calls++; },
+    afterBatch() { order.push("cleanup"); },
+    inspect(s) { order.push("inspect"); return { calls: s.calls }; },
+    teardown() { order.push("teardown"); },
+}], { warmup: 1, samples: 2, iterations: 2 });
+while (phases.step()) {}
+check("hooks include warmup and inspect precedes teardown", order.join() === "setup,prepare,work,work,cleanup,prepare,work,work,cleanup,prepare,work,work,cleanup,inspect,teardown");
+check("metrics and task metadata retained", phases.report.results[0].metrics.calls === 6 && phases.report.results[0].metadata.bytes === 64);
+for (const failure of ["beforeBatch", "run", "afterBatch", "inspect"]) {
+    let cleaned = 0, released = 0;
+    const t = { name: failure, run() {}, afterBatch() { cleaned++; }, teardown() { released++; } };
+    t[failure] = () => { if (failure === "afterBatch") cleaned++; throw new Error(failure); };
+    const test = new Bench.Runner([t], { warmup: 0, samples: 1 });
+    test.step();
+    check(failure + " failure cleans up", cleaned === 1 && released === 1 && test.report.status === "error");
+    check(failure + " excludes failed batch", test.report.results[0].samples === (failure === "inspect" ? 1 : 0));
+}
+let cancelledBatchCleanup = 0;
+let cancelPrepare;
+cancelPrepare = new Bench.Runner([{ name: "cancelPrepare", beforeBatch() { cancelPrepare.cancel(); },
+    run() { throw new Error("must not run"); }, afterBatch() { cancelledBatchCleanup++; } }]);
+cancelPrepare.step();
+check("cancel in preparation still cleans up", cancelledBatchCleanup === 1 && cancelPrepare.report.results[0].samples === 0 && cancelPrepare.report.status === "cancelled");
+const asyncCleanup = new Bench.Runner([{ name: "asyncCleanup", run() {}, afterBatch() { return Promise.resolve(); } }]);
+asyncCleanup.step();
+check("async batch hooks rejected", asyncCleanup.report.status === "error");
 
 // The real libc writes to a writable boot folder; host runner uses a fake
 // file to check JSON checkpoints and flush failures without device access.

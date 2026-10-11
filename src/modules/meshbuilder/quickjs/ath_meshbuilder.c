@@ -180,6 +180,46 @@ static JSValue js_heightmap(JSContext *ctx,JSValueConst self,int argc,JSValueCon
         "Builder.heightmap (cell > 0, finite heights)");
     JS_FreeValue(ctx,heights.backing); return r;
 }
+static int bool_option(JSContext *ctx,JSValueConst options,const char *key,int def,int *out) {
+    JSValue v=JS_GetPropertyStr(ctx,options,key); if(JS_IsException(v)) return 0;
+    *out=JS_IsUndefined(v)?def:JS_ToBool(ctx,v);
+    JS_FreeValue(ctx,v); return 1;
+}
+/* extrude(contour, { y, height | vector, capStart, capEnd, smooth }): contour is a Float32Array of x, z pairs. */
+static JSValue js_extrude(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,2,2,"Builder.extrude")) return JS_EXCEPTION;
+    if(!JS_IsObject(argv[1])) return JS_ThrowTypeError(ctx,"extrude options must be an object");
+    float y=0,height=0,vec[3]={0,0,0}; int cap_start=1,cap_end=1,smooth=0,has_vector=0;
+    if(!athena_js_option_float(ctx,argv[1],"y",&y)||!athena_js_option_float(ctx,argv[1],"height",&height)||
+        !bool_option(ctx,argv[1],"capStart",1,&cap_start)||!bool_option(ctx,argv[1],"capEnd",1,&cap_end)||
+        !bool_option(ctx,argv[1],"smooth",0,&smooth)) return JS_EXCEPTION;
+    JSValue vector=JS_GetPropertyStr(ctx,argv[1],"vector"); if(JS_IsException(vector)) return vector;
+    if(!JS_IsUndefined(vector)) {
+        has_vector=1;
+        for(uint32_t i=0;i<3;i++) {
+            JSValue c=JS_GetPropertyUint32(ctx,vector,i);
+            int ok=!JS_IsException(c)&&athena_js_float(ctx,c,&vec[i],"vector");
+            JS_FreeValue(ctx,c); if(!ok) { JS_FreeValue(ctx,vector); return JS_EXCEPTION; }
+        }
+    }
+    JS_FreeValue(ctx,vector);
+    if(has_vector==(height!=0)) return JS_ThrowTypeError(ctx,"Builder.extrude needs exactly one of height or vector");
+    if(!has_vector) vec[1]=height;
+    AthenaJSArray pts;
+    if(!athena_js_array(ctx,argv[0],JS_TYPED_ARRAY_FLOAT32,&pts,"contour")) return JS_EXCEPTION;
+    AthenaMeshBuilder *b=get_builder(ctx,self);
+    JSValue r;
+    if(!b) r=JS_EXCEPTION;
+    else if(pts.count%2) r=JS_ThrowRangeError(ctx,"contour holds x, z pairs (even length)");
+    else {
+        uint32_t flags=(cap_start?ATHENA_EXTRUDE_CAP_START:0)|(cap_end?ATHENA_EXTRUDE_CAP_END:0)|(smooth?ATHENA_EXTRUDE_SMOOTH:0);
+        int code=athena_meshbuilder_extrude(b,pts.data,(uint32_t)(pts.count/2),y,vec,flags);
+        if(code==ATHENA_MESHBUILDER_ENOMEM) r=JS_ThrowOutOfMemory(ctx);
+        else if(code<0) r=JS_ThrowRangeError(ctx,"Builder.extrude: %s",athena_meshbuilder_error_detail());
+        else r=JS_DupValue(ctx,self);
+    }
+    JS_FreeValue(ctx,pts.backing); return r;
+}
 /* merge(mesh | instance): static batching under the current transform (an
  * instance's own transform is applied after it). */
 static JSValue js_merge(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
@@ -241,7 +281,7 @@ static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("uvTile",3,js_uv_tile),JS_CFUNC_DEF("vertex",3,js_vertex),JS_CFUNC_DEF("triangle",3,js_triangle),
     JS_CFUNC_DEF("quad",12,js_quad),JS_CFUNC_DEF("box",6,js_box),JS_CFUNC_DEF("sphere",4,js_sphere),
     JS_CFUNC_DEF("cylinder",5,js_cylinder),JS_CFUNC_DEF("plane",5,js_plane),JS_CFUNC_DEF("heightmap",3,js_heightmap),
-    JS_CFUNC_DEF("merge",1,js_merge),JS_CFUNC_DEF("clear",0,js_clear),JS_CFUNC_DEF("build",0,js_build),
+    JS_CFUNC_DEF("extrude",2,js_extrude),JS_CFUNC_DEF("merge",1,js_merge),JS_CFUNC_DEF("clear",0,js_clear),JS_CFUNC_DEF("build",0,js_build),
     JS_CFUNC_DEF("dispose",0,dispose),
     JS_CGETSET_MAGIC_DEF("vertexCount",js_counts,NULL,0),JS_CGETSET_MAGIC_DEF("triangleCount",js_counts,NULL,1),
     JS_CGETSET_MAGIC_DEF("partCount",js_counts,NULL,2)};

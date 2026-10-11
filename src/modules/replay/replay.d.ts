@@ -3,7 +3,7 @@
  *
  * Record: capture the inputs once per update step and let the game read the
  * recorder's sources, which hold the values exactly as stored (sticks
- * quantized to 1/127). Play back: read a Playback's sources instead and
+ * quantized to 1/127, pressure to 1/255 when recorded with `pressure: true`). Play back: read a Playback's sources instead and
  * call advance() once per step. Seed the game's generators with `seed` in
  * both runs, use a fixed step, and the game repeats itself (PCSX2 runs are
  * deterministic), which turns a bug or a benchmark path into a file.
@@ -26,10 +26,18 @@
  */
 declare namespace Replay {
     const MAX_PLAYERS: 8;
-    interface Source { connected: boolean; buttons: number; leftX: number; leftY: number; rightX: number; rightY: number }
+    interface Source {
+        connected: boolean; buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** True when the recording stores pressure. */
+        readonly hasPressure: boolean;
+        /** 0..1 (quantized to 1/255 when stored); 1 while the button is held when pressure was not stored, 0 when released. */
+        pressure(button: number): number;
+    }
     class Recorder {
         /** inputs default to Gamepad player 0. seed: u32 stored in the file; maxFrames default 216000 (1 h at 60 Hz). */
-        constructor(inputs?: Input.Source[], options?: { seed?: number; maxFrames?: number });
+        constructor(inputs?: Input.Source[], options?: { seed?: number; maxFrames?: number; pressure?: boolean });
+        /** Whether button pressure is recorded (file version 2, 18 bytes per player per frame instead of 6). */
+        readonly pressure: boolean;
         readonly seed: number;
         readonly frames: number;
         /** The stored (quantized) snapshot of input i, updated by capture(). */
@@ -45,6 +53,9 @@ declare namespace Replay {
         readonly seed: number;
         readonly frames: number;
         readonly players: number;
+        /** File version read: 1 (no pressure) or 2. */
+        readonly version: number;
+        readonly pressure: boolean;
         /** Frames played so far. */
         readonly frame: number;
         readonly done: boolean;

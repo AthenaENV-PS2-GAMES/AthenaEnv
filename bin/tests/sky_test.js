@@ -35,6 +35,10 @@ throws("color range", () => Sky.setColors({ zenith: [2, 0, 0] }), RangeError);
 Sky.setTime(12);
 let s = Sky.state();
 check("noon: sun high, bright", s.sunDirection[1] > 0.9 && s.light[0] > 0.9 && s.zenith[2] > s.zenith[0]);
+check("noon tint is white", same(Sky.tint(), [1, 1, 1]) && same(s.tint, [1, 1, 1]));
+Sky.setTime(0);
+{ const t = Sky.tint(); check("night tint dims and is bluish", t.length === 3 && t.every(v => v >= 0 && v <= 1) && t[0] < 0.3 && t[2] > t[0]); }
+Sky.setTime(12);
 Sky.setTime(6.2);
 s = Sky.state();
 check("dawn: sun low in +X, warm horizon", s.sunDirection[0] > 0.9 && s.sunDirection[1] < 0.2 && s.horizon[0] > s.horizon[2]);

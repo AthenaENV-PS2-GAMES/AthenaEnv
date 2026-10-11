@@ -2,18 +2,18 @@
 #include <string.h>
 #include <athena/sky.h>
 #include <athena/float_bits.h>
-typedef struct { float hour,zenith[3],horizon[3],ground[3],sun[3],ambient[3],light[3]; } Key;
+typedef struct { float hour,zenith[3],horizon[3],ground[3],sun[3],ambient[3],light[3],tint[3]; } Key;
 /* Built-in day: night, dawn, morning, noon, afternoon, dusk, night. */
 static const Key KEYS[]={
-    {0.0f, {.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f}},
-    {4.5f, {.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f}},
-    {6.0f, {.25f,.30f,.50f},{.95f,.55f,.35f},{.20f,.15f,.12f},{1,.60f,.35f},{.35f,.30f,.30f},{.80f,.50f,.35f}},
-    {8.0f, {.30f,.50f,.85f},{.70f,.80f,.95f},{.30f,.28f,.25f},{1,.95f,.85f},{.45f,.45f,.50f},{.90f,.88f,.80f}},
-    {12.0f,{.25f,.45f,.85f},{.65f,.78f,.95f},{.32f,.30f,.27f},{1,1,.95f},   {.50f,.50f,.55f},{1,1,.95f}},
-    {16.0f,{.30f,.50f,.85f},{.70f,.80f,.95f},{.30f,.28f,.25f},{1,.95f,.85f},{.45f,.45f,.50f},{.90f,.88f,.80f}},
-    {18.0f,{.25f,.28f,.48f},{.95f,.50f,.30f},{.20f,.15f,.12f},{1,.55f,.30f},{.35f,.28f,.28f},{.80f,.45f,.30f}},
-    {19.5f,{.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f}},
-    {24.0f,{.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f}}};
+    {0.0f, {.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f},{.22f,.26f,.45f}},
+    {4.5f, {.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f},{.22f,.26f,.45f}},
+    {6.0f, {.25f,.30f,.50f},{.95f,.55f,.35f},{.20f,.15f,.12f},{1,.60f,.35f},{.35f,.30f,.30f},{.80f,.50f,.35f},{.95f,.70f,.60f}},
+    {8.0f, {.30f,.50f,.85f},{.70f,.80f,.95f},{.30f,.28f,.25f},{1,.95f,.85f},{.45f,.45f,.50f},{.90f,.88f,.80f},{1,.97f,.92f}},
+    {12.0f,{.25f,.45f,.85f},{.65f,.78f,.95f},{.32f,.30f,.27f},{1,1,.95f},   {.50f,.50f,.55f},{1,1,.95f},{1,1,1}},
+    {16.0f,{.30f,.50f,.85f},{.70f,.80f,.95f},{.30f,.28f,.25f},{1,.95f,.85f},{.45f,.45f,.50f},{.90f,.88f,.80f},{1,.97f,.92f}},
+    {18.0f,{.25f,.28f,.48f},{.95f,.50f,.30f},{.20f,.15f,.12f},{1,.55f,.30f},{.35f,.28f,.28f},{.80f,.45f,.30f},{.95f,.65f,.55f}},
+    {19.5f,{.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f},{.22f,.26f,.45f}},
+    {24.0f,{.02f,.03f,.08f},{.07f,.09f,.16f},{.03f,.03f,.04f},{0,0,0},     {.10f,.11f,.16f},{.12f,.14f,.24f},{.22f,.26f,.45f}}};
 static AthenaSkyState state;
 static int initialized;
 static void init_state(void) {
@@ -56,6 +56,7 @@ int athena_sky_set_time(float hours) {
     mix3(state.zenith,a->zenith,b->zenith,t); mix3(state.horizon,a->horizon,b->horizon,t);
     mix3(state.ground,a->ground,b->ground,t); mix3(state.sun_color,a->sun,b->sun,t);
     mix3(state.ambient,a->ambient,b->ambient,t); mix3(state.light,a->light,b->light,t);
+    mix3(state.tint,a->tint,b->tint,t);
     /* The sun rises in +X at 6:00, culminates at 12:00 and sets in -X at
      * 18:00, tilted toward +Z; at night the light comes from the moon,
      * opposite. */

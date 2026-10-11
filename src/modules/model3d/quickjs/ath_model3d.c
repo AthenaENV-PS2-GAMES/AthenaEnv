@@ -1,9 +1,10 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <athena_js_args.h>
 #include <athena/js/model3d.h>
 #include <athena/js/matrix4.h>
 #include "ath_model3d.h"
-static JSClassID mesh_id,instance_id,texture_id;
+static JSClassID mesh_id,instance_id,texture_id,loader_id;
 static AthenaTexture3D *get_texture(JSContext *ctx,JSValueConst value) {
     AthenaTexture3D *t=JS_GetOpaque2(ctx,value,texture_id);
     if(!t) JS_ThrowTypeError(ctx,"Expected a live Model3D.Texture");
@@ -32,6 +33,11 @@ static JSValue wrap_mesh(JSContext *ctx,AthenaMesh3D *m) {
     JSValue obj=JS_NewObjectClass(ctx,mesh_id);
     if(JS_IsException(obj)) { athena_mesh3d_release(m); return obj; }
     JS_SetOpaque(obj,m); return obj;
+}
+JSValue athena_texture3d_js_wrap(JSContext *ctx,AthenaTexture3D *t) {
+    if(!t) return JS_ThrowTypeError(ctx,"Expected a native texture");
+    if(!texture_id) { athena_texture3d_release(t); return JS_ThrowInternalError(ctx,"Model3D is not initialized"); }
+    return wrap_texture(ctx,t);
 }
 JSValue athena_mesh3d_js_wrap(JSContext *ctx,AthenaMesh3D *m) {
     if(!m) return JS_ThrowTypeError(ctx,"Expected a native mesh");
@@ -203,6 +209,218 @@ static JSValue load(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv
     JSValue result=code<0?throw_load(ctx,code,path):wrap_mesh(ctx,m);
     JS_FreeCString(ctx,path); return result;
 }
+static JSValue load_memory(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,2,3,"Model3D.loadMemory")||!JS_IsString(argv[1]))
+        return JS_ThrowTypeError(ctx,"Model3D.loadMemory expects bytes, origin, material?");
+    AthenaMaterial3D material;
+    if(!material_option(ctx,argc==3?argv[2]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
+    size_t length=0; const char *origin=JS_ToCStringLen(ctx,&length,argv[1]);
+    if(!origin) { athena_texture3d_release(material.texture); return JS_EXCEPTION; }
+    if(!length||strlen(origin)!=length) {
+        JS_FreeCString(ctx,origin); athena_texture3d_release(material.texture);
+        return JS_ThrowRangeError(ctx,"Origin must be nonempty without NUL");
+    }
+    AthenaJSArray input;
+    if(!athena_js_bytes(ctx,argv[0],&input,"GLB bytes")) {
+        JS_FreeCString(ctx,origin); athena_texture3d_release(material.texture);
+        return JS_EXCEPTION;
+    }
+    AthenaMesh3D *mesh=NULL;
+    int code=athena_mesh3d_load_memory(input.data,input.count,origin,&material,&mesh);
+    JS_FreeValue(ctx,input.backing); athena_texture3d_release(material.texture);
+    JSValue result=code<0?throw_load(ctx,code,origin):wrap_mesh(ctx,mesh);
+    JS_FreeCString(ctx,origin); return result;
+}
+/* Model3D.beginMemory(bytes, origin, material?): a Model3D.Loader that builds the
+ * static mesh of a self-contained GLB in resumable steps (see model3d.h). The JS
+ * buffer is pinned until the copy phase ends. */
+#define MAX_DEPS 64
+typedef struct { AthenaMesh3DLoader *loader; JSValue backing; uint32_t ran; JSValue deps[MAX_DEPS]; } JSMeshLoader;
+static const char *const loader_phase_names[]={"copy","parse","dependencies","validate","build","done"};
+static void loader_free(JSRuntime *rt,JSMeshLoader *state) {
+    if(!state) return;
+    athena_mesh3d_loader_destroy(state->loader); JS_FreeValueRT(rt,state->backing);
+    for(int i=0;i<MAX_DEPS;i++) JS_FreeValueRT(rt,state->deps[i]);
+    free(state);
+}
+static void loader_finalizer(JSRuntime *rt,JSValue v) { loader_free(rt,JS_GetOpaque(v,loader_id)); }
+static JSValue begin_memory(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,2,4,"Model3D.beginMemory")||!JS_IsString(argv[1]))
+        return JS_ThrowTypeError(ctx,"Model3D.beginMemory expects bytes, origin, material?, options?");
+    int external=0;
+    if(argc==4&&!JS_IsUndefined(argv[3])) {
+        if(!JS_IsObject(argv[3])) return JS_ThrowTypeError(ctx,"Model3D.beginMemory options must be an object");
+        static const struct { const char *name; int bit; } opts[]={{"dependencies",ATHENA_LOADER_EXTERNAL},{"borrow",ATHENA_LOADER_BORROW}};
+        for(int k=0;k<2;k++) {
+            JSValue v=JS_GetPropertyStr(ctx,argv[3],opts[k].name);
+            if(JS_IsException(v)) return v;
+            if(!JS_IsUndefined(v)&&!JS_IsBool(v)) { JS_FreeValue(ctx,v); return JS_ThrowTypeError(ctx,"Model3D.beginMemory options.%s must be a boolean",opts[k].name); }
+            if(JS_ToBool(ctx,v)>0) external|=opts[k].bit;
+            JS_FreeValue(ctx,v);
+        }
+    }
+    AthenaMaterial3D material;
+    if(!material_option(ctx,argc>=3?argv[2]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
+    size_t length=0; const char *origin=JS_ToCStringLen(ctx,&length,argv[1]);
+    if(!origin) { athena_texture3d_release(material.texture); return JS_EXCEPTION; }
+    if(!length||strlen(origin)!=length) {
+        JS_FreeCString(ctx,origin); athena_texture3d_release(material.texture);
+        return JS_ThrowRangeError(ctx,"Origin must be nonempty without NUL");
+    }
+    AthenaJSArray input;
+    if(!athena_js_bytes(ctx,argv[0],&input,"GLB bytes")) {
+        JS_FreeCString(ctx,origin); athena_texture3d_release(material.texture); return JS_EXCEPTION;
+    }
+    AthenaMesh3DLoader *loader=NULL;
+    int code=athena_mesh3d_loader_begin(input.data,input.count,origin,&material,external,&loader);
+    athena_texture3d_release(material.texture);
+    JSValue result;
+    if(code<0) result=throw_load(ctx,code,origin);
+    else {
+        JSMeshLoader *state=malloc(sizeof(*state));
+        result=state?JS_NewObjectClass(ctx,loader_id):JS_ThrowOutOfMemory(ctx);
+        if(!state||JS_IsException(result)) { athena_mesh3d_loader_destroy(loader); free(state); result=JS_EXCEPTION; }
+        else {
+            state->loader=loader; state->backing=input.backing; state->ran=0;
+            for(int i=0;i<MAX_DEPS;i++) state->deps[i]=JS_UNDEFINED;
+            JS_SetOpaque(result,state); input.backing=JS_UNDEFINED;
+        }
+    }
+    JS_FreeValue(ctx,input.backing); JS_FreeCString(ctx,origin); return result;
+}
+static JSMeshLoader *loader_of(JSContext *ctx,JSValueConst v) {
+    JSMeshLoader *state=JS_GetOpaque(v,loader_id);
+    if(!state) JS_ThrowTypeError(ctx,"Model3D.Loader is disposed, finished or not a Loader");
+    return state;
+}
+static JSValue loader_step(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,0,1,"Model3D.Loader.step")) return JS_EXCEPTION;
+    int32_t units=1;
+    if(argc==1&&!JS_IsUndefined(argv[0])) {
+        double d;
+        if(JS_ToFloat64(ctx,&d,argv[0])<0) return JS_EXCEPTION;
+        if(!(d>=1&&d<=64&&d==(double)(int32_t)d)) return JS_ThrowRangeError(ctx,"Model3D.Loader.step units must be an integer from 1 to 64");
+        units=(int32_t)d;
+    }
+    JSMeshLoader *state=loader_of(ctx,this_val); if(!state) return JS_EXCEPTION;
+    uint32_t ran=0; int code=0,phase=athena_mesh3d_loader_phase(state->loader);
+    for(int32_t i=0;i<units&&code==0;i++) {
+        code=athena_mesh3d_loader_step(state->loader,0);
+        if(code==ATHENA_MESH3D_WAITING) { code=0; break; }
+        ran++;
+        if(code==0&&athena_mesh3d_loader_phase(state->loader)!=phase) break;
+    }
+    state->ran=ran;
+    if(!JS_IsUndefined(state->backing)&&!athena_mesh3d_loader_source_needed(state->loader)) {
+        JS_FreeValue(ctx,state->backing); state->backing=JS_UNDEFINED;
+    }
+    if(code<0) return throw_load(ctx,code,"Model3D.beginMemory");
+    return JS_NewBool(ctx,code==1);
+}
+static JSValue loader_run(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,0,1,"Model3D.Loader.run")) return JS_EXCEPTION;
+    double budget=0;
+    if(argc==1&&!JS_IsUndefined(argv[0])) {
+        if(JS_ToFloat64(ctx,&budget,argv[0])<0) return JS_EXCEPTION;
+        if(!(budget>=0&&budget<=1000)) return JS_ThrowRangeError(ctx,"Model3D.Loader.run budget must be 0 to 1000 ms");
+    }
+    JSMeshLoader *state=loader_of(ctx,this_val); if(!state) return JS_EXCEPTION;
+    uint32_t ran=0;
+    int code=athena_mesh3d_loader_run(state->loader,(float)budget,&ran);
+    state->ran=ran;
+    if(!JS_IsUndefined(state->backing)&&!athena_mesh3d_loader_source_needed(state->loader)) {
+        JS_FreeValue(ctx,state->backing); state->backing=JS_UNDEFINED;
+    }
+    if(code<0) return throw_load(ctx,code,"Model3D.beginMemory");
+    return JS_NewBool(ctx,code==1);
+}
+static JSValue loader_phase_stats(JSContext *ctx,JSValueConst this_val) {
+    JSMeshLoader *state=JS_GetOpaque(this_val,loader_id);
+    JSValue o=JS_NewObject(ctx); if(JS_IsException(o)||!state) return o;
+    for(int ph=0;ph<=ATHENA_MESH3D_LOADER_DONE;ph++) {
+        AthenaLoaderPhaseStats st; athena_mesh3d_loader_phase_stats(state->loader,ph,&st);
+        if(!st.units) continue;
+        JSValue e=JS_NewObject(ctx);
+        if(JS_IsException(e)||JS_SetPropertyStr(ctx,e,"units",JS_NewUint32(ctx,st.units))<0||
+            JS_SetPropertyStr(ctx,e,"totalMs",JS_NewFloat64(ctx,st.total_ms))<0||JS_SetPropertyStr(ctx,e,"maxMs",JS_NewFloat64(ctx,st.max_ms))<0||
+            JS_SetPropertyStr(ctx,o,loader_phase_names[ph],e)<0) { JS_FreeValue(ctx,o); return JS_EXCEPTION; }
+    }
+    return o;
+}
+static JSValue loader_phase_stats_into(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,1,1,"Model3D.Loader.phaseStatsInto")) return JS_EXCEPTION;
+    JSMeshLoader *state=loader_of(ctx,this_val); if(!state) return JS_EXCEPTION;
+    AthenaJSArray out;
+    if(!athena_js_array(ctx,argv[0],JS_TYPED_ARRAY_FLOAT64,&out,"stats")) return JS_EXCEPTION;
+    if(out.count<3*(ATHENA_MESH3D_LOADER_DONE+1)) { JS_FreeValue(ctx,out.backing); return JS_ThrowRangeError(ctx,"stats needs %d elements",3*(ATHENA_MESH3D_LOADER_DONE+1)); }
+    double *d=out.data;
+    for(int ph=0;ph<=ATHENA_MESH3D_LOADER_DONE;ph++) {
+        AthenaLoaderPhaseStats st; athena_mesh3d_loader_phase_stats(state->loader,ph,&st);
+        d[3*ph]=st.units; d[3*ph+1]=st.total_ms; d[3*ph+2]=st.max_ms;
+    }
+    JS_FreeValue(ctx,out.backing); return JS_UNDEFINED;
+}
+static JSValue loader_finish(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Model3D.Loader.finish")) return JS_EXCEPTION;
+    JSMeshLoader *state=loader_of(ctx,this_val); if(!state) return JS_EXCEPTION;
+    AthenaMesh3D *mesh=NULL;
+    if(athena_mesh3d_loader_take(state->loader,&mesh)<0) return JS_ThrowTypeError(ctx,"Model3D.Loader.finish: loading is not complete");
+    JS_SetOpaque(this_val,NULL); loader_free(JS_GetRuntime(ctx),state);
+    return wrap_mesh(ctx,mesh);
+}
+static JSValue loader_provide(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    if(!athena_js_argc(ctx,argc,2,2,"Model3D.Loader.provide")) return JS_EXCEPTION;
+    JSMeshLoader *state=loader_of(ctx,this_val); if(!state) return JS_EXCEPTION;
+    int32_t index;
+    if(JS_ToInt32(ctx,&index,argv[0])<0) return JS_EXCEPTION;
+    if(index<0||(uint32_t)index>=athena_mesh3d_loader_dependency_count(state->loader))
+        return JS_ThrowRangeError(ctx,"Model3D.Loader.provide: no such dependency");
+    AthenaJSArray input;
+    if(!athena_js_bytes(ctx,argv[1],&input,"dependency bytes")) return JS_EXCEPTION;
+    if(athena_mesh3d_loader_provide(state->loader,(uint32_t)index,input.data,input.count)<0) {
+        JS_FreeValue(ctx,input.backing);
+        return JS_ThrowTypeError(ctx,"Model3D.Loader.provide: not waiting for files, already provided, empty or over 16 MiB");
+    }
+    state->deps[index]=input.backing;
+    return JS_UNDEFINED;
+}
+static JSValue loader_dependencies(JSContext *ctx,JSValueConst this_val) {
+    JSMeshLoader *state=JS_GetOpaque(this_val,loader_id);
+    JSValue list=JS_NewArray(ctx); if(JS_IsException(list)) return list;
+    uint32_t n=state?athena_mesh3d_loader_dependency_count(state->loader):0;
+    for(uint32_t i=0;i<n;i++) {
+        JSValue o=JS_NewObject(ctx);
+        if(JS_IsException(o)||JS_SetPropertyStr(ctx,o,"uri",JS_NewString(ctx,athena_mesh3d_loader_dependency_uri(state->loader,i)))<0||
+            JS_SetPropertyStr(ctx,o,"image",JS_NewBool(ctx,athena_mesh3d_loader_dependency_image(state->loader,i)))<0||
+            JS_SetPropertyStr(ctx,o,"provided",JS_NewBool(ctx,athena_mesh3d_loader_dependency_provided(state->loader,i)))<0||
+            JS_SetPropertyUint32(ctx,list,i,o)<0) { JS_FreeValue(ctx,list); return JS_EXCEPTION; }
+    }
+    return list;
+}
+static JSValue loader_dispose(JSContext *ctx,JSValueConst this_val,int argc,JSValueConst *argv) {
+    (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Model3D.Loader.dispose")) return JS_EXCEPTION;
+    JSMeshLoader *state=JS_GetOpaque(this_val,loader_id);
+    if(state) { JS_SetOpaque(this_val,NULL); loader_free(JS_GetRuntime(ctx),state); }
+    return JS_UNDEFINED;
+}
+/* magic 0: next phase, 1: phase of the last step, 2: units done, 3: total. */
+static JSValue loader_info(JSContext *ctx,JSValueConst this_val,int magic) {
+    JSMeshLoader *state=JS_GetOpaque(this_val,loader_id);
+    if(!state) return magic<2?JS_NewString(ctx,"disposed"):JS_NewInt32(ctx,0);
+    if(magic==4) return JS_NewUint32(ctx,state->ran);
+    if(magic<2) return JS_NewString(ctx,loader_phase_names[magic?athena_mesh3d_loader_last_phase(state->loader):athena_mesh3d_loader_phase(state->loader)]);
+    uint32_t done,total; athena_mesh3d_loader_progress(state->loader,&done,&total);
+    return JS_NewUint32(ctx,magic==2?done:total);
+}
+static JSClassDef loader_class={"Model3D.Loader",.finalizer=loader_finalizer};
+static const JSCFunctionListEntry loader_methods[]={JS_CFUNC_DEF("step",0,loader_step),JS_CFUNC_DEF("run",0,loader_run),JS_CFUNC_DEF("phaseStatsInto",1,loader_phase_stats_into),JS_CGETSET_DEF("phaseStats",loader_phase_stats,NULL),
+    JS_CFUNC_DEF("finish",0,loader_finish),JS_CFUNC_DEF("provide",2,loader_provide),JS_CGETSET_DEF("dependencies",loader_dependencies,NULL),JS_CFUNC_DEF("dispose",0,loader_dispose),
+    JS_CGETSET_MAGIC_DEF("phase",loader_info,NULL,0),JS_CGETSET_MAGIC_DEF("lastPhase",loader_info,NULL,1),
+    JS_CGETSET_MAGIC_DEF("unitsDone",loader_info,NULL,2),JS_CGETSET_MAGIC_DEF("unitsTotal",loader_info,NULL,3),JS_CGETSET_MAGIC_DEF("lastUnits",loader_info,NULL,4)};
 static JSValue create_instance(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argv;
     if(!athena_js_argc(ctx,argc,0,0,"Mesh.createInstance")) return JS_EXCEPTION;
@@ -256,6 +474,23 @@ static JSValue texture_load(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     AthenaTexture3D *t=NULL; int code=athena_texture3d_load_ex(path,filter,(AthenaTexture3DWrap)wrap,&t);
     JSValue result=code<0?throw_load(ctx,code,path):wrap_texture(ctx,t);
     JS_FreeCString(ctx,path); return result;
+}
+/* Texture.loadMemory(bytes, filter?, wrap?): PNG/JPEG/BMP bytes, borrowed for the call. */
+static JSValue texture_load_memory(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,1,3,"Texture.loadMemory")) return JS_EXCEPTION;
+    float filter=0,wrap=0;
+    if(argc>=2&&!JS_IsUndefined(argv[1])&&!athena_js_float(ctx,argv[1],&filter,"filter")) return JS_EXCEPTION;
+    if(argc==3&&!JS_IsUndefined(argv[2])&&!athena_js_float(ctx,argv[2],&wrap,"wrap")) return JS_EXCEPTION;
+    if(filter!=0&&filter!=1) return JS_ThrowRangeError(ctx,"Invalid texture filter");
+    if(wrap!=0&&wrap!=1&&wrap!=2&&wrap!=3) return JS_ThrowRangeError(ctx,"Invalid texture wrap");
+    AthenaJSArray input;
+    if(!athena_js_bytes(ctx,argv[0],&input,"image bytes")) return JS_EXCEPTION;
+    athena_model3d_clear_detail();
+    AthenaTexture3D *t=NULL;
+    int code=input.count?athena_texture3d_load_memory(input.data,input.count,(AthenaTexture3DFilter)filter,(AthenaTexture3DWrap)wrap,&t):ATHENA_MODEL3D_EINVAL;
+    JS_FreeValue(ctx,input.backing);
+    return code<0?throw_load(ctx,code,"Texture.loadMemory"):wrap_texture(ctx,t);
 }
 static JSValue texture_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)argv; if(!athena_js_argc(ctx,argc,0,0,"Texture.dispose")||!athena_js_class(ctx,self,texture_id)) return JS_EXCEPTION;
@@ -385,7 +620,7 @@ static const JSCFunctionListEntry instance_methods[]={
     JS_CFUNC_DEF("getTransform",0,get_matrix),JS_CFUNC_DEF("dispose",0,instance_dispose),
     JS_CFUNC_MAGIC_DEF("getPosition",0,get_trs,0),JS_CFUNC_MAGIC_DEF("getRotation",0,get_trs,1),
     JS_CFUNC_MAGIC_DEF("getScale",0,get_trs,2)};
-static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("load",1,load),
+static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("load",1,load),JS_CFUNC_DEF("loadMemory",2,load_memory),JS_CFUNC_DEF("beginMemory",2,begin_memory),
     JS_CFUNC_MAGIC_DEF("setPositions",2,set_many,0),JS_CFUNC_MAGIC_DEF("setRotationsEuler",2,set_many,1),
     JS_PROP_INT32_DEF("MAX_VERTICES",ATHENA_MODEL3D_MAX_VERTICES,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("MAX_JOINTS",ATHENA_MODEL3D_MAX_JOINTS,JS_PROP_ENUMERABLE),
@@ -395,12 +630,23 @@ static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("load",1,load),
     JS_PROP_INT32_DEF("DIFFUSE",ATHENA_MATERIAL3D_DIFFUSE,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {
     if(athena_register_class(ctx,&mesh_id,&mesh_class)<0||athena_register_class(ctx,&instance_id,&instance_class)<0||
-        athena_register_class(ctx,&texture_id,&texture_class)<0) return -1;
+        athena_register_class(ctx,&texture_id,&texture_class)<0||athena_register_class(ctx,&loader_id,&loader_class)<0) return -1;
+    {
+        JSValue lp=JS_NewObject(ctx),lc=JS_NewCFunction2(ctx,forbidden_ctor,"Loader",0,JS_CFUNC_constructor,0);
+        if(JS_IsException(lp)||JS_IsException(lc)) { JS_FreeValue(ctx,lp); JS_FreeValue(ctx,lc); return -1; }
+        JS_SetPropertyFunctionList(ctx,lp,loader_methods,countof(loader_methods));
+        JS_SetConstructor(ctx,lc,lp); JS_SetClassProto(ctx,loader_id,lp);
+        JSValue names=JS_NewArray(ctx);
+        for(uint32_t i=0;i<countof(loader_phase_names);i++) JS_SetPropertyUint32(ctx,names,i,JS_NewString(ctx,loader_phase_names[i]));
+        JS_SetPropertyStr(ctx,lc,"PHASES",names);
+        if(JS_SetModuleExport(ctx,m,"Loader",lc)<0) return -1;
+    }
     JSValue tp=JS_NewObject(ctx),tc=JS_NewCFunction2(ctx,forbidden_ctor,"Texture",0,JS_CFUNC_constructor,0);
     if(JS_IsException(tp)||JS_IsException(tc)) { JS_FreeValue(ctx,tp); JS_FreeValue(ctx,tc); return -1; }
     JS_SetPropertyFunctionList(ctx,tp,texture_methods,countof(texture_methods));
     JS_SetPropertyStr(ctx,tc,"fromPixels",JS_NewCFunction(ctx,texture_pixels,"fromPixels",1));
     JS_SetPropertyStr(ctx,tc,"load",JS_NewCFunction(ctx,texture_load,"load",1));
+    JS_SetPropertyStr(ctx,tc,"loadMemory",JS_NewCFunction(ctx,texture_load_memory,"loadMemory",1));
     JS_SetPropertyStr(ctx,tc,"NEAREST",JS_NewInt32(ctx,0)); JS_SetPropertyStr(ctx,tc,"LINEAR",JS_NewInt32(ctx,1));
     JS_SetPropertyStr(ctx,tc,"CLAMP",JS_NewInt32(ctx,ATHENA_TEXTURE3D_CLAMP));
     JS_SetPropertyStr(ctx,tc,"REPEAT",JS_NewInt32(ctx,ATHENA_TEXTURE3D_REPEAT));
@@ -423,5 +669,5 @@ static int init(JSContext *ctx,JSModuleDef *m) {
 }
 JSModuleDef *athena_model3d_js_init(JSContext *ctx) {
     JSModuleDef *m=athena_push_module(ctx,init,exports,countof(exports),"Model3D");
-    if(m) { JS_AddModuleExport(ctx,m,"Mesh"); JS_AddModuleExport(ctx,m,"Instance"); JS_AddModuleExport(ctx,m,"Texture"); } return m;
+    if(m) { JS_AddModuleExport(ctx,m,"Mesh"); JS_AddModuleExport(ctx,m,"Instance"); JS_AddModuleExport(ctx,m,"Texture"); JS_AddModuleExport(ctx,m,"Loader"); } return m;
 }

@@ -60,6 +60,19 @@ static inline int athena_js_array(JSContext *ctx, JSValueConst value, int type,
     }
     out->backing=backing; out->data=data+offset; out->count=length/stride; return 1;
 }
+/* Binary input: ArrayBuffer or Uint8Array, borrowed only after all descriptor
+ * getters ran. Pins the backing allocation and honors an unaligned subarray. */
+static inline int athena_js_bytes(JSContext *ctx,JSValueConst value,AthenaJSArray *out,const char *name) {
+    if(JS_GetTypedArrayType(value)>=0)
+        return athena_js_array(ctx,value,JS_TYPED_ARRAY_UINT8,out,name);
+    out->backing=JS_UNDEFINED; out->data=NULL; out->count=0;
+    if(JS_IsSharedArrayBuffer(value)) {
+        JS_ThrowTypeError(ctx,"%s requires a nonshared ArrayBuffer",name); return 0;
+    }
+    uint8_t *data=JS_GetArrayBuffer(ctx,&out->count,value);
+    if(!data) { JS_ThrowTypeError(ctx,"%s requires an attached ArrayBuffer or Uint8Array",name); return 0; }
+    out->backing=JS_DupValue(ctx,value); out->data=data; return 1;
+}
 /* Property names cached as atoms, for objects written every frame. Atoms
  * belong to a runtime: the first runtime that writes fills the table and owns
  * it until athena_js_atoms_free() in the module cleanup, which must run

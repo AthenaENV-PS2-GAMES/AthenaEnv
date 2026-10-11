@@ -209,13 +209,38 @@ static JSValue js_age(JSContext *ctx,JSValueConst self,int argc,JSValueConst *ar
     if(dt<0) return JS_ThrowRangeError(ctx,"dt must not be negative");
     athena_debug3d_age(dt); return JS_UNDEFINED;
 }
+static JSValue js_profile(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,1,1,"Debug3D.profile")) return JS_EXCEPTION;
+    athena_debug3d_profile(JS_ToBool(ctx,argv[0])); return JS_UNDEFINED;
+}
+static JSValue js_stats(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self; (void)argv;
+    if(!athena_js_argc(ctx,argc,0,0,"Debug3D.stats")) return JS_EXCEPTION;
+    AthenaDebug3DStats s; athena_debug3d_stats(&s);
+    JSValue out=JS_NewObject(ctx); if(JS_IsException(out)) return out;
+#define FIELD(name,value) JS_SetPropertyStr(ctx,out,name,JS_NewUint32(ctx,value))
+    FIELD("input",s.input); FIELD("emitted",s.emitted); FIELD("rejected",s.rejected); FIELD("batches",s.batches);
+    FIELD("transformTicks",s.transform_ticks); FIELD("clipTicks",s.clip_ticks);
+    FIELD("emitTicks",s.emit_ticks); FIELD("totalTicks",s.total_ticks);
+    FIELD("fallbackBatches",s.fallback_batches);
+#if defined(_EE)
+    FIELD("ticksPerMs",294912);
+#else
+    FIELD("ticksPerMs",1000);
+#endif
+#undef FIELD
+    JS_SetPropertyStr(ctx,out,"profiling",JS_NewBool(ctx,s.profiling));
+    JS_SetPropertyStr(ctx,out,"backend",JS_NewString(ctx,s.vu0?"vu0":"c"));
+    return out;
+}
 static const JSCFunctionListEntry exports[]={
     JS_CFUNC_DEF("line",6,js_line),JS_CFUNC_DEF("lines",1,js_lines),JS_CFUNC_DEF("box",6,js_box),
     JS_CFUNC_DEF("sphere",4,js_sphere),JS_CFUNC_DEF("axes",1,js_axes),JS_CFUNC_DEF("grid",5,js_grid),
     JS_CFUNC_DEF("frustum",1,js_frustum),JS_CFUNC_DEF("normals",1,js_normals),
     JS_CFUNC_DEF("setCamera",1,js_set_camera),JS_CFUNC_DEF("draw",1,js_draw),JS_CFUNC_DEF("age",1,js_age),
     JS_CFUNC_DEF("clear",0,js_clear),JS_CFUNC_MAGIC_DEF("count",0,js_count,0),JS_CFUNC_MAGIC_DEF("dropped",0,js_count,1),
-    JS_CFUNC_DEF("show",0,js_show),
+    JS_CFUNC_DEF("show",0,js_show),JS_CFUNC_DEF("profile",1,js_profile),JS_CFUNC_DEF("stats",0,js_stats),
     JS_PROP_INT32_DEF("MAX_LINES",ATHENA_DEBUG3D_MAX_LINES,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) { return JS_SetModuleExportList(ctx,m,exports,countof(exports)); }
 void athena_debug3d_js_cleanup(JSContext *ctx) {
@@ -223,6 +248,7 @@ void athena_debug3d_js_cleanup(JSContext *ctx) {
     if(auto_system) athena_loop_system_remove(auto_system);
     if(auto_camera) { athena_camera3d_js_release(auto_camera); auto_camera=NULL; }
     athena_debug3d_clear();
+    athena_debug3d_profile(0);
 }
 JSModuleDef *athena_debug3d_js_init(JSContext *ctx) {
     return athena_push_module(ctx,init,exports,countof(exports),"Debug3D");

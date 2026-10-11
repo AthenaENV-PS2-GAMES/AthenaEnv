@@ -6,6 +6,13 @@ struct AthenaBatch3D { AthenaInstance3D **items; uint32_t count,capacity; };
 static const char *error_detail="";
 const char *athena_render3d_error_detail(void) { return error_detail; }
 void athena_render3d_set_error_detail(const char *detail) { error_detail=detail?detail:""; }
+/* The tint of the draws that follow: a linear RGB multiplier in [0,1], white by default. */
+static float draw_tint[3]={1,1,1};
+int athena_render3d_set_tint(float r,float g,float b) {
+    if(!(r>=0&&r<=1&&g>=0&&g<=1&&b>=0&&b<=1)) return -1; /* also rejects NaN */
+    draw_tint[0]=r; draw_tint[1]=g; draw_tint[2]=b; return 0;
+}
+void athena_render3d_get_tint(float out[3]) { out[0]=draw_tint[0]; out[1]=draw_tint[1]; out[2]=draw_tint[2]; }
 static AthenaRender3DStats frame_totals;
 void athena_render3d_stats_add(const AthenaRender3DStats *s) {
     if(!s) return;
