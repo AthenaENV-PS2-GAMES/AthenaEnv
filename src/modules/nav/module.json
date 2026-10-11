@@ -1,0 +1,18 @@
+{
+  "id": "nav",
+  "name": "Nav",
+  "description": "Navigation on a weighted XZ grid in C: synchronous A*, bounded incremental queries and agent-owned plans with cancellation, shared allocation-free scratch, path smoothing, and crowds driving Scene3D nodes.",
+  "category": "Game",
+  "version": "1.2.0",
+  "required": false,
+  "default": false,
+  "sources": ["native/nav.c"],
+  "dependencies": { "modules": ["scene3d"], "iop": [], "ee_libs": [] },
+  "quickjs": {
+    "sources": ["quickjs/ath_nav.c"],
+    "module_name": "Nav",
+    "global_alias": "Nav",
+    "init_func": "athena_nav_js_init"
+  },
+  "types": "nav.d.ts"
+}

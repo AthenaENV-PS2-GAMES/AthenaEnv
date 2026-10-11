@@ -1,0 +1,8 @@
+{
+  "id": "animation3d", "name": "Animation3D", "description": "Keyframe clips (position, rotation slerp, scale; linear or step) sampled in native code and applied to Scene3D nodes by players advanced in one Loop system.",
+  "category": "Animation", "version": "1.0.0", "default": false,
+  "sources": ["native/animation3d.c"],
+  "dependencies": {"modules": ["scene3d", "quaternion", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_animation3d.c"], "module_name": "Animation3D", "global_alias": "Animation3D", "init_func": "athena_animation3d_js_init", "cleanup_func": "athena_animation3d_js_cleanup"},
+  "types": "animation3d.d.ts"
+}

@@ -1,0 +1,150 @@
+#!/bin/sh
+# Builds the JS test runner like run.sh and runs only the given scripts: run_one.sh tests/x_test.js "marker" [runner]
+set -e
+cd "$(dirname "$0")/../.."
+CC=${CC:-gcc}
+OUT=${TMPDIR:-/tmp}/athena-js-tests
+mkdir -p "$OUT/obj"
+BASE="-O1 -g -fno-omit-frame-pointer -D_GNU_SOURCE -DCONFIG_BIGNUM -DCONFIG_VERSION=\"host\""
+ASAN="-fsanitize=address"
+UBSAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined"
+INC="-Itests/js/stub -Isrc/quickjs -Isrc/core/include -Isrc/modules/box2d/include \
+    -Isrc/modules/random/include -Isrc/modules/noise/include -Isrc/modules/assets3d/include -Isrc/modules/assets3d/quickjs -Isrc/modules/thread/include \
+    -Isrc/modules/debug/include -Isrc/modules/color/include -Isrc/modules/profiler/include -Isrc/modules/debug3d/include -Isrc/modules/savegame/include -Isrc/modules/meshbuilder/include -Isrc/modules/voxel/include \
+    -Isrc/modules/lod/include -Isrc/modules/triggers3d/include -Isrc/modules/nav/include -Isrc/modules/audio3d/include \
+    -Isrc/modules/sky/include -Isrc/modules/sound/include \
+    -Isrc/modules/graphics/include -Isrc/modules/camera2d/include -Isrc/modules/loop/include \
+    -Isrc/modules/sprite/include -Isrc/modules/image/include -Isrc/modules/tilemap/include \
+    -Isrc/modules/collision/include -Isrc/runtime/quickjs/include \
+    -Isrc/modules/vector/include -Isrc/modules/matrix4/include -Isrc/modules/quaternion/include \
+    -Isrc/modules/camera3d/include -Isrc/modules/model3d/include -Isrc/modules/lights/include -Isrc/modules/render3d/include -Isrc/modules/render3d/native -Isrc/modules/scene3d/include -Isrc/modules/animation3d/include -Isrc/modules/camerarig3d/include -Isrc/modules/tween3d/include -Isrc/modules/particles2d/include -Isrc/modules/particles3d/include -Isrc/modules/gltf3d/include -Isrc/modules/collision3d/include -Isrc/modules/physics3d/include"
+THREE_D="src/modules/matrix4/native/matrix4.c src/modules/matrix4/quickjs/ath_matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/quaternion/quickjs/ath_quaternion.c \
+    src/modules/camera3d/native/camera3d.c src/modules/camera3d/quickjs/ath_camera3d.c \
+    src/modules/lights/native/lights.c src/modules/lights/quickjs/ath_lights.c src/modules/render3d/native/render3d_shade.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/model3d/quickjs/ath_model3d.c \
+    src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c src/modules/render3d/quickjs/ath_render3d.c \
+    src/modules/scene3d/native/scene3d.c src/modules/scene3d/quickjs/ath_scene3d.c \
+    src/modules/animation3d/native/animation3d.c src/modules/animation3d/quickjs/ath_animation3d.c \
+    src/modules/gltf3d/native/gltf3d.c src/modules/gltf3d/quickjs/ath_gltf3d.c \
+    src/modules/camerarig3d/native/camerarig3d.c src/modules/camerarig3d/quickjs/ath_camerarig3d.c \
+    src/modules/tween3d/native/tween3d.c src/modules/tween3d/native/ease_curves.c src/modules/tween3d/quickjs/ath_tween3d.c \
+    src/modules/collision3d/native/collision3d.c src/modules/collision3d/native/character3d.c src/modules/collision3d/quickjs/ath_collision3d.c \
+    src/modules/physics3d/native/physics3d.c src/modules/physics3d/native/joint3d.c src/modules/physics3d/quickjs/ath_physics3d.c \
+    tests/host/render3d_host.c"
+# Camera2D and the math of the 2D view, with the C side of Loop systems; the
+# GS side of the view (clip rectangle) is stubbed in runner.c.
+CAMERA="src/modules/camera2d/native/camera2d.c src/modules/camera2d/native/camera2d_gs.c \
+    src/modules/camera2d/quickjs/ath_camera2d.c src/modules/graphics/native/view.c \
+    src/modules/loop/native/loop_systems.c"
+# Sprite, over the Image and TileMap stand-ins of tests/js/sprite_host.c.
+SPRITE="src/modules/sprite/native/sprite.c src/modules/sprite/native/sprite_gs.c \
+    src/modules/sprite/native/sprite_job.c \
+    src/modules/sprite/quickjs/ath_sprite.c tests/js/sprite_host.c \
+    src/modules/particles2d/native/particles2d.c src/modules/particles2d/quickjs/ath_particles2d.c \
+    src/modules/particles3d/native/particles3d.c src/modules/particles3d/quickjs/ath_particles3d.c"
+# Collision; its debug drawing goes to the Draw stubs of runner.c.
+COLLISION="src/modules/collision/native/collision.c src/modules/collision/native/collision_gs.c \
+    src/modules/collision/quickjs/ath_collision.c"
+# The EE has no SIMD for Box2D: build the same scalar path.
+B2FLAGS="-DBOX2D_DISABLE_SIMD -DB2_ENABLE_ASSERT"
+
+build() { # object source flags...
+    obj=$1; src=$2; shift 2
+    rebuild=0
+    [ "$obj" -nt "$src" ] || rebuild=1
+    case "$src" in src/quickjs/*)
+        for header in src/quickjs/*.h; do
+            [ "$obj" -nt "$header" ] || rebuild=1
+        done
+        ;;
+    esac
+    [ "$rebuild" = 0 ] || $CC $BASE "$@" $INC -c "$src" -o "$obj"
+}
+
+for f in cutils libbf libregexp libunicode quickjs; do
+    build "$OUT/obj/$f.o" "src/quickjs/$f.c" $ASAN -w
+done
+build "$OUT/obj/model3d_load.o" src/modules/model3d/native/model3d_load.c $UBSAN -w
+build "$OUT/obj/fast_obj.o" src/modules/model3d/native/fast_obj/fast_obj.c $UBSAN -w
+for f in src/modules/box2d/native/box2d/*.c; do
+    build "$OUT/obj/b2_$(basename "$f" .c).o" "$f" $UBSAN $B2FLAGS -w
+done
+# MemoryCard runs against the fake card of tests/host/fake_libmc.h.
+MC="-Itests/host -Itests/host/stubs -Isrc/modules/memcard/include -Isrc/modules/memcard/native -Isrc/modules/thread/include"
+$CC $BASE $UBSAN $B2FLAGS -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
+    -Wno-missing-field-initializers -Wno-cast-function-type -Werror $MC $INC \
+    -o "$OUT/runner" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
+    tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
+    src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
+    src/modules/thread/native/file_job.c src/modules/thread/quickjs/ath_file_job.c \
+    src/modules/memcard/quickjs/ath_memcard.c \
+    src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
+    src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
+    src/modules/noise/quickjs/ath_noise.c \
+    src/modules/assets3d/native/texture_decode_job.c src/modules/assets3d/quickjs/ath_assets3d.c \
+    src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
+    src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
+    src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
+    src/modules/savegame/native/savegame_codec.c src/modules/savegame/quickjs/ath_savegame.c \
+    src/modules/meshbuilder/native/meshbuilder.c src/modules/meshbuilder/quickjs/ath_meshbuilder.c \
+    src/modules/voxel/native/voxel.c src/modules/voxel/quickjs/ath_voxel.c \
+    src/modules/lod/native/lod.c src/modules/lod/quickjs/ath_lod.c \
+    src/modules/triggers3d/native/triggers3d.c src/modules/triggers3d/quickjs/ath_triggers3d.c \
+    src/modules/nav/native/nav.c src/modules/nav/quickjs/ath_nav.c \
+    src/modules/audio3d/native/audio3d.c src/modules/audio3d/quickjs/ath_audio3d.c tests/js/sound_stub.c \
+    src/modules/sky/native/sky.c src/modules/sky/native/sky_gs.c src/modules/sky/quickjs/ath_sky.c \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
+    "$OUT"/obj/*.o -lm -lpthread
+
+# runner_font: the same runner with the real Font binding (over the native
+# stand-in tests/js/font_host.c) instead of the JavaScript stub, for scripts
+# that must take the console's path: FontRender lifetimes, preload slices.
+$CC $BASE $UBSAN $B2FLAGS -DRUNNER_REAL_FONT -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare \
+    -Wno-missing-field-initializers -Wno-cast-function-type -Werror $MC $INC -Isrc/modules/font/include \
+    -o "$OUT/runner_font" tests/js/runner.c src/modules/box2d/native/box2d.c src/modules/box2d/quickjs/*.c \
+    tests/js/memcard_host.c src/modules/memcard/native/memcard.c src/modules/memcard/native/memcard_job.c \
+    src/modules/thread/native/job.c src/modules/thread/quickjs/ath_job.c \
+    src/modules/thread/native/file_job.c src/modules/thread/quickjs/ath_file_job.c \
+    src/modules/memcard/quickjs/ath_memcard.c \
+    src/modules/random/native/random.c src/modules/random/quickjs/ath_random.c \
+    src/modules/noise/native/noise.c src/modules/noise/native/noise_job.c \
+    src/modules/noise/quickjs/ath_noise.c \
+    src/modules/assets3d/native/texture_decode_job.c src/modules/assets3d/quickjs/ath_assets3d.c \
+    src/modules/debug/native/debug_overlay.c src/modules/debug/quickjs/ath_debug.c \
+    src/modules/profiler/native/profiler.c src/modules/profiler/quickjs/ath_profiler.c \
+    src/modules/debug3d/native/debug3d.c src/modules/debug3d/native/debug3d_gs.c src/modules/debug3d/quickjs/ath_debug3d.c \
+    src/modules/savegame/native/savegame_codec.c src/modules/savegame/quickjs/ath_savegame.c \
+    src/modules/meshbuilder/native/meshbuilder.c src/modules/meshbuilder/quickjs/ath_meshbuilder.c \
+    src/modules/voxel/native/voxel.c src/modules/voxel/quickjs/ath_voxel.c \
+    src/modules/lod/native/lod.c src/modules/lod/quickjs/ath_lod.c \
+    src/modules/triggers3d/native/triggers3d.c src/modules/triggers3d/quickjs/ath_triggers3d.c \
+    src/modules/nav/native/nav.c src/modules/nav/quickjs/ath_nav.c \
+    src/modules/audio3d/native/audio3d.c src/modules/audio3d/quickjs/ath_audio3d.c tests/js/sound_stub.c \
+    src/modules/sky/native/sky.c src/modules/sky/native/sky_gs.c src/modules/sky/quickjs/ath_sky.c \
+    src/runtime/quickjs/ath_output.c $CAMERA $SPRITE $COLLISION $THREE_D \
+    src/modules/font/quickjs/ath_font.c tests/js/font_host.c \
+    "$OUT"/obj/*.o -lm -lpthread
+
+cd bin
+
+# check RUNNER SCRIPT MARKER: runs SCRIPT, shows its output, and fails when
+# the runner exits non-zero (a crash, a sanitizer, the leak assertion of
+# JS_FreeRuntime after the script ended) or MARKER was not printed. A pipe
+# into tee would hide the exit code.
+check() {
+    runner=$1; script=$2; marker=$3
+    log="$OUT/$(basename "$script" .js).$(basename "$runner").log"
+    status=0
+    "$runner" "$script" > "$log" 2>&1 || status=$?
+    cat "$log"
+    if [ "$status" -ne 0 ]; then
+        echo "FAIL: $script exited with $status"
+        exit 1
+    fi
+    if ! grep -q "$marker" "$log"; then
+        echo "FAIL: $script did not print \"$marker\""
+        exit 1
+    fi
+}
+
+check "$OUT/${3:-runner}" "$1" "$2"

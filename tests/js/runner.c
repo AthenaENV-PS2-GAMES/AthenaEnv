@@ -27,8 +27,50 @@ JSModuleDef *athena_box2d_init(JSContext *ctx);
 void athena_box2d_cleanup(JSContext *ctx);
 JSModuleDef *athena_memcard_init(JSContext *ctx);
 JSModuleDef *athena_random_init(JSContext *ctx);
+JSModuleDef *athena_matrix4_init(JSContext *ctx);
+JSModuleDef *athena_quaternion_js_init(JSContext *ctx);
+JSModuleDef *athena_camera3d_js_init(JSContext *ctx);
+void athena_camera3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_model3d_js_init(JSContext *ctx);
+JSModuleDef *athena_render3d_js_init(JSContext *ctx);
+JSModuleDef *athena_lights_js_init(JSContext *ctx);
+JSModuleDef *athena_scene3d_js_init(JSContext *ctx);
+void athena_scene3d_js_cleanup(JSContext *ctx);
+void athena_render3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_animation3d_js_init(JSContext *ctx);
+void athena_animation3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_gltf3d_js_init(JSContext *ctx);
+JSModuleDef *athena_camerarig3d_js_init(JSContext *ctx);
+void athena_camerarig3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_tween3d_js_init(JSContext *ctx);
+void athena_tween3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_collision3d_js_init(JSContext *ctx);
+void athena_collision3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_physics3d_js_init(JSContext *ctx);
+void athena_physics3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_particles2d_js_init(JSContext *ctx);
+void athena_particles2d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_particles3d_js_init(JSContext *ctx);
+void athena_particles3d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_noise_init(JSContext *ctx);
+JSModuleDef *athena_assets3d_native_js_init(JSContext *ctx);
 JSModuleDef *athena_debug_init(JSContext *ctx);
+JSModuleDef *athena_profiler_js_init(JSContext *ctx);
+JSModuleDef *athena_debug3d_js_init(JSContext *ctx);
+JSModuleDef *athena_savegame_js_init(JSContext *ctx);
+JSModuleDef *athena_meshbuilder_js_init(JSContext *ctx);
+JSModuleDef *athena_voxel_js_init(JSContext *ctx);
+JSModuleDef *athena_lod_js_init(JSContext *ctx);
+void athena_lod_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_triggers3d_js_init(JSContext *ctx);
+JSModuleDef *athena_nav_js_init(JSContext *ctx);
+JSModuleDef *athena_audio3d_js_init(JSContext *ctx);
+void athena_audio3d_js_cleanup(JSContext *ctx);
+JSModuleDef *athena_sky_js_init(JSContext *ctx);
+void sound_stub_init(JSContext *ctx);
+void athena_voxel_js_cleanup(JSContext *ctx);
+void athena_debug3d_js_cleanup(JSContext *ctx);
+void athena_profiler_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_camera2d_js_init(JSContext *ctx);
 void athena_camera2d_js_cleanup(JSContext *ctx);
 JSModuleDef *athena_sprite_js_init(JSContext *ctx);
@@ -92,6 +134,18 @@ void draw_line_list(float x, float y, StubLine *list, int list_size) {
     for (int i = 0; i < list_size; i++)
         draw_line(x + list[i].x, y + list[i].y, x + list[i].x2, y + list[i].y2, list[i].rgba);
 }
+static int stub_quads;
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list,int count) {
+    if(count<=0||count>256) abort();
+    stub_line_lists++;
+    for(int i=0;i<count;i++) draw_line(list[i].x0,list[i].y0,list[i].x1,list[i].y1,list[i].color);
+}
+static StubColor stub_last_quad[4];
+void draw_quad_gouraud(float x, float y, float x2, float y2, float x3, float y3, float x4, float y4,
+    StubColor c1, StubColor c2, StubColor c3, StubColor c4) {
+    stub_quads++; stub_last_quad[0] = c1; stub_last_quad[1] = c2; stub_last_quad[2] = c3; stub_last_quad[3] = c4;
+}
 void draw_circle(float x, float y, float radius, StubColor color, unsigned char filled) {
     stub_circles++;
     stub_last_circle[0] = x;
@@ -113,6 +167,8 @@ static JSValue js_native_draws(JSContext *ctx, JSValueConst this_val, int argc, 
     JS_SetPropertyStr(ctx, counts, "lines", JS_NewInt32(ctx, stub_lines));
     JS_SetPropertyStr(ctx, counts, "circles", JS_NewInt32(ctx, stub_circles));
     JS_SetPropertyStr(ctx, counts, "lineLists", JS_NewInt32(ctx, stub_line_lists));
+    JS_SetPropertyStr(ctx, counts, "quads", JS_NewInt32(ctx, stub_quads));
+    JS_SetPropertyStr(ctx, counts, "lastQuadTop", JS_NewUint32(ctx, stub_last_quad[0]));
     JSValue first = JS_NewArray(ctx), circle = JS_NewArray(ctx);
     for (int i = 0; i < 2; i++)
         JS_SetPropertyUint32(ctx, first, i, JS_NewFloat64(ctx, stub_first_line[i]));
@@ -120,7 +176,7 @@ static JSValue js_native_draws(JSContext *ctx, JSValueConst this_val, int argc, 
         JS_SetPropertyUint32(ctx, circle, i, JS_NewFloat64(ctx, stub_last_circle[i]));
     JS_SetPropertyStr(ctx, counts, "firstLine", first);
     JS_SetPropertyStr(ctx, counts, "lastCircle", circle);
-    stub_sprites = stub_lines = stub_circles = stub_line_lists = 0;
+    stub_sprites = stub_lines = stub_circles = stub_line_lists = stub_quads = 0;
     return counts;
 }
 
@@ -353,6 +409,13 @@ static const struct {
     { "Tween", "../src/modules/tween/js/tween.js" },
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },
+    { "Profiler", "../src/modules/profiler/js/profiler.js" },
+    { "Bench", "../src/modules/bench/js/bench.js" },
+    { "Input", "../src/modules/input/js/input.js" },
+    { "Replay", "../src/modules/replay/js/replay.js" },
+    { "SaveGame", "../src/modules/savegame/js/savegame.js" },
+    { "Assets3D", "../src/modules/assets3d/js/assets3d.js" },
+    { "Triggers3D", "../src/modules/triggers3d/js/triggers3d.js" },
     { "Scene", "../src/modules/scene/js/scene.js" },
     { "Draw", "../tests/js/stub/Draw.js" },
 #ifndef RUNNER_REAL_FONT
@@ -461,7 +524,7 @@ static int run_timers(JSContext *ctx) {
     return ret;
 }
 
-int main(int argc, char **argv) {
+static int run_script(int argc, char **argv) {
     /* As generated in src/generated/js_registry.c. */
     static const char bootstrap[] = "import * as Box2D from 'Box2D'; globalThis.Box2D = Box2D;"
         "import * as MemoryCard from 'MemoryCard'; globalThis.MemoryCard = MemoryCard;"
@@ -516,8 +579,35 @@ int main(int argc, char **argv) {
     }
     athena_memcard_init(ctx);
     athena_random_init(ctx);
+    athena_matrix4_init(ctx);
+    athena_quaternion_js_init(ctx);
+    athena_camera3d_js_init(ctx);
+    athena_model3d_js_init(ctx);
+    athena_render3d_js_init(ctx);
+    athena_lights_js_init(ctx);
+    athena_scene3d_js_init(ctx);
+    athena_animation3d_js_init(ctx);
+    athena_gltf3d_js_init(ctx);
+    athena_camerarig3d_js_init(ctx);
+    athena_tween3d_js_init(ctx);
+    athena_collision3d_js_init(ctx);
+    athena_physics3d_js_init(ctx);
+    athena_particles2d_js_init(ctx);
+    athena_particles3d_js_init(ctx);
     athena_noise_init(ctx);
+    athena_assets3d_native_js_init(ctx);
     athena_debug_init(ctx);
+    athena_profiler_js_init(ctx);
+    athena_debug3d_js_init(ctx);
+    athena_savegame_js_init(ctx);
+    athena_meshbuilder_js_init(ctx);
+    athena_voxel_js_init(ctx);
+    athena_lod_js_init(ctx);
+    athena_triggers3d_js_init(ctx);
+    athena_nav_js_init(ctx);
+    sound_stub_init(ctx);
+    athena_audio3d_js_init(ctx);
+    athena_sky_js_init(ctx);
     athena_camera2d_js_init(ctx);
     sprite_host_init(ctx);
     athena_sprite_js_init(ctx);
@@ -554,7 +644,34 @@ int main(int argc, char **argv) {
     athena_collision_js_cleanup(ctx);
     athena_sprite_js_cleanup(ctx);
     athena_camera2d_js_cleanup(ctx);
+    athena_scene3d_js_cleanup(ctx);
+    athena_render3d_js_cleanup(ctx);
+    athena_camera3d_js_cleanup(ctx);
+    athena_profiler_js_cleanup(ctx);
+    athena_debug3d_js_cleanup(ctx);
+    athena_voxel_js_cleanup(ctx);
+    athena_lod_js_cleanup(ctx);
+    athena_audio3d_js_cleanup(ctx);
+    athena_animation3d_js_cleanup(ctx);
+    athena_camerarig3d_js_cleanup(ctx);
+    athena_tween3d_js_cleanup(ctx);
+    athena_collision3d_js_cleanup(ctx);
+    athena_physics3d_js_cleanup(ctx);
+    athena_particles2d_js_cleanup(ctx);
+    athena_particles3d_js_cleanup(ctx);
     JS_FreeContext(ctx);
     JS_FreeRuntime(rt);
     return ret < 0 ? 1 : 0;
+}
+
+/* Repeat with a fresh runtime to exercise process-wide JSClassID reuse. */
+int main(int argc, char **argv) {
+    const char *repeat = getenv("ATHENA_TEST_REPEAT");
+    int count = repeat ? atoi(repeat) : 1;
+    if (count < 1 || count > 10) return 2;
+    for (int i = 0; i < count; i++) {
+        int result = run_script(argc, argv);
+        if (result) return result;
+    }
+    return 0;
 }

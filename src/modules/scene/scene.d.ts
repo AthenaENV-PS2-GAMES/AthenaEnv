@@ -323,10 +323,10 @@ declare namespace Scene {
     }
 
     interface Loader<T = any> {
+        /** Set cancel() to abort pending work when its last holder releases. */
+        load(path: string, spec: any, handle: { cancel?: () => void }): T | PromiseLike<T>;
         /** Applies what a later holder of a cached asset asks for (images: a lock). */
         reuse?(asset: T, spec: any): void;
-        /** Loads the asset: the value, or a promise (a Job) of it. */
-        load(path: string, spec: any): T | PromiseLike<T>;
         /**
          * Releases it once nobody holds it. Asked for while a frame is being
          * drawn, it runs at the start of the next frame (the frame's GS

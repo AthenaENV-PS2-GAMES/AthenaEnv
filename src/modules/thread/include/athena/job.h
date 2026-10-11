@@ -33,7 +33,8 @@
  * two are enough to keep a short job (a sound effect) from waiting behind a
  * long one (an archive). */
 #define ATHENA_JOB_WORKERS 2
-#define ATHENA_JOB_STACK_SIZE (32 * 1024)
+/* 64 KiB: libpng and libjpeg (texture decoding jobs) need more than a small stack. */
+#define ATHENA_JOB_STACK_SIZE (64 * 1024)
 
 /* Mostly waiting for the IOP (memory card, disc, USB): above the script thread. */
 #define ATHENA_JOB_PRIORITY_IO (ATHENA_THREAD_DEFAULT_PRIORITY - 1)

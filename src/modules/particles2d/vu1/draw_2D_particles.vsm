@@ -1,0 +1,82 @@
+		.vu
+		.align 4
+		.global	VU1Draw2D_Particles_CodeStart
+		.global	VU1Draw2D_Particles_CodeEnd
+VU1Draw2D_Particles_CodeStart:
+                    nop                             lq VF04, 3(VI00)
+                    ftoi4.xyzw VF05, VF04           lq VF01, 0(VI00)
+                    nop                             lq VF02, 1(VI00)
+                    nop                             lq VF03, 2(VI00)
+                    nop                             loi 0x457ffc00
+                    addi.xyzw VF08, VF00, i         mr32 VF04, VF05
+                    nop                             fcset 0x000000
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             mr32 VF06, VF04
+                    nop                             move VF04, VF05
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    max.y VF04, VF06, VF06          move VF07, VF06
+                    max.y VF07, VF05, VF05          nop
+init:
+                    nop                             xtop VI01
+                    nop                             lq VF09, 0(VI01)
+                    nop                             iaddiu VI01, VI01, 1
+                    nop                             iaddiu VI03, VI01, 89
+                    nop                             xitop VI02
+                    nop                             sq VF09, 0(VI03)
+                    nop                             iaddiu VI05, VI02, 0x7fff
+                    nop                             iaddiu VI05, VI05, 0x01
+                    nop                             isw.x VI05, 0(VI03)
+                    nop                             iaddiu VI04, VI03, 1
+                    nop                             iadd VI05, VI00, VI02
+particleLoop:
+                    sub.zw VF14, VF00, VF00         lq VF09, 0(VI01)
+                    sub.zw VF15, VF00, VF00         lq VF10, 1(VI01)
+                    sub.zw VF16, VF00, VF00         sq VF05, 1(VI04)
+                    sub.zw VF17, VF00, VF00         sq VF04, 3(VI04)
+                    mulax.xy ACC, VF01, VF09x       sq VF07, 5(VI04)
+                    madday.xy ACC, VF02, VF09y      sq VF10, 0(VI04)
+                    maddw.xy VF11, VF03, VF00w      sq VF06, 7(VI04)
+                    mulaz.xy ACC, VF01, VF09z       iaddiu VI01, VI01, 2
+                    maddw.xy VF12, VF02, VF09w      iaddi VI05, VI05, -1
+                    mulaz.xy ACC, VF02, VF09z       nop
+                    msubw.xy VF13, VF01, VF09w      nop
+                    nop                             nop
+                    sub.xy VF09, VF11, VF12         nop
+                    add.xy VF18, VF11, VF12         nop
+                    nop                             nop
+                    nop                             nop
+                    sub.xy VF14, VF09, VF13         nop
+                    add.xy VF15, VF09, VF13         nop
+                    sub.xy VF16, VF18, VF13         nop
+                    add.xy VF17, VF18, VF13         nop
+                    maxx.xy VF14, VF14, VF00x       nop
+                    maxx.xy VF15, VF15, VF00x       nop
+                    maxx.xy VF16, VF16, VF00x       nop
+                    maxx.xy VF17, VF17, VF00x       nop
+                    minix.xy VF14, VF14, VF08x      nop
+                    minix.xy VF15, VF15, VF08x      nop
+                    minix.xy VF16, VF16, VF08x      nop
+                    minix.xy VF17, VF17, VF08x      nop
+                    ftoi4.xyzw VF14, VF14           nop
+                    ftoi4.xyzw VF15, VF15           nop
+                    ftoi4.xyzw VF16, VF16           nop
+                    ftoi4.xyzw VF17, VF17           nop
+                    nop                             sq VF14, 2(VI04)
+                    nop                             sq VF15, 4(VI04)
+                    nop                             sq VF16, 6(VI04)
+                    nop                             sq VF17, 8(VI04)
+                    nop                             iaddiu VI04, VI04, 9
+                    nop                             nop
+                    nop                             ibne VI05, VI00, particleLoop
+                    nop                             nop
+                    nop                             xgkick VI03
+                    nop[E]                          nop
+                    nop                             nop
+                    nop                             b init
+                    nop                             nop
+		.align 4
+VU1Draw2D_Particles_CodeEnd:

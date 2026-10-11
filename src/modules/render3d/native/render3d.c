@@ -1,0 +1,62 @@
+#include <stdlib.h>
+#include <string.h>
+#include <athena/render3d.h>
+struct AthenaBatch3D { AthenaInstance3D **items; uint32_t count,capacity; };
+/* Why the last draw failed. Static strings only: no formatting per draw. */
+static const char *error_detail="";
+const char *athena_render3d_error_detail(void) { return error_detail; }
+void athena_render3d_set_error_detail(const char *detail) { error_detail=detail?detail:""; }
+/* The tint of the draws that follow: a linear RGB multiplier in [0,1], white by default. */
+static float draw_tint[3]={1,1,1};
+int athena_render3d_set_tint(float r,float g,float b) {
+    if(!(r>=0&&r<=1&&g>=0&&g<=1&&b>=0&&b<=1)) return -1; /* also rejects NaN */
+    draw_tint[0]=r; draw_tint[1]=g; draw_tint[2]=b; return 0;
+}
+void athena_render3d_get_tint(float out[3]) { out[0]=draw_tint[0]; out[1]=draw_tint[1]; out[2]=draw_tint[2]; }
+static AthenaRender3DStats frame_totals;
+void athena_render3d_stats_add(const AthenaRender3DStats *s) {
+    if(!s) return;
+    AthenaRender3DStats *t=&frame_totals;
+    t->submitted_objects+=s->submitted_objects; t->culled_objects+=s->culled_objects;
+    t->draw_passes+=s->draw_passes; t->triangles+=s->triangles; t->vu_batches+=s->vu_batches;
+    t->source_triangles+=s->source_triangles; t->clipped_triangles+=s->clipped_triangles;
+    t->rejected_triangles+=s->rejected_triangles; t->pipeline_passes+=s->pipeline_passes;
+    t->geometry_bytes+=s->geometry_bytes; t->guard_band_objects+=s->guard_band_objects;
+    t->near_clip_objects+=s->near_clip_objects; t->vu_morph_objects+=s->vu_morph_objects;
+    t->cpu_clip_objects+=s->cpu_clip_objects;
+}
+void athena_render3d_frame_stats(AthenaRender3DStats *out,int reset) {
+    if(out) *out=frame_totals;
+    if(reset) memset(&frame_totals,0,sizeof(frame_totals));
+}
+AthenaBatch3D *athena_batch3d_create(void) { return calloc(1,sizeof(AthenaBatch3D)); }
+void athena_batch3d_clear(AthenaBatch3D *b) {
+    if(!b) return;
+    for(uint32_t i=0;i<b->count;i++) athena_instance3d_release(b->items[i]);
+    b->count=0;
+}
+void athena_batch3d_destroy(AthenaBatch3D *b) {
+    if(!b) return;
+    athena_batch3d_clear(b); free(b->items); free(b);
+}
+int athena_batch3d_add(AthenaBatch3D *b,AthenaInstance3D *i) {
+    if(!b||!i||b->count>=ATHENA_MODEL3D_MAX_VERTICES) return -1;
+    if(b->count==b->capacity) {
+        uint32_t next=b->capacity?b->capacity*2:16;
+        void *items=realloc(b->items,next*sizeof(*b->items)); if(!items) return -2;
+        b->items=items; b->capacity=next;
+    }
+    b->items[b->count++]=i; athena_instance3d_retain(i); return 0;
+}
+uint32_t athena_batch3d_size(const AthenaBatch3D *b) { return b?b->count:0; }
+int athena_batch3d_draw_lit(AthenaBatch3D *b,AthenaCamera3D *c,const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *s) {
+    if(!b||!c||!s||(cull!=0&&cull!=1&&cull!=-1)) { athena_render3d_set_error_detail("invalid batch, camera or cull mode"); return -1; }
+    memset(s,0,sizeof(*s));
+    int owned=athena_render3d_group_begin()==0,result=0;
+    for(uint32_t n=0;n<b->count&&result>=0;n++) result=athena_render3d_draw_lit(b->items[n],c,lights,cull,s);
+    if(owned) athena_render3d_group_end();
+    return result<0?result:0;
+}
+int athena_batch3d_draw(AthenaBatch3D *b,AthenaCamera3D *c,AthenaRender3DCull cull,AthenaRender3DStats *s) {
+    return athena_batch3d_draw_lit(b,c,NULL,cull,s);
+}

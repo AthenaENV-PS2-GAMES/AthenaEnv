@@ -1,0 +1,13 @@
+EE_BIN = ../../bin/memory_accounting_ee.elf
+EE_OBJS = ../../.validation/memory-ee/test.o ../../.validation/memory-ee/memory.o
+EE_INCS = -I../../src/core/include
+EE_LIBS = -lc -lkernel
+all: $(EE_BIN)
+include $(PS2SDK)/samples/Makefile.pref
+include $(PS2SDK)/samples/Makefile.eeglobal
+../../.validation/memory-ee/test.o: memory_accounting.c
+	$(DIR_GUARD)
+	$(EE_C_COMPILE) -c $< -o $@
+../../.validation/memory-ee/memory.o: ../../src/core/memory.c
+	$(DIR_GUARD)
+	$(EE_C_COMPILE) -c $< -o $@

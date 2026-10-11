@@ -500,8 +500,17 @@ declare namespace Sprite {
      * `positions[2 * i + 1]` place instance i (and become its x and y);
      * without positions each draws at its own x and y. Rotated instances are
      * drawn one by one, keeping the order.
+     *
+     * With `{ stride: 3 }` the values are x, y and rotation per instance: the
+     * layout of Box2D's `world.readTransforms()`, so physics sprites need no
+     * loop in JavaScript:
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Sprite.drawAll(crates, transforms, { stride: 3 });
+     * ```
      */
-    function drawAll(instances: Instance[], positions?: Float32Array | number[]): void;
+    function drawAll(instances: Instance[], positions?: Float32Array | number[],
+        options?: { stride?: 2 | 3 }): void;
 
     /**
      * Draws the outline, origin and slices of every instance drawn from

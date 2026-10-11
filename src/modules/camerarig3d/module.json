@@ -1,0 +1,8 @@
+{
+  "id": "camerarig3d", "name": "CameraRig3D", "description": "Native Camera3D controllers: follow a Scene3D node with local or world offsets, orbit with limits, zoom and auto-rotation, frame-rate independent smoothing; advanced in one Loop system after the scene update.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/camerarig3d.c"],
+  "dependencies": {"modules": ["camera3d", "scene3d", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_camerarig3d.c"], "module_name": "CameraRig3D", "global_alias": "CameraRig3D", "init_func": "athena_camerarig3d_js_init", "cleanup_func": "athena_camerarig3d_js_cleanup"},
+  "types": "camerarig3d.d.ts"
+}

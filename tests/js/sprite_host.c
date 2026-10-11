@@ -26,7 +26,7 @@ typedef struct {
     GSSURFACE surface;
 } HostImage;
 
-static int draw_count, list_calls, list_sprites, quad_count;
+static int draw_count, list_calls, list_sprites, quad_count, triangle_count, particle_count;
 static float last_quad[16];
 static float last_draw[10];
 
@@ -72,6 +72,31 @@ void athena_image_draw_list(AthenaImage *image, float x, float y, prim_tex_sprit
 }
 
 /* Records turned frames: corners x, y and texels u, v, four each. */
+/* Particles3D's VU1 submission (particles3d_gs.c on the PS2). */
+struct AthenaParticle3DRecord;
+int athena_particles3d_submit(void *camera, AthenaImage *image, const float rect[4],
+    const struct AthenaParticle3DRecord *records, uint32_t count) {
+    (void)camera; (void)rect; (void)records;
+    if (athena_image_is_loaded(image))
+        particle_count += count;
+    return 0;
+}
+
+/* Particles2D's VU1 submission (particles2d_gs.c on the PS2). */
+struct AthenaParticle2DRecord;
+void athena_particles2d_submit(AthenaImage *image, const float rect[4],
+    const struct AthenaParticle2DRecord *records, uint32_t count) {
+    (void)rect; (void)records;
+    if (athena_image_is_loaded(image))
+        particle_count += count;
+}
+
+void athena_image_draw_triangles(AthenaImage *image, prim_tex_gouraud_triangle *list, int count) {
+    (void)list;
+    if (athena_image_is_loaded(image) && count > 0)
+        triangle_count += count;
+}
+
 void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[4],
     const float u[4], const float v[4], uint32_t color) {
     if (!athena_image_is_loaded(image))
@@ -374,6 +399,8 @@ static JSValue js_sprite_draws(JSContext *ctx, JSValueConst this_val, int argc,
     JS_SetPropertyStr(ctx, result, "listSprites", JS_NewInt32(ctx, list_sprites));
     JS_SetPropertyStr(ctx, result, "last", last);
     JS_SetPropertyStr(ctx, result, "quads", JS_NewInt32(ctx, quad_count));
+    JS_SetPropertyStr(ctx, result, "triangles", JS_NewInt32(ctx, triangle_count));
+    JS_SetPropertyStr(ctx, result, "particles", JS_NewInt32(ctx, particle_count));
     {
         JSValue quad = JS_NewArray(ctx);
 
@@ -381,7 +408,7 @@ static JSValue js_sprite_draws(JSContext *ctx, JSValueConst this_val, int argc,
             JS_SetPropertyUint32(ctx, quad, i, JS_NewFloat64(ctx, last_quad[i]));
         JS_SetPropertyStr(ctx, result, "lastQuad", quad);
     }
-    draw_count = list_calls = list_sprites = quad_count = 0;
+    draw_count = list_calls = list_sprites = quad_count = triangle_count = particle_count = 0;
     return result;
 }
 

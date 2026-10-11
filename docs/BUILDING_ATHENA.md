@@ -28,6 +28,80 @@ docker compose run --rm build
 
 The compiled binaries will be output to the `bin/` directory (`athena.elf` and `athena_pkd.elf`).
 
+<a id="wsl-com-docker-e-inspecao-do-toolchain"></a>
+
+### WSL com Docker e inspeção do toolchain
+
+No Windows, temos WSL disponível. Se o Podman não sustentar o build, use o
+Docker Engine na distribuição Ubuntu. Abra um shell WSL e entre no checkout:
+
+```powershell
+wsl -d Ubuntu
+```
+
+Dentro do WSL:
+
+```sh
+cd /mnt/c/Users/User/ath
+docker compose run --rm build
+docker compose run --rm host-tests
+docker compose run --rm js-tests
+docker compose run --rm shell
+```
+
+O serviço `shell` monta o checkout em `/src` e dá acesso às dependências
+instaladas na imagem. **Se precisar procurar uma definição nas dependências,
+use esse shell para inspecionar ps2dev, PS2SDK, gsKit, OpenVCL/masp e outros**:
+
+```sh
+printenv PS2DEV PS2SDK
+command -v mips64r5900el-ps2-elf-gcc
+command -v openvcl
+command -v masp
+grep -R -n 'GS_SETREG_TEST' "$PS2DEV/gsKit/include"
+grep -R -n 'dmaKit_wait' "$PS2DEV/gsKit/include"
+grep -R -n 'SyncDCache' "$PS2SDK/ee/include"
+find "$PS2DEV" -iname '*openvcl*' -o -iname '*masp*'
+```
+
+Prefira `rg` quando instalado; `grep` e `find` são o fallback no container.
+Confirme os headers e ferramentas da imagem efetivamente usada antes de
+adaptar chamadas do legado. Não é necessário instalar o SDK no Windows.
+
+Para localizar um PC de erro do PS2/PCSX2, preserve símbolos no ELF da mesma
+versão, seleção de módulos, runtime e flags do executável que falhou. Dentro
+do shell do toolchain, por exemplo:
+
+```sh
+make RUNTIME=quickjs EE_BIN_PREF=athena_symbols EE_STRIP=true
+PS2_CRASH_PC=0x15fadc # substituir pelo PC do log correspondente
+mips64r5900el-ps2-elf-addr2line -i -f -C -e bin/athena_symbols.elf "$PS2_CRASH_PC"
+```
+
+Um ELF recompilado após mudanças pode ter endereços diferentes; mantenha a
+cópia com símbolos de cada build que estiver validando.
+
+Neste ambiente também há a imagem local `localhost/ps2swf-dev:m0`, com
+ps2dev/PS2SDK e OpenVCL/masp. Ela foi usada para os builds iniciais da migração
+3D. Para reutilizá-la, se ainda estiver disponível, a partir do WSL:
+
+```sh
+docker run --rm -it --entrypoint /bin/sh -v "$PWD:/src" -w /src localhost/ps2swf-dev:m0
+# Dentro do container, após selecionar módulos no host:
+make -j4 RUNTIME=quickjs EE_BIN_PREF=athena_3d_js
+make -j4 RUNTIME=native APP_SRCS=samples/native/3d/main.c EE_BIN_PREF=athena_3d_native
+sh tests/host/run.sh
+```
+
+A imagem local é uma alternativa disponível neste ambiente; o Dockerfile do
+projeto continua definindo a imagem fixada para o fluxo padrão. Os testes
+QuickJS precisam do userland **i386** de `Dockerfile.jstests`; o ambiente
+64 bits do toolchain não o substitui. Na imagem local baseada em Alpine,
+a biblioteca ASan de host apresentou erro de linkedição; por isso os testes
+host usam UBSan, e a execução adicional com ASan ocorre na imagem i386.
+
+Para configurar a seleção e usar os exemplos 3D, veja [3D.md](3D.md).
+
 ---
 
 ## Building Locally (Advanced)

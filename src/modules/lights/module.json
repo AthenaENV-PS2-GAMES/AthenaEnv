@@ -1,0 +1,8 @@
+{
+  "id": "lights", "name": "Lights", "description": "Independent ambient and four directional lights, validated linear intensities, normalized world directions and revision tracking.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/lights.c"],
+  "dependencies": {"modules": [], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_lights.c"], "module_name": "Lights", "global_alias": "Lights", "init_func": "athena_lights_js_init"},
+  "types": "lights.d.ts"
+}

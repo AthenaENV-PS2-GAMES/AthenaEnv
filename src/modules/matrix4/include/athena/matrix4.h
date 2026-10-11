@@ -9,6 +9,7 @@ typedef struct __attribute__((aligned(16))) {
 
 void ath_matrix4_identity(AthenaMatrix4 *matrix);
 void ath_matrix4_copy(AthenaMatrix4 *out, const AthenaMatrix4 *in);
+/* Column-major, column vectors, out = a * b. Output may alias either input. */
 void ath_matrix4_multiply(AthenaMatrix4 *out, const AthenaMatrix4 *a,
     const AthenaMatrix4 *b);
 void ath_matrix4_apply(AthenaVector4 *out, const AthenaMatrix4 *matrix,

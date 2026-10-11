@@ -1,0 +1,32 @@
+{
+  "id": "savegame",
+  "name": "SaveGame",
+  "description": "Versioned, checksummed save slots on the Memory Card with atomic background writes, migrations, optional gzip (Archive) and the browser icon. JavaScript over a small C codec (CRC-32, UTF-8).",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/savegame_codec.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "memcard"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_savegame.c"
+    ],
+    "module_name": "SaveGameNative",
+    "init_func": "athena_savegame_js_init"
+  },
+  "js": {
+    "source": "js/savegame.js",
+    "module_name": "SaveGame",
+    "global_alias": "SaveGame"
+  },
+  "types": "savegame.d.ts"
+}

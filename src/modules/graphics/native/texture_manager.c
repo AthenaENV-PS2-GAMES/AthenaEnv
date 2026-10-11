@@ -42,6 +42,7 @@ struct SVramBlock {
 	GSSURFACE * tex;
 	struct SVramBlock * pNext;
 	struct SVramBlock * pPrev;
+
 };
 
 static struct SVramBlock * __head = NULL;
@@ -409,6 +410,7 @@ _blockCreate(unsigned int start, unsigned int size)
 
 	return block;
 }
+
 
 //---------------------------------------------------------------------------
 static inline void

@@ -1,0 +1,37 @@
+{
+  "id": "profiler",
+  "name": "Profiler",
+  "description": "CPU time scopes read from the EE cycle counter in C, per-frame counters, a 120-frame history with average, p95 and peak, Render3D frame totals with a C-clipper warning, and lines in the Debug overlay.",
+  "category": "System",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/profiler.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "loop",
+      "debug"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "native": {
+    "shutdown": "athena_profiler_module_shutdown"
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_profiler.c"
+    ],
+    "module_name": "ProfilerNative",
+    "init_func": "athena_profiler_js_init",
+    "cleanup_func": "athena_profiler_js_cleanup"
+  },
+  "js": {
+    "source": "js/profiler.js",
+    "module_name": "Profiler",
+    "global_alias": "Profiler"
+  },
+  "types": "profiler.d.ts"
+}

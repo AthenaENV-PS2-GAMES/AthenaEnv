@@ -209,6 +209,21 @@ static void test_channels(void) {
     athena_sfx_stop(loop, 23);
     CHECK(athena_sfx_is_playing(loop, 23) == 0 && voices[23].volume == 0, "stop mutes and releases");
     CHECK(athena_sfx_play(pop, 23) == 23, "channel reused after stop");
+    {   /* A voice token tells a voice from the next one on the same channel. */
+        uint32_t t = athena_sfx_voice_token(pop, 23);
+        CHECK(t != 0 && athena_sfx_voice_token(loop, 23) == 0 && athena_sfx_voice_token(pop, 22) == 0, "token only for the owner");
+        CHECK(athena_sfx_voice_token(NULL, 23) == 0 && athena_sfx_voice_token(pop, -1) == 0 && athena_sfx_voice_token(pop, 24) == 0, "token arguments");
+        /* A stopped loop frees its channel at once (a muted one-shot keeps it until it ends). */
+        CHECK(athena_sfx_play(loop, 20) == 20, "loop on 20");
+        uint32_t l = athena_sfx_voice_token(loop, 20);
+        athena_sfx_stop(loop, 20);
+        CHECK(l != 0 && athena_sfx_voice_token(loop, 20) == 0, "token ends with stop");
+        /* The SPU2 cannot key off: the channel is reusable once the stopped loop has finished its first pass. */
+        CHECK(athena_sfx_play(pop, 20) == -1, "a stopped loop holds its channel through the first pass");
+        sleep_ms(300);
+        CHECK(athena_sfx_play(pop, 20) == 20 && athena_sfx_voice_token(pop, 20) != l && athena_sfx_voice_token(pop, 20) != 0 &&
+            athena_sfx_voice_token(loop, 20) == 0, "another sample on the channel has a new token; the old owner has none");
+    }
 
     /* free() of a loop still sounding mutes its voice. */
     loop2 = load("loop.adp", &r);

@@ -1,11 +1,14 @@
+#include <athena/float_bits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <malloc.h>
+#include <math.h>
 
 #include <ath_env.h>
 #include <athena/module.h>
 
 #include <athena/matrix4.h>
+#include <athena/js/matrix4.h>
 #include "ath_matrix4.h"
 
 static JSClassID matrix4_class_id;
@@ -14,6 +17,19 @@ static AthenaMatrix4 *matrix4_from_value(JSContext *ctx, JSValueConst value) {
     AthenaMatrix4 *matrix = JS_GetOpaque2(ctx, value, matrix4_class_id);
     if (!matrix) JS_ThrowTypeError(ctx, "Invalid Matrix4 value");
     return matrix;
+}
+
+AthenaMatrix4 *athena_matrix4_from_value(JSContext *ctx, JSValueConst value) {
+    return matrix4_from_value(ctx, value);
+}
+
+JSValue athena_matrix4_to_value(JSContext *ctx, const AthenaMatrix4 *source) {
+    AthenaMatrix4 *copy=memalign(16,sizeof(*copy));
+    if(!copy) return JS_ThrowOutOfMemory(ctx);
+    *copy=*source;
+    JSValue object=JS_NewObjectClass(ctx,matrix4_class_id);
+    if(JS_IsException(object)) { free(copy); return object; }
+    JS_SetOpaque(object,copy); return object;
 }
 
 static void matrix4_finalizer(JSRuntime *rt, JSValue value) {
@@ -34,6 +50,10 @@ static JSValue matrix4_ctor(JSContext *ctx, JSValueConst target,
             if (JS_ToFloat32(ctx, &matrix->value[i], argv[i])) {
                 free(matrix);
                 return JS_EXCEPTION;
+            }
+            if (!athena_float_isfinite(matrix->value[i])) {
+                free(matrix);
+                return JS_ThrowRangeError(ctx, "Matrix4 values must be finite");
             }
         }
     }
@@ -77,12 +97,16 @@ static JSValue matrix4_from_array(JSContext *ctx, JSValueConst this_val,
     if (argc != 1) return JS_ThrowTypeError(ctx, "Matrix4.fromArray expects one argument");
     matrix = matrix4_from_value(ctx, this_val);
     if (!matrix) return JS_EXCEPTION;
+    AthenaMatrix4 next;
     for (uint32_t i = 0; i < 16; i++) {
         JSValue item = JS_GetPropertyUint32(ctx, argv[0], i);
-        int result = JS_ToFloat32(ctx, &matrix->value[i], item);
+        if (JS_IsException(item)) return JS_EXCEPTION;
+        int result = JS_ToFloat32(ctx, &next.value[i], item);
         JS_FreeValue(ctx, item);
         if (result) return JS_EXCEPTION;
+        if (!athena_float_isfinite(next.value[i])) return JS_ThrowRangeError(ctx,"Matrix4 values must be finite");
     }
+    *matrix=next;
     return JS_DupValue(ctx, this_val);
 }
 
@@ -215,7 +239,7 @@ static JSValue matrix4_equals_epsilon(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "Matrix4.equalsEpsilon expects two arguments");
     other = matrix4_from_value(ctx, argv[0]);
     if (!other) return JS_EXCEPTION;
-    if (JS_ToFloat32(ctx, &epsilon, argv[1]) || epsilon < 0.0f)
+    if (JS_ToFloat32(ctx, &epsilon, argv[1]) || !athena_float_isfinite(epsilon) || epsilon < 0.0f)
         return JS_ThrowRangeError(ctx, "Matrix4 epsilon must be non-negative");
     return JS_NewBool(ctx, ath_matrix4_equals_epsilon(matrix, other, epsilon));
 }
@@ -231,6 +255,7 @@ static JSValue matrix4_set_index(JSContext *ctx, JSValueConst this_val,
         return JS_ThrowRangeError(ctx, "Matrix4 index must be between 0 and 15");
     if (JS_ToFloat32(ctx, &value, argv[1]))
         return JS_EXCEPTION;
+    if (!athena_float_isfinite(value)) return JS_ThrowRangeError(ctx, "Matrix4 values must be finite");
     matrix->value[index] = value;
     return JS_DupValue(ctx, this_val);
 }

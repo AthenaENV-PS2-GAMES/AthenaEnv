@@ -164,12 +164,20 @@ static inline void put_u64(uint8_t *tab, uint64_t val)
 
 static inline uint32_t get_u32(const uint8_t *tab)
 {
+#ifdef PS2
+    /* Bytecode operands are unaligned. R5900 word-merge loads must not
+       determine the signedness of high-bit integer atoms in the n32 ABI. */
+    const volatile uint8_t *bytes = tab; /* Prevent load combining into LWL/LWR. */
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+#else
     return ((const struct packed_u32 *)tab)->v;
+#endif
 }
 
 static inline int32_t get_i32(const uint8_t *tab)
 {
-    return (int32_t)((const struct packed_u32 *)tab)->v;
+    return (int32_t)get_u32(tab);
 }
 
 static inline void put_u32(uint8_t *tab, uint32_t val)

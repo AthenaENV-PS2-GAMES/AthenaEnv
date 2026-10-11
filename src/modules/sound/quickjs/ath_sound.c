@@ -6,6 +6,7 @@
 
 #include <ath_env.h>
 #include <athena/sound.h>
+#include <athena/js/sound.h>
 #include <athena/js/job.h>
 
 #include "ath_sound.h"
@@ -559,6 +560,10 @@ static JSClassDef sfx_class = {
     "Sfx",
     .finalizer = sfx_finalizer,
 };
+
+AthenaSfx *athena_sfx_js_peek(JSValueConst value) {
+    return sfx_class_id ? JS_GetOpaque(value, sfx_class_id) : NULL;
+}
 
 static AthenaSfx *sfx_this(JSContext *ctx, JSValueConst value) {
     AthenaSfx *sfx = JS_GetOpaque(value, sfx_class_id);

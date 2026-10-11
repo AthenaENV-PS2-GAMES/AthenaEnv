@@ -9,6 +9,7 @@ cd "$(dirname "$0")/../.."
 CC=${CC:-gcc}
 OUT=${TMPDIR:-/tmp}/athena-host-tests
 mkdir -p "$OUT"
+sh tests/host/run_safety.sh
 CFLAGS="-std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
     -Wno-sign-compare -Werror -fsanitize=undefined -fsanitize-undefined-trap-on-error"
 
@@ -29,7 +30,7 @@ $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/n
 $CC $CFLAGS -Itests/host/stubs -Isrc/modules/sound/include -Isrc/modules/sound/native \
     -Isrc/modules/thread/include -Isrc/modules/thread/native \
     -o "$OUT/sound_sfx_test" tests/host/sound_sfx_test.c -lpthread -lm
-$CC $CFLAGS -Itests/host/stubs -Isrc/modules/video/include -Isrc/modules/video/native \
+$CC $CFLAGS -Itests/host/stubs -Isrc/modules/graphics/include -Isrc/modules/video/include -Isrc/modules/video/native \
     -o "$OUT/video_test" tests/host/video_test.c -lpthread
 $CC $CFLAGS -Isrc/modules/random/include -Isrc/modules/noise/include \
     -o "$OUT/random_noise_test" tests/host/random_noise_test.c \
@@ -70,6 +71,7 @@ $CC $CFLAGS -I"$B2/include" -o "$OUT/box2d_test" tests/host/box2d_test.c "$B2/na
 "$OUT/sprite_test"
 "$OUT/collision_test"
 "$OUT/box2d_test"
+sh tests/host/run_3d.sh
 
 # VU microprograms: each committed .vsm must be what OpenVCL makes of its
 # .vcl (the Makefile regenerates it only when the .vcl is newer). Line ends
@@ -87,6 +89,11 @@ if command -v openvcl > /dev/null && command -v masp > /dev/null; then
     echo "vcl: $vcl_checks programs match their .vsm"
 else
     echo "vcl: openvcl or masp not found, .vsm check skipped"
+fi
+# OpenVCL scheduling hazards in the committed .vsm (values lost across a
+# loop's back edge, two slots writing one register in a cycle).
+if command -v python3 > /dev/null; then
+    python3 tools/check_vsm_loops.py $(find src -name '*.vsm') || exit 1
 fi
 
 # wav2adp: the C port (make adp) must write the same bytes as tools/wav2adp.js

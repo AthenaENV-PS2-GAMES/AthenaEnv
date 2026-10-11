@@ -3743,31 +3743,52 @@ static int sprite_position_at(JSContext *ctx, const SpritePositions *positions,
 }
 
 /*
- * Sprite.drawAll(instances, positions?): draws every instance in order, in
- * few GS packets: instances of one texture in a row share a packet (128 per
- * chunk) and those outside the camera are skipped. positions[2i] and
- * positions[2i + 1] place instance i (and become its x and y); without
- * positions each draws at its own x and y. Rotated instances go alone.
+ * Sprite.drawAll(instances, positions?, options?): draws every instance in
+ * order, in few GS packets: instances of one texture in a row share a packet
+ * (128 per chunk) and those outside the camera are skipped. positions place
+ * instance i at [stride * i] and [stride * i + 1] (and become its x and y);
+ * with options.stride 3 the third value becomes its rotation, which is the
+ * layout of Box2D's world.readTransforms(). Without positions each draws at
+ * its own x and y. Rotated instances go alone.
  */
 static JSValue sprite_draw_all(JSContext *ctx, JSValueConst this_val, int argc,
     JSValueConst *argv) {
     const char *name = "Sprite.drawAll";
     JSValueConst list = sprite_arg(argc, argv, 0), positions_value = sprite_arg(argc, argv, 1);
+    JSValueConst options = sprite_arg(argc, argv, 2);
     SpritePositions positions;
     bool has_positions = !JS_IsUndefined(positions_value), any_debug = state.debug;
-    uint32_t count, i;
+    uint32_t count, i, stride = 2;
     int result = 0;
 
     if (sprite_main(ctx, name))
         return JS_EXCEPTION;
     if (!JS_IsArray(ctx, list))
         return JS_ThrowTypeError(ctx, "%s expects an array of Sprite.Instance", name);
+    if (!JS_IsUndefined(options)) {
+        JSValue value;
+        int32_t requested = 0;
+
+        if (!JS_IsObject(options))
+            return JS_ThrowTypeError(ctx, "%s options must be an object", name);
+        value = JS_GetPropertyStr(ctx, options, "stride");
+        if (JS_IsException(value))
+            return JS_EXCEPTION;
+        if (!JS_IsUndefined(value)) {
+            int bad = !JS_IsNumber(value) || JS_ToInt32(ctx, &requested, value) ||
+                (requested != 2 && requested != 3);
+            JS_FreeValue(ctx, value);
+            if (bad)
+                return JS_ThrowRangeError(ctx, "%s options.stride must be 2 (x, y) or 3 (x, y, rotation)", name);
+            stride = (uint32_t)requested;
+        }
+    }
     if (sprite_length(ctx, list, &count) ||
         (has_positions && sprite_positions(ctx, positions_value, &positions, name)))
         return JS_EXCEPTION;
-    if (has_positions && positions.length / 2 < count)
-        return JS_ThrowRangeError(ctx, "%s: %u instances need %u positions, got %u", name,
-            (unsigned)count, (unsigned)count * 2, (unsigned)positions.length);
+    if (has_positions && positions.length / stride < count)
+        return JS_ThrowRangeError(ctx, "%s: %u instances need %u values, got %u", name,
+            (unsigned)count, (unsigned)count * stride, (unsigned)positions.length);
     athena_sprite_batch_begin(&state.batch);
     for (i = 0; i < count; i++) {
         JSValue item = JS_GetPropertyUint32(ctx, list, i);
@@ -3787,8 +3808,10 @@ static JSValue sprite_draw_all(JSContext *ctx, JSValueConst this_val, int argc,
             break;
         }
         if ((has_positions &&
-                (sprite_position_at(ctx, &positions, 2 * i, &sprite->draw.x, name) ||
-                sprite_position_at(ctx, &positions, 2 * i + 1, &sprite->draw.y, name))) ||
+                (sprite_position_at(ctx, &positions, stride * i, &sprite->draw.x, name) ||
+                sprite_position_at(ctx, &positions, stride * i + 1, &sprite->draw.y, name) ||
+                (stride == 3 &&
+                    sprite_position_at(ctx, &positions, stride * i + 2, &sprite->draw.rotation, name)))) ||
             instance_image(ctx, sprite, &image, name)) {
             result = -1;
             break;
@@ -3853,7 +3876,7 @@ static const JSCFunctionListEntry sprite_funcs[] = {
     JS_CFUNC_DEF("setDebug", 1, sprite_set_debug),
     JS_CFUNC_DEF("update", 1, sprite_update_all),
     JS_CFUNC_DEF("getStats", 0, sprite_get_stats),
-    JS_CFUNC_DEF("drawAll", 2, sprite_draw_all),
+    JS_CFUNC_DEF("drawAll", 3, sprite_draw_all),
 };
 
 static JSValue sprite_class(JSContext *ctx, JSClassID *class_id, const JSClassDef *def,

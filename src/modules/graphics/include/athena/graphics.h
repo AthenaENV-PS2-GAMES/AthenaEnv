@@ -2,6 +2,7 @@
 #define GRAPHICS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #include <kernel.h>
 
@@ -265,6 +266,7 @@ typedef enum {
 uint64_t get_register(int reg_id);
 
 void set_register(int reg_id, uint64_t data);
+void set_register_force(int reg_id, uint64_t data);
 
 uint64_t get_screen_param(uint8_t param);
 
@@ -369,6 +371,9 @@ typedef u64 Color;
 
 void init_graphics();
 void graphics_service_init();
+/* Drains VIF/GIF and waits for raster completion before releasing/reusing VRAM.
+ * Main thread only; does not flip or wait for VSync. */
+void graphics_wait_idle(void);
 
 void clearScreen(Color color);
 
@@ -414,6 +419,9 @@ typedef enum {
 
 int load_image_ex(GSSURFACE* image, const char* path, bool delayed,
 	AthenaImageLoadError *error);
+/* load_image_ex() from memory: PNG, JPEG or BMP bytes, borrowed for the call. */
+int load_image_memory_ex(GSSURFACE* image, const void* data, size_t size,
+	bool delayed, AthenaImageLoadError *error);
 int load_image(GSSURFACE* image, const char* path, bool delayed);
 
 void draw_image(GSSURFACE* source, float x, float y, float width, float height, float startx, float starty, float endx, float endy, Color color);
@@ -529,6 +537,11 @@ typedef struct {
 void draw_point_list(float x, float y, prim_point *list, int list_size);
 
 void draw_line_list(float x, float y, prim_line *list, int list_size);
+/* Preprojected pixel-space segments. Ignores the 2D view; caller guarantees
+ * finite coordinates in [-16383,16383]. Same half-away-from-zero pixel
+ * rounding, color, scissor and packet ownership as draw_line_list(). */
+#include <athena/graphics/screen_lines.h>
+void draw_screen_line_list(const AthenaScreenLine *list, int list_size);
 
 void draw_line_gouraud_list(float x, float y, prim_gouraud_line *list, int list_size);
 

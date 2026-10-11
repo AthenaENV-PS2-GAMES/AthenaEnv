@@ -540,6 +540,16 @@ function batches({ grid }) {
         Sprite.drawAll([a, b], [1, 2, 3, 4]);
         check("array positions", __spriteDraws().listSprites === 2 && b.x === 3);
 
+        // stride 3: x, y, rotation per instance, as Box2D's readTransforms().
+        Sprite.drawAll([a, b], new Float32Array([7, 8, 0, 9, 10, 0.25]), { stride: 3 });
+        d = __spriteDraws();
+        check("stride 3 places and turns", a.x === 7 && b.y === 10 && b.rotation === 0.25 && a.rotation === 0 &&
+            d.listSprites === 1 && d.count === 1);
+        b.rotation = 0;
+        throws("stride 4", () => Sprite.drawAll([a], new Float32Array(4), { stride: 4 }), RangeError);
+        throws("stride 3 needs 3 values each", () => Sprite.drawAll([a, b], new Float32Array(5), { stride: 3 }), RangeError);
+        throws("rotation must be finite", () => Sprite.drawAll([a], new Float32Array([0, 0, NaN]), { stride: 3 }), RangeError);
+
         c.draw();
         d = __spriteDraws();
         check("draw() at its own x, y", d.count === 1 && d.last[0] === 50 && d.last[1] === 60);

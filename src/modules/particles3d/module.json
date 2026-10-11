@@ -1,0 +1,8 @@
+{
+  "id": "particles3d", "name": "Particles3D", "description": "Native 3D particle emitters (cone emission, gravity, drag, size/colour over life) integrated in C and drawn as camera-facing billboards by a VU1 program, depth tested against the 3D scene without writing depth.",
+  "category": "Graphics", "version": "1.0.0", "default": false,
+  "sources": ["native/particles3d.c", "native/particles3d_gs.c", "vu1/draw_3D_billboards.vsm"],
+  "dependencies": {"modules": ["image", "graphics", "camera3d", "loop"], "iop": [], "ee_libs": []},
+  "quickjs": {"sources": ["quickjs/ath_particles3d.c"], "module_name": "Particles3D", "global_alias": "Particles3D", "init_func": "athena_particles3d_js_init", "cleanup_func": "athena_particles3d_js_cleanup"},
+  "types": "particles3d.d.ts"
+}

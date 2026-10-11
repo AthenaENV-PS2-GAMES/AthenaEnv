@@ -99,9 +99,27 @@ test("memory APIs return non-negative values", function() {
     assert(typeof stats.core === "number", "core must be numeric");
     assert(typeof stats.nativeStack === "number", "nativeStack must be numeric");
     assert(typeof stats.allocs === "number", "allocs must be numeric");
+    assert(typeof stats.allocsPeak === "number" && stats.allocsPeak >= stats.allocs,
+        "allocsPeak must be numeric and at least the current allocations");
+    assert(Number.isInteger(stats.allocationFailures) && stats.allocationFailures >= 0,
+        "allocationFailures must be a non-negative integer");
     assert(typeof stats.used === "number" && stats.used >= 0, "used must be non-negative");
+    assert(stats.heapReserved >= stats.heapAllocated, "heapReserved must include heapAllocated");
+    assert(stats.heapOverhead >= 0 && stats.heapFree >= 0, "heap metrics must be non-negative");
+    assert(stats.heapFreeChunks >= 0 && stats.heapTopFree <= stats.heapFree,
+        "free chunk metrics must be consistent");
+    assert(stats.heapNonTopFree === stats.heapFree - stats.heapTopFree,
+        "non-top free bytes must be the remainder");
     assert(System.getUsedMemory() >= 0, "getUsedMemory must be non-negative");
     assert(System.getFreeMemory() >= 0, "getFreeMemory must be non-negative");
+});
+
+test("native memory headroom returns a QuickJS limit", function() {
+    const limit = System.setNativeMemoryHeadroom(2 * 1024 * 1024);
+    assert(typeof limit === "number" && limit > 0, "memory limit must be positive");
+    let threw = false;
+    try { System.setNativeMemoryHeadroom(-1); } catch (e) { threw = true; }
+    assert(threw, "negative native headroom must throw");
 });
 
 test("clock APIs return monotonic values", function() {

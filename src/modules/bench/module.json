@@ -1,0 +1,12 @@
+{
+  "id": "bench",
+  "name": "Bench",
+  "description": "Frame-paced benchmarks with native timing, raw samples, average/p95/peak, batch CPU budgets, preparation/cleanup hooks, diagnostic snapshots, cancellation and JSON checkpoints. Written in JavaScript.",
+  "category": "System",
+  "version": "1.1.0",
+  "required": false,
+  "default": false,
+  "dependencies": { "modules": ["loop", "profiler"], "iop": [], "ee_libs": [] },
+  "js": { "source": "js/bench.js", "module_name": "Bench", "global_alias": "Bench" },
+  "types": "bench.d.ts"
+}

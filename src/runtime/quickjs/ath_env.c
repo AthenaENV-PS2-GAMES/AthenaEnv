@@ -356,7 +356,12 @@ AthenaRunStatus athena_runtime_last_run(const char **script, const char **error,
 
 const char* run_script(const char* script, bool isBuffer)
 {
-    size_t memoryLimit = (GetMemorySize() - get_used_memory()) >> 1;
+    if (get_stack_size() <= MAIN_STACK_RESERVE)
+        return "AthenaError: Main stack must exceed the 24 KiB native reserve";
+    size_t total_memory = GetMemorySize(), used_memory = get_used_memory();
+    if (used_memory >= total_memory)
+        return "AthenaError: No memory available for the JavaScript runtime";
+    size_t memoryLimit = (total_memory - used_memory) >> 1;
 
     dbgprintf("\n[AthenaCore] Starting QuickJS runtime...\n");
     /*

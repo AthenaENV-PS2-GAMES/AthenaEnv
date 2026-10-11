@@ -1,0 +1,147 @@
+		.vu
+		.align 4
+		.global	VU1Draw3D_Billboards_CodeStart
+		.global	VU1Draw3D_Billboards_CodeEnd
+VU1Draw3D_Billboards_CodeStart:
+                    add.zw VF10, VF00, VF00         lq VF08, 7(VI00)
+                    ftoi4.xyzw VF11, VF08           lq VF05, 4(VI00)
+                    nop                             lq VF01, 0(VI00)
+                    nop                             lq VF02, 1(VI00)
+                    nop                             lq VF03, 2(VI00)
+                    nop                             lq VF04, 3(VI00)
+                    nop                             lq VF06, 5(VI00)
+                    nop                             lq VF07, 6(VI00)
+                    nop                             lq VF09, 8(VI00)
+                    nop                             mr32 VF08, VF11
+                    nop                             loi 0x45000000
+                    addi.xy VF10, VF00, i           fcset 0x000000
+                    nop                             nop
+                    nop                             nop
+                    nop                             mr32 VF12, VF08
+                    add.xyz VF10, VF05, VF10        move VF08, VF11
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    max.y VF08, VF12, VF12          move VF13, VF12
+                    max.y VF13, VF11, VF11          nop
+init:
+                    nop                             xtop VI02
+                    nop                             lq VF14, 0(VI02)
+                    nop                             iaddiu VI02, VI02, 1
+                    nop                             iaddiu VI03, VI02, 89
+                    nop                             xitop VI01
+                    nop                             sq VF14, 0(VI03)
+                    nop                             iaddiu VI05, VI01, 0x7fff
+                    nop                             iaddiu VI05, VI05, 0x01
+                    nop                             isw.x VI05, 0(VI03)
+                    nop                             iaddiu VI04, VI03, 1
+                    nop                             iadd VI05, VI00, VI01
+particleLoop:
+                    nop                             lq VF14, 0(VI02)
+                    nop                             move.w VF18, VF00
+                    nop                             move.w VF19, VF00
+                    nop                             move.w VF20, VF00
+                    mulw.xyz VF16, VF06, VF14w      lq VF15, 1(VI02)
+                    mulw.xyz VF17, VF07, VF14w      move.w VF21, VF00
+                    nop                             nop
+                    nop                             nop
+                    sub.xyz VF22, VF14, VF16        nop
+                    add.xyz VF23, VF14, VF16        nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF18, VF22, VF17        nop
+                    sub.xyz VF19, VF22, VF17        nop
+                    add.xyz VF20, VF23, VF17        nop
+                    sub.xyz VF21, VF23, VF17        nop
+                    mulax.xyzw ACC, VF01, VF18x     nop
+                    madday.xyzw ACC, VF02, VF18y    nop
+                    maddaz.xyzw ACC, VF03, VF18z    nop
+                    maddw.xyzw VF14, VF04, VF18w    nop
+                    mulax.xyzw ACC, VF01, VF19x     nop
+                    madday.xyzw ACC, VF02, VF19y    nop
+                    maddaz.xyzw ACC, VF03, VF19z    nop
+                    maddw.xyzw VF16, VF04, VF19w    nop
+                    mulax.xyzw ACC, VF01, VF20x     nop
+                    madday.xyzw ACC, VF02, VF20y    nop
+                    maddaz.xyzw ACC, VF03, VF20z    nop
+                    maddw.xyzw VF17, VF04, VF20w    nop
+                    mulax.xyzw ACC, VF01, VF21x     nop
+                    madday.xyzw ACC, VF02, VF21y    nop
+                    maddaz.xyzw ACC, VF03, VF21z    nop
+                    maddw.xyzw VF22, VF04, VF21w    nop
+                    mul.xyz VF23, VF14, VF09        nop
+                    mul.xyz VF24, VF16, VF09        nop
+                    mul.xyz VF25, VF17, VF09        nop
+                    mul.xyz VF26, VF22, VF09        nop
+                    clipw.xyz VF23, VF14w           nop
+                    clipw.xyz VF24, VF16w           nop
+                    clipw.xyz VF25, VF17w           nop
+                    clipw.xyz VF26, VF22w           nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             fcand VI01, 0xffffff
+                    nop                             div q, VF00w, VF14w
+                    nop                             iaddiu VI06, VI01, 0x7fff
+                    nop                             mfir.w VF27, VI00
+                    nop                             mfir.w VF28, VI00
+                    nop                             mfir.w VF29, VI06
+                    nop                             mfir.w VF30, VI06
+                    nop                             sq VF15, 0(VI04)
+                    nop                             sq VF11, 1(VI04)
+                    mulq.xyz VF27, VF14, q          sq VF08, 3(VI04)
+                    nop                             div q, VF00w, VF16w
+                    nop                             sq VF13, 5(VI04)
+                    nop                             sq VF12, 7(VI04)
+                    mul.xyz VF27, VF27, VF05        iaddiu VI02, VI02, 2
+                    nop                             iaddi VI05, VI05, -1
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF27, VF27, VF10        nop
+                    mulq.xyz VF28, VF16, q          nop
+                    nop                             div q, VF00w, VF17w
+                    nop                             nop
+                    ftoi4.xy VF27, VF27             nop
+                    mul.xyz VF28, VF28, VF05        nop
+                    ftoi0.z VF27, VF27              nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF28, VF28, VF10        nop
+                    mulq.xyz VF29, VF17, q          sq VF27, 2(VI04)
+                    nop                             div q, VF00w, VF22w
+                    nop                             nop
+                    ftoi4.xy VF28, VF28             nop
+                    mul.xyz VF29, VF29, VF05        nop
+                    ftoi0.z VF28, VF28              nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF29, VF29, VF10        nop
+                    mulq.xyz VF30, VF22, q          sq VF28, 4(VI04)
+                    nop                             nop
+                    nop                             nop
+                    ftoi4.xy VF29, VF29             nop
+                    mul.xyz VF30, VF30, VF05        nop
+                    ftoi0.z VF29, VF29              nop
+                    nop                             nop
+                    nop                             nop
+                    add.xyz VF30, VF30, VF10        nop
+                    nop                             sq VF29, 6(VI04)
+                    nop                             nop
+                    nop                             nop
+                    ftoi4.xy VF30, VF30             nop
+                    ftoi0.z VF30, VF30              nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             nop
+                    nop                             sq VF30, 8(VI04)
+                    nop                             iaddiu VI04, VI04, 9
+                    nop                             nop
+                    nop                             ibne VI05, VI00, particleLoop
+                    nop                             nop
+                    nop                             xgkick VI03
+                    nop[E]                          nop
+                    nop                             nop
+                    nop                             b init
+                    nop                             nop
+		.align 4
+VU1Draw3D_Billboards_CodeEnd:

@@ -14,6 +14,7 @@
 #include <athena/graphics/owl_packet.h>
 
 #include <athena/graphics/texture_manager.h>
+#include <athena/graphics/sync.h>
 
 static const u64 BLACK_RGBAQ   = GS_SETREG_RGBAQ(0x00,0x00,0x00,0x80,0x00);
 
@@ -58,7 +59,10 @@ static uint8_t saved_depth_method[2] = { DEPTH_ALWAYS, DEPTH_ALWAYS };
 static bool saved_depth_method_valid[2] = { false, false };
 static bool graphics_service_initialized;
 
-#define OWL_PACKET_BUFFER_SIZE 2048
+#ifndef ATHENA_OWL_PACKET_QWORDS
+#define ATHENA_OWL_PACKET_QWORDS 2048
+#endif
+#define OWL_PACKET_BUFFER_SIZE ATHENA_OWL_PACKET_QWORDS
 
 static owl_qword owl_packet_buffer[OWL_PACKET_BUFFER_SIZE] qw_aligned = { 0 };
 
@@ -652,6 +656,7 @@ uint64_t get_screen_param(uint8_t param) {
 
 void set_finish()
 {
+    graphics_finish_begin();
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 4);
  
 	owl_add_cnt_tag(packet, 3, 0);
@@ -668,6 +673,11 @@ void set_finish()
 
 void set_register(int reg_id, uint64_t data) {
 	if (gs_reg_cache[reg_id] == data) return;
+	set_register_force(reg_id, data);
+}
+
+/* Direct texture writers (for example TileMap) can bypass the cache. */
+void set_register_force(int reg_id, uint64_t data) {
 
 	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 4);
  
@@ -704,53 +714,12 @@ uint64_t get_register(int reg_id) {
 	return gs_reg_cache[reg_id];
 }
 
+#include "page_clear.h"
+
 void page_clear(Color color) {
-	const uint32_t page_count = ((gsGlobal->Width + 63) / 64) *
-		((gsGlobal->Height + 31) / 32);
-
-	owl_packet *packet = owl_query_packet(CHANNEL_VIF1, 11+page_count);
-
-	owl_add_cnt_tag(packet, 10+page_count, 0);
-
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
-	owl_add_uint(packet, VIF_CODE(9+page_count, 0, VIF_DIRECT, 0)); // 3 giftags
-
-	owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(4, 1, NULL, 1, 0, 0, 1));
-
-	owl_add_tag(packet, GS_TEST_1+gsGlobal->PrimContext, GS_SETREG_TEST(0, 0, 0, 0, 0, 0, 1, 1)); // Ignore cache because it is a single operation
-	//owl_add_tag(packet, GS_SCISSOR_1, GS_SETREG_SCISSOR(0, 64 - 1, 0, 2048 - 1));
-	owl_add_tag(packet, GS_XYOFFSET_1+gsGlobal->PrimContext, GS_SETREG_XYOFFSET(0, 0));
-
-	// Clear
-	owl_add_tag(packet, GS_RGBAQ, color);
-	owl_add_tag(packet, GS_PRIM, VU_GS_PRIM(GS_PRIM_PRIM_SPRITE, 0, 0, 0, 0, 0, 0, gsGlobal->PrimContext, 0));
-
-	owl_add_tag(packet, GS_XYZ2 | (GS_XYZ2 << 4), VU_GS_GIFTAG(page_count, 1, NULL, 1, 0, 1, 2));
-
-	for (int i = 0; i < gsGlobal->Width; i += 64)
-	{
-		for (int j = 0; j < gsGlobal->Height; j += 32)
-		{
-			asm volatile ( 	
-				"pcpyld   $7,     %[xy1],        %[xy2]      \n"
-				"psllh    $7,     $7,            4           \n"
-				"sq       $7,     0x00(%[ptr])               \n"
-				"daddiu   %[ptr], %[ptr],        0x10        \n" // packet->ptr++;
-				 : [ptr] "+r" (packet->ptr) : [xy1] "r" (GS_SETREG_XYZ(i, j, 0)), [xy2] "r" (GS_SETREG_XYZ(i+64, j+32, 0)): "$7", "memory");
-
-			//owl_add_tag(packet, GS_XYZ2, GS_SETREG_XYZ(i << 4, j << 4, 0));
-			//owl_add_tag(packet, GS_XYZ2, GS_SETREG_XYZ((i + 64) << 4, (j + 32) << 4, 0));
-		}
-	}
-
-	owl_add_tag(packet, GIF_AD, VU_GS_GIFTAG(2, 1, NULL, 0, 0, 0, 1));
-	
-	owl_add_tag(packet, GS_TEST_1+gsGlobal->PrimContext,
-		get_register(GS_CACHE_TEST+gsGlobal->PrimContext));
-	owl_add_tag(packet, GS_XYOFFSET_1+gsGlobal->PrimContext,
-		get_register(GS_CACHE_XYOFFSET+gsGlobal->PrimContext));
+    owl_page_clear(gsGlobal, color,
+        get_register(GS_CACHE_TEST + gsGlobal->PrimContext),
+        get_register(GS_CACHE_XYOFFSET + gsGlobal->PrimContext));
 }
 
 void clearScreen(Color color)
@@ -935,10 +904,8 @@ static void flipScreenDoubleBuffering()
 
 	sync_screen(gsGlobal);
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -959,10 +926,8 @@ static void flipScreenDoubleBufferingPerf()
 
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -1013,10 +978,8 @@ static void flipScreenDoubleBufferingNoVSync()
 	set_finish();
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 	flip_screen(gsGlobal);
@@ -1034,10 +997,8 @@ static void flipScreenDoubleBufferingPerfNoVSync()
 
 	owl_flush_packet();
 
-	if(!gsGlobal->FirstFrame)
-		while(!(GS_CSR_FINISH));
-
-	GS_SETREG_CSR_FINISH(1);
+    graphics_finish_wait();
+	graphics_frame_finished();
 
 	gsGlobal->FirstFrame = GS_SETTING_OFF;
 
@@ -1544,6 +1505,7 @@ fail:
 }
 
 int setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 field, bool zbuffering, int psmz, bool double_buffering, uint8_t pass_count) {
+    if(draw_buffer.Width) graphics_wait_idle();
 	gsGlobal->Mode = mode;
 	gsGlobal->Width = width;
 	if ((interlace == GS_INTERLACED) && (field == GS_FRAME))

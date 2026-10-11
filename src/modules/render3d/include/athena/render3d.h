@@ -1,0 +1,132 @@
+#ifndef ATHENA_RENDER3D_H
+#define ATHENA_RENDER3D_H
+#include <athena/model3d.h>
+#include <athena/camera3d.h>
+#include <athena/lights.h>
+typedef struct AthenaBatch3D AthenaBatch3D;
+typedef struct {
+    /* submitted includes culled objects; triangles counts output sent to VU1.
+     * draw_passes counts accepted objects; pipeline_passes counts the GS/VU1
+     * passes actually emitted (barriers, program, camera and GS state), which
+     * a group shares among consecutive objects of the same pipeline. */
+    uint32_t submitted_objects,culled_objects,draw_passes,triangles,vu_batches;
+    uint32_t source_triangles,clipped_triangles,rejected_triangles,pipeline_passes;
+    /* Stream payload sent inline or by REF, including per-chunk padding and
+     * skin joints/weights as applicable.
+     * Excludes tags, constants, texture/program uploads, GS state and 2D. */
+    uint64_t geometry_bytes;
+    /* Objects crossing the screen edges drawn by VU1 without clipping: inside
+     * the GS guard band (see athena_render3d_guard_band()). */
+    uint32_t guard_band_objects;
+    /* Objects crossing the near plane (inside the guard band otherwise)
+     * clipped on VU1 by vu1/draw_3D_near.vcl. Their triangles count as
+     * submitted: the VU1 output is not read back. */
+    uint32_t near_clip_objects;
+    /* Meshes with morph targets blended on VU1 (vu1/draw_3D_morph.vcl). */
+    uint32_t vu_morph_objects;
+    /* Objects crossing the frustum beyond the guard band, clipped triangle by
+     * triangle in C on the EE (render3d_clip.c): the expensive path, e.g. a
+     * large mesh around the camera. Split such meshes into smaller ones. */
+    uint32_t cpu_clip_objects;
+} AthenaRender3DStats;
+/* Frame totals: the JS draw entry points (Render3D.draw, Batch.draw,
+ * Scene3D draw) add each call's stats with stats_add(); frame_stats() copies
+ * the totals since the last reset and, when reset is nonzero, clears them.
+ * Main thread only. */
+void athena_render3d_stats_add(const AthenaRender3DStats *stats);
+void athena_render3d_frame_stats(AthenaRender3DStats *out,int reset);
+/* Tint: a linear RGB multiplier in [0,1] (white by default) that every draw after the call applies
+ * to its final vertex RGB, after lighting and before fog: result = clamp(color * lighting) * tint,
+ * and color * tint for UNLIT. It does not alter the mesh's immutable colors, costs one constant
+ * quad per object (sent only when it changes within a pass) and no VU cycles, and is global state:
+ * set it before each draw or group of draws that needs a different one, and restore white.
+ * Texture alpha and vertex alpha are untouched. -1 (state unchanged) when a component is not in
+ * [0,1]. Main thread only. */
+int athena_render3d_set_tint(float r,float g,float b);
+void athena_render3d_get_tint(float out[3]);
+/* The guard band factor of the current screen mode: how far beyond the
+ * screen (in screen widths/heights from the centre, at least 1) primitives
+ * still fit the GS's coordinate range with a margin. 1 without a GS. */
+float athena_render3d_guard_band(void);
+/* Opaque unlit/diffuse triangle lists, optionally textured; no transparent sort.
+ * draw never advances game state. Immutable mesh streams are retained until
+ * DMA consumes them; temporary inputs are copied into the owned DMA ring,
+ * so releasing mesh/instance after draw cannot invalidate pending submission.
+ * Precise homogeneous clipping in C for intersecting object bounds; VU1
+ * transforms fully contained objects. Clipping uses fixed scratch buffers.
+ * GS TEST/ZBUF and textured TEX0/TEX1/CLAMP are restored; Screen needs depth.
+ * Stats accumulate in draw(); batch_draw() resets them for the batch.
+ * A DIFFUSE model whose linear part is all zero (scale 0, a common way to
+ * hide an object) counts as culled instead of failing; an UNLIT one
+ * rasterizes nothing. */
+typedef enum { ATHENA_RENDER3D_CULL_NONE=0, ATHENA_RENDER3D_CULL_BACK=1,
+    ATHENA_RENDER3D_CULL_FRONT=-1 } AthenaRender3DCull;
+int athena_render3d_draw(AthenaInstance3D *instance,AthenaCamera3D *camera,
+    AthenaRender3DCull cull,AthenaRender3DStats *stats);
+/* Borrowed lights, snapshotted into the packet. NULL means black ambient and
+ * no directional lights; unlit materials ignore lights. No implicit updates. */
+int athena_render3d_draw_lit(AthenaInstance3D *instance,AthenaCamera3D *camera,
+    const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *stats);
+/* Same pass with an explicit model matrix (e.g. a Scene3D world transform).
+ * Matrix is copied; mesh streams may be retained until DMA consumes them. */
+int athena_render3d_draw_mesh(const AthenaMesh3D *mesh,const AthenaMatrix4 *model,
+    AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,
+    AthenaRender3DStats *stats);
+/* draw_mesh() for streams the caller owns, such as vertices skinned on the CPU
+ * this frame: the view (positions, colors, normals, UVs, bounds, material) is
+ * copied into the packet during the call, so its buffers can be reused. Joints
+ * and weights in the view are ignored. */
+int athena_render3d_draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *model,
+    AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,
+    AthenaRender3DStats *stats);
+/* Morph targets blended on VU1: weights has view->target_count entries;
+ * view->minimum/maximum must bound the morphed mesh (the conservative morph
+ * box). Returns 1, drawing nothing, when VU1 cannot take it: normal deltas,
+ * more than ATHENA_RENDER3D_MORPH_TARGETS nonzero weights, or bounds not
+ * inside the GS guard band (crossing near/far); the caller then blends on
+ * the EE and draws the result with athena_render3d_draw_view(). */
+#define ATHENA_RENDER3D_MORPH_TARGETS 4u
+int athena_render3d_draw_morph(const AthenaMesh3DView *view,const AthenaMatrix4 *model,const float *weights,
+    AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *stats);
+/* Skinned meshes deformed on VU1 (vu1/draw_3D_skinned.vcl): palette[j] is
+ * world(joint j) * inverse_bind, in world space, for joint_count joints
+ * (<= ATHENA_RENDER3D_SKIN_JOINTS). The caller has proved the deformed mesh
+ * inside the frustum (conservative bounds); the view needs joints, weights
+ * and normals, plus UVs when textured. Other skinned draws deform on the EE and use
+ * draw_view(). Returns -1 for those inputs. */
+#define ATHENA_RENDER3D_SKIN_JOINTS 24u
+int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *view,const AthenaMatrix4 *palette,
+    uint32_t joint_count,AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,
+    AthenaRender3DStats *stats);
+/* draw_mesh() for a caller that already proved the mesh bounds under model
+ * fully inside the camera frustum, e.g. a conservative world AABB tested
+ * INSIDE. Skips the per-object frustum test and never clips; passing a mesh
+ * that is not contained draws primitives outside the guard band. */
+int athena_render3d_draw_mesh_contained(const AthenaMesh3D *mesh,const AthenaMatrix4 *model,
+    AthenaCamera3D *camera,const AthenaLights *lights,AthenaRender3DCull cull,
+    AthenaRender3DStats *stats);
+/* Between group_begin() and group_end(), consecutive draws that share camera,
+ * GS context, VU1 program and texture reuse one pass: the barrier, program,
+ * camera constants and GS state are emitted once and only the per-object
+ * constants change. The caller must not draw anything else, flip, or change
+ * camera or GS state until group_end(), which closes the pass even after a
+ * failed draw. Batch and Scene3D draws group internally. begin returns -1 when
+ * a group is already open. */
+int athena_render3d_group_begin(void);
+void athena_render3d_group_end(void);
+AthenaBatch3D *athena_batch3d_create(void);
+void athena_batch3d_destroy(AthenaBatch3D *batch);
+int athena_batch3d_add(AthenaBatch3D *batch,AthenaInstance3D *instance);
+void athena_batch3d_clear(AthenaBatch3D *batch);
+uint32_t athena_batch3d_size(const AthenaBatch3D *batch);
+int athena_batch3d_draw(AthenaBatch3D *batch,AthenaCamera3D *camera,
+    AthenaRender3DCull cull,AthenaRender3DStats *stats);
+int athena_batch3d_draw_lit(AthenaBatch3D *batch,AthenaCamera3D *camera,
+    const AthenaLights *lights,AthenaRender3DCull cull,AthenaRender3DStats *stats);
+void athena_render3d_module_shutdown(void);
+/* Why the last failing draw failed ("" when unknown): missing normals, a
+ * non-finite or singular transform, UVs out of range... Main thread only.
+ * A static string, set at the failure; callers clear it before a draw. */
+const char *athena_render3d_error_detail(void);
+void athena_render3d_set_error_detail(const char *detail);
+#endif

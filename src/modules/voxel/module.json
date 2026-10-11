@@ -1,0 +1,33 @@
+{
+  "id": "voxel",
+  "name": "Voxel",
+  "description": "Block worlds in C: one byte per block, terrain generation (fBm hills, tunnel caves, water), chunk meshing with ambient occlusion or greedy merging, texture atlas tiles, budgeted rebuilds near the player, DDA raycast, AABB collision and culled per-chunk drawing.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/voxel.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "meshbuilder",
+      "model3d",
+      "camera3d",
+      "lights",
+      "render3d"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_voxel.c"
+    ],
+    "module_name": "Voxel",
+    "global_alias": "Voxel",
+    "init_func": "athena_voxel_js_init",
+    "cleanup_func": "athena_voxel_js_cleanup"
+  },
+  "types": "voxel.d.ts"
+}

@@ -84,6 +84,1089 @@ declare namespace std {
 }
 
 
+/* === Module: Loop (loop) === */
+/**
+ * Game loop driven by the runtime.
+ *
+ * `Loop.run()` registers the frame handlers and returns immediately; frames
+ * start once the entry script finishes. Each frame clears the screen, runs
+ * `update` and `draw`, then flips. Timers, promises and async functions keep
+ * running between frames, and the frame rate follows VSync.
+ *
+ * Variable step: `update(dt)` runs once per frame with the time since the
+ * previous frame, in seconds.
+ * ```js
+ * let x = 0;
+ * Loop.run(dt => {
+ *     x += 120 * dt; // 120 pixels per second at any frame rate
+ *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
+ * });
+ * ```
+ *
+ * Fixed step: `update(step)` runs zero or more times per frame with the same
+ * `step`, as physics engines expect, and `draw(alpha)` once per frame.
+ * ```js
+ * Loop.run({
+ *     update(step) { world.step(step, 4); },
+ *     draw(alpha) { Box2DDraw.draw(world); },
+ * }, { fixedStep: 1 / 60 });
+ * ```
+ */
+declare namespace Loop {
+    /** Frame handlers. `this` inside them is the handlers object. */
+    interface Handlers {
+        /**
+         * Advances the game. Receives the scaled frame delta in seconds, or
+         * `fixedStep` when set; the first frame's delta is `0`.
+         */
+        update?(dt: number): void;
+        /**
+         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
+         * is the fraction of a step not simulated yet, to interpolate
+         * between the previous and the current state; otherwise it is `1`.
+         */
+        draw?(alpha: number): void;
+    }
+
+    interface Options {
+        /** Clears the screen before each frame. Defaults to `true`. */
+        clear?: boolean;
+        /** Packed RGBA color used to clear. Defaults to opaque black. */
+        clearColor?: number;
+        /**
+         * Longest real frame time counted, in seconds; longer stalls such as
+         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
+         */
+        maxDelta?: number;
+        /**
+         * Runs `update` with this constant step, in seconds, as many times as
+         * the elapsed time holds. `0`, the default, runs it once per frame
+         * with the frame delta.
+         */
+        fixedStep?: number;
+        /**
+         * Fixed steps per frame at most; the time beyond it is dropped so a
+         * slow frame cannot snowball. Defaults to `5`.
+         */
+        maxSteps?: number;
+        /**
+         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
+         * 25 FPS on PAL. Defaults to `1`.
+         */
+        vsyncInterval?: number;
+    }
+
+    interface Stats {
+        /** Frames per second, measured over the last second. */
+        fps: number;
+        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
+        frameMs: number;
+        /**
+         * Milliseconds of work in the last frame: from the previous flip up to
+         * this one, timers and promises included, without the VSync wait.
+         */
+        cpuMs: number;
+        /** `update` calls in the last frame. */
+        steps: number;
+        /** Interpolation factor passed to the last `draw`. */
+        alpha: number;
+    }
+
+    /**
+     * Starts the loop. A function is the same as `{ update: fn }`. Called
+     * again, even from a handler, it replaces the handlers and options without
+     * restarting the frame timing; the rest of the current frame is skipped.
+     * An exception thrown by a handler stops the program.
+     */
+    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
+    /**
+     * Stops the loop after the current frame; the program ends once no timers
+     * remain. Registered systems stay registered and run again with the next
+     * `Loop.run()`.
+     */
+    function stop(): void;
+    /** Returns whether the loop is running. */
+    function isRunning(): boolean;
+    /**
+     * Scales the time passed to `update`: `0.5` is slow motion and `0`
+     * pauses the game. At `0`, a variable-step `update` still runs with a
+     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
+     */
+    function setTimeScale(scale: number): void;
+    /** Returns the time scale; `1` by default. */
+    function getTimeScale(): number;
+    /** Returns the scaled delta of the current frame, in seconds. */
+    function getDeltaTime(): number;
+    /** Returns the scaled time since the loop started, in seconds. */
+    function getElapsedTime(): number;
+    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
+    function getRealElapsedTime(): number;
+    /** Returns the number of frames since the loop started. */
+    function getFrameCount(): number;
+    /** Returns the frame statistics of the last frame. */
+    function getStats(): Stats;
+
+    /**
+     * A system: per-frame work that a module or the game registers once, and
+     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
+     * long as the loop runs, surviving `Loop.run()` replacements and
+     * `Loop.stop()`. Each frame runs, in order:
+     *
+     * 1. `preUpdate(dt)` of every system, once;
+     * 2. `update(step)` of every system, then the `update` handler: once with
+     *    `dt`, or once per fixed step with `fixedStep`;
+     * 3. `postUpdate(dt)` of every system, once;
+     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
+     *    overlays such as debug information or screen transitions.
+     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
+     *    loop, so a system can close what it opened (Camera2D's view).
+     *
+     * Within a phase, systems run by ascending `priority`, then in the order
+     * they were added. `this` is the system object. An exception thrown by a
+     * system stops the program, as one thrown by a handler.
+     */
+    interface System {
+        /** Unique name, for `removeSystem()` and `getSystems()`. */
+        name?: string;
+        /** Lower runs first. Integer; defaults to `0`. */
+        priority?: number;
+        /**
+         * `preUpdate` and `postUpdate` receive the real delta, ignoring
+         * `setTimeScale()`: for menus and transitions that keep moving while
+         * the game is paused. Defaults to `false`.
+         */
+        realTime?: boolean;
+        preUpdate?(dt: number): void;
+        /** Same cadence and argument as the `update` handler. */
+        update?(step: number): void;
+        postUpdate?(dt: number): void;
+        preDraw?(alpha: number): void;
+        postDraw?(alpha: number): void;
+    }
+
+    /** A registered system, as listed by `getSystems()`. */
+    interface SystemInfo {
+        name: string | undefined;
+        priority: number;
+        realTime: boolean;
+        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
+        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
+        /** True for systems registered by native modules. */
+        native: boolean;
+    }
+
+    /**
+     * Registers a system and returns it. Its methods are read now: replacing
+     * them later has no effect until it is added again. A system added during
+     * a frame starts with the next phase. Throws when the object has no phase
+     * method, was already added, or its name is taken.
+     *
+     * @example
+     * ```js
+     * const flash = Loop.addSystem({
+     *     name: "flash",
+     *     priority: 100,
+     *     alpha: 128,              // 0x80 is opaque on the GS
+     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
+     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
+     * });
+     * ```
+     */
+    function addSystem<T extends System>(system: T): T;
+    /**
+     * Unregisters a system, given the object or its name. Returns whether it
+     * was registered. A system removed during a phase does not run again.
+     */
+    function removeSystem(system: System | string): boolean;
+    /** Registered systems, in run order. */
+    function getSystems(): SystemInfo[];
+}
+
+
+/* === Module: Vector (vector) === */
+/**
+ * PS2-aligned vector types.
+ *
+ * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
+ * by the `Vector` module. Arithmetic methods return new vectors and do not
+ * mutate their operands. `div()` rejects zero components.
+ *
+ * Example:
+ * ```js
+ * import * as Vector from 'Vector';
+ * const direction = new Vector.Vector3(3, 4, 0);
+ * console.log(direction.norm());
+ * const right = direction.cross(new Vector.Vector3(0, 0, 1));
+ * ```
+ */
+declare class Vector2 {
+    /** Creates a two-component vector. */
+    constructor(x: number, y: number);
+    /** Horizontal component. */
+    x: number;
+    /** Vertical component. */
+    y: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector2): number;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector2): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector2): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector2): Vector2;
+    /** Returns the component-wise difference. */
+    sub(value: Vector2): Vector2;
+    /** Returns the component-wise product. */
+    mul(value: Vector2): Vector2;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector2): Vector2;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector3 {
+    /** Creates a three-component vector. */
+    constructor(x: number, y: number, z: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Returns Euclidean length. */
+    norm(): number;
+    /** Returns the dot product. */
+    dot(value: Vector3): number;
+    /** Returns the 3D cross product. */
+    cross(value: Vector3): Vector3;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector3): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector3): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector3): Vector3;
+    /** Returns the component-wise difference. */
+    sub(value: Vector3): Vector3;
+    /** Returns the component-wise product. */
+    mul(value: Vector3): Vector3;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector3): Vector3;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+declare class Vector4 {
+    /** Creates a homogeneous four-component vector. */
+    constructor(x: number, y: number, z: number, w: number);
+    /** X component. */
+    x: number;
+    /** Y component. */
+    y: number;
+    /** Z component. */
+    z: number;
+    /** Homogeneous component: commonly 1 for points and 0 for directions. */
+    w: number;
+    /** Returns four-dimensional Euclidean length. */
+    norm(): number;
+    /** Returns the four-component dot product. */
+    dot(value: Vector4): number;
+    /** Returns the cross product with homogeneous component cleared. */
+    cross(value: Vector4): Vector4;
+    /** Returns Euclidean distance to another vector. */
+    distance(value: Vector4): number;
+    /** Returns squared distance without taking a square root. */
+    distance2(value: Vector4): number;
+    /** Returns the component-wise sum. */
+    add(value: Vector4): Vector4;
+    /** Returns the component-wise difference. */
+    sub(value: Vector4): Vector4;
+    /** Returns the component-wise product. */
+    mul(value: Vector4): Vector4;
+    /** Returns the component-wise quotient; zero divisors throw. */
+    div(value: Vector4): Vector4;
+    /** Returns a readable component representation. */
+    toString(): string;
+}
+
+
+/* === Module: Matrix4 (matrix4) === */
+/**
+ * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
+ *
+ * Values are stored in column-major order. Translation components are at
+ * indices 12, 13 and 14; index 15 is the homogeneous component.
+ *
+ * Example:
+ * ```js
+ * const transform = new Matrix4();
+ * transform.set(12, 10).set(13, 20).set(14, 30);
+ * const inverse = transform.clone().invert();
+ * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
+ * ```
+ */
+declare class Matrix4 {
+    /** Creates identity matrix, or initializes all 16 values when supplied. */
+    constructor();
+    constructor(
+        m00: number, m01: number, m02: number, m03: number,
+        m10: number, m11: number, m12: number, m13: number,
+        m20: number, m21: number, m22: number, m23: number,
+        m30: number, m31: number, m32: number, m33: number
+    );
+    /** Number of scalar components in the matrix. */
+    readonly length: 16;
+    /** Reads a scalar component at index 0..15. */
+    get(index: number): number;
+    /** Writes a scalar component at index 0..15 and returns this matrix. */
+    set(index: number, value: number): this;
+    /** Compares all 16 components exactly. */
+    equals(value: Matrix4): boolean;
+    /** Compares all components using an absolute epsilon tolerance. */
+    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
+    /** Returns the 16 components as a new array. */
+    toArray(): number[];
+    /** Copies 16 values from an array-like object into this matrix. */
+    fromArray(values: ArrayLike<number>): this;
+    /** Returns an independent copy of this matrix. */
+    clone(): Matrix4;
+    /** Copies another matrix into this matrix. */
+    copy(value: Matrix4): this;
+    /** Returns this * value (column vectors); neither operand is mutated. */
+    multiply(value: Matrix4): Matrix4;
+    /** Replaces this matrix with identity. */
+    identity(): this;
+    /** Transposes this matrix in place. */
+    transpose(): this;
+    /** Inverts this matrix in place; throws for a singular matrix. */
+    invert(): this;
+    /** Returns a readable 16-value representation. */
+    toString(): string;
+}
+
+
+/* === Module: Quaternion (quaternion) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=quaternion,... */
+/** Right-handed, normalized xyzw rotation. Angles are radians.
+ * Mutating methods return this; operands are unchanged; dispose is idempotent. */
+declare namespace Quaternion {
+    class Quaternion {
+        constructor();
+        constructor(x: number, y: number, z: number, w: number);
+        setAxisAngle(x: number, y: number, z: number, radians: number): this;
+        /** Euler radians composed as Rz * Ry * Rx (x applied first). */
+        setEuler(x: number, y: number, z: number): this;
+        /** Sets this = this * other. */
+        multiply(other: Quaternion): this;
+        /** Shortest path toward other, t in [0,1]. */
+        slerp(other: Quaternion, t: number): this;
+        /** Independent snapshot. */
+        toArray(): [number, number, number, number];
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Camera3D (camera3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=camera3d,... */
+/** Independent cameras; right-handed, facing -Z. Projection has reversed depth.
+ * Matrix getters return an owned snapshot, or overwrite and return out. */
+declare namespace Camera3D {
+    interface Projection { fovYDegrees?: number; aspect?: number; near?: number; far?: number; }
+    /** Screen position in viewport pixels (origin top-left, y down) and the
+     * distance in front of the camera along its view axis. */
+    interface ScreenPoint { x: number; y: number; depth: number; }
+    /** World-space ray: origin (x, y, z) and unit direction (dx, dy, dz). */
+    interface Ray { x: number; y: number; z: number; dx: number; dy: number; dz: number; }
+    class Camera {
+        /** Defaults: position [0,0,5], target [0,0,0], up [0,1,0], FOV 60, aspect 4/3, near .1, far 300. */
+        constructor(options?: Projection);
+        setProjection(options: Projection): this;
+        setPosition(x: number, y: number, z: number): this;
+        lookAt(x: number, y: number, z: number): this;
+        setUp(x: number, y: number, z: number): this;
+        getView(out?: Matrix4): Matrix4;
+        getProjection(out?: Matrix4): Matrix4;
+        getViewProjection(out?: Matrix4): Matrix4;
+        /** Viewport in pixels used by worldToScreen/screenToRay; default 640x448.
+         * Match the Screen mode, e.g. `camera.setViewport(mode.width, mode.height)`. */
+        setViewport(width: number, height: number): this;
+        /** Projects a world point to the viewport: null when it is behind the
+         * camera. Points outside the screen or beyond near/far still project
+         * (check x/y against the viewport and depth against near/far).
+         * Optional `out` is reused and returned. */
+        worldToScreen<T extends object = ScreenPoint>(x: number, y: number, z: number, out?: T): (T & ScreenPoint) | null;
+        /** The ray from the camera through a viewport pixel, e.g. for
+         * Scene3D.Scene.raycast(). Optional `out` is reused and returned. */
+        screenToRay<T extends object = Ray>(x: number, y: number, out?: T): T & Ray;
+        /** Idempotent; other operations reject a disposed camera. */
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Lights (lights) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=lights,... */
+/** Independent linear RGB lights. World directions point toward the source.
+ * Point lights (4 slots) light per vertex and fade with the distance as
+ * (1 - d^2 / range^2)^2, reaching 0 at range. */
+declare namespace Lights {
+    const MAX_DIRECTIONAL: 4;
+    const MAX_POINT: 4;
+    class Set {
+        /** Starts with black ambient and all four directional slots disabled. */
+        constructor();
+        /** Changes only when effective state changes; invalid setters are atomic. */
+        readonly revision: number;
+        setAmbient(r: number, g: number, b: number): this;
+        /** Slots 0..3; nonzero direction normalized in native code. RGB in [0,1]. */
+        setDirectional(slot: number, x: number, y: number, z: number, r: number, g: number, b: number): this;
+        disable(slot: number): this;
+        /** Slots 0..3: a world position, RGB in [0,1] and a range > 0. */
+        setPoint(slot: number, x: number, y: number, z: number, r: number, g: number, b: number, range: number): this;
+        disablePoint(slot: number): this;
+        /** Distance fog, applied by the GS to everything drawn with this set:
+         * full colour up to start, the fog colour from end on (view depth).
+         * 0 <= start < end, RGB in [0,1]. Ignored with 32-bit Z buffers. */
+        setFog(start: number, end: number, r: number, g: number, b: number): this;
+        disableFog(): this;
+        clear(): this;
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Image (image) === */
+/**
+ * Image loading, CPU pixel access and textured 2D drawing.
+ *
+ * `Image` accepts paths understood by the active PS2 filesystem driver,
+ * including paths relative to the boot directory. A newly loaded image is
+ * CPU-resident; call `lock()` when it must remain resident in VRAM.
+ *
+ * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
+ * images, `pixels` contains four bytes per pixel. Palette data is used only
+ * by indexed 4-bit and 8-bit formats.
+ *
+ * Some Images borrow a texture owned by another object, such as
+ * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
+ * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
+ * `optimize()` returns false.
+ *
+ * @example
+ * ```js
+ * const logo = new Image('my_image.png');
+ * if (!logo.ready()) throw new Error('image load failed');
+ * logo.color = Color.new(255, 255, 255, 255);
+ * logo.lock();
+ * logo.draw(100, 80);
+ * Screen.flip();
+ * ```
+ */
+
+/** Optional destination, source-rectangle and tint overrides for `draw()`. */
+type ImageDrawOptions = {
+    /** Destination width in pixels; defaults to `width`. */
+    width?: number;
+    /** Destination height in pixels; defaults to `height`. */
+    height?: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx?: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty?: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx?: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy?: number;
+    /** Rotation angle in radians. */
+    angle?: number;
+    /** Packed RGBA tint, normally created with `Color.new()`. */
+    color?: number;
+};
+
+/** Options of `drawList()`. */
+type ImageDrawListOptions = {
+    /** Offset added to every sprite; defaults to 0. */
+    x?: number;
+    y?: number;
+    /** First record to draw; defaults to 0. */
+    first?: number;
+    /** Records to draw; defaults to the rest of the buffer. */
+    count?: number;
+};
+
+/** Options controlling image creation and texture upload behavior. */
+type ImageOptions = {
+    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
+    delayed?: boolean;
+};
+
+declare class Image {
+    /** Loads an image from `path`, or creates an empty image when omitted. */
+    constructor(options?: ImageOptions);
+    constructor(path: string, options?: ImageOptions);
+    /** Linear size in bytes of the current pixel buffer. */
+    readonly size: number;
+    /** Whether texture uploads use the deferred VIF1 path. */
+    readonly delayed: boolean;
+    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
+    pixels: ArrayBuffer;
+    /** CPU palette buffer for indexed images; required for indexed images. */
+    palette: ArrayBuffer;
+    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
+    texWidth: number;
+    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
+    texHeight: number;
+    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
+    bpp: number;
+    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
+    filter: number;
+    /** Whether dimensions and a valid pixel buffer are available for drawing. */
+    renderable: boolean;
+    /** Destination draw width in pixels. */
+    width: number;
+    /** Destination draw height in pixels. */
+    height: number;
+    /** Source rectangle's left coordinate in texture pixels. */
+    startx: number;
+    /** Source rectangle's top coordinate in texture pixels. */
+    starty: number;
+    /** Source rectangle's right coordinate in texture pixels. */
+    endx: number;
+    /** Source rectangle's bottom coordinate in texture pixels. */
+    endy: number;
+    /** Rotation angle in radians used by `draw()`. */
+    angle: number;
+    /** Packed RGBA tint multiplied with sampled texture color. */
+    color: number;
+
+    /** True when dimensions, pixel data and indexed palette data are valid. */
+    ready(): boolean;
+    /** True while an ImageList request is waiting or being processed. */
+    loading(): boolean;
+    /** True when the most recent ImageList request failed. */
+    failed(): boolean;
+    /**
+     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
+     * has a queued VRAM upload; `ready` is resident in VRAM.
+     */
+    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
+    /** Returns structured load diagnostics, or undefined when no load failed. */
+    error(): ImageLoadError | undefined;
+    /** Queues a textured sprite at `(x, y)` for the current frame. */
+    draw(x: number, y: number, options?: ImageDrawOptions): void;
+    /**
+     * Queues many sprites of this image at once: the texture state is sent
+     * once per 128 sprites instead of once per sprite, which makes it several
+     * times cheaper than as many `draw()` calls. `sprites` uses the record
+     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
+     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
+     * buffer serves both; the TileMap module is not required. Records with a
+     * zero width or height are skipped, and so are, under a Camera2D camera,
+     * records outside its viewport.
+     *
+     * @example
+     * ```js
+     * const sprites = new Float32Array(16 * count);        // 64-byte records
+     * const colors = new Uint32Array(sprites.buffer);
+     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
+     * //           colors[16*i + 8..11] = r, g, b, a
+     * image.drawList(sprites, { x: cameraX, y: cameraY });
+     * ```
+     */
+    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
+    /** Uploads the image synchronously and pins its VRAM allocation. */
+    lock(): boolean;
+    /** Allows the texture manager to evict the image from VRAM. */
+    unlock(): boolean;
+    /** Returns whether the image is currently pinned in VRAM. */
+    locked(): boolean;
+    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
+    optimize(): boolean;
+    /** Releases the native image and its CPU/VRAM resources. */
+    free(): void;
+
+    /** Copies a rectangular VRAM region between two resident images. */
+    static copyVRAMBlock(
+        source: Image,
+        sourceX: number,
+        sourceY: number,
+        destination: Image,
+        destinationX: number,
+        destinationY: number
+    ): void;
+}
+
+/** Structured diagnostics for a failed image load. */
+interface ImageLoadError {
+    /** Path as it was requested. */
+    path: string;
+    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
+    /** `upload` is reported only for ImageList requests with an `upload` option. */
+    stage: "open" | "decode" | "surface" | "upload";
+    /** Human-readable description. */
+    message: string;
+}
+
+
+/* === Module: Model3D (model3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=model3d,... */
+/** Immutable mesh streams. Geometry and material descriptors are copied;
+ * instances/batches retain native resources, including textures. */
+declare namespace Model3D {
+    const MAX_VERTICES: number;
+    /** Joint indices must be below MAX_JOINTS (256); the VU1 path accepts 24 joints. */
+    const MAX_JOINTS: number;
+    /** At most MAX_TARGETS (8) morph targets per mesh. */
+    const MAX_TARGETS: number;
+    /** UV components must be finite with |u|,|v| <= UV_LIMIT (16): tiled UVs
+     * use repeat addressing within the GS texel precision. */
+    const UV_LIMIT: number;
+    const UNLIT: 0; const DIFFUSE: 1;
+    class Texture {
+        private constructor();
+        static readonly NEAREST: 0; static readonly LINEAR: 1;
+        /** Addressing per axis: CLAMP (to edge, the default), REPEAT on both
+         * axes, or REPEAT_U / REPEAT_V on one. */
+        static readonly CLAMP: 0; static readonly REPEAT_U: 1; static readonly REPEAT_V: 2; static readonly REPEAT: 3;
+        /** Copies 0xAABBGGRR pixels; alpha (0..255) matters only to alphaCutoff materials. Power-of-two sizes 1..512;
+         * no mipmaps. Honors subarray(); main thread only. */
+        static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1; wrap?: 0 | 1 | 2 | 3}): Texture;
+        /** Synchronous decoding. RGB/RGBA, 16-bit and 4/8-bit palette images
+         * (canonical 32-bit CPU copy). VRAM uses lossless T4/T8 for <=16/256
+         * distinct GS RGBA colors when texture+CLUT is smaller than CT32.
+         * Errors name the path and the reason. */
+        static load(path: string, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
+        /** load() from PNG/JPEG/BMP bytes (ArrayBuffer/Uint8Array, borrowed for the
+         * call, subarrays honored): no file I/O, so a Thread read job can feed it. */
+        static loadMemory(bytes: ArrayBuffer | Uint8Array, filter?: 0 | 1, wrap?: 0 | 1 | 2 | 3): Texture;
+        readonly width: number; readonly height: number; readonly wrap: 0 | 1 | 2 | 3;
+        /** Makes the texture resident in VRAM now (one synchronous upload and
+         * GS wait), e.g. on a loading screen, instead of at the first draw.
+         * Throws when VRAM is full. */
+        upload(): this;
+        /** Existing meshes retain the texture. Final native release defers VRAM
+         * and pixel cleanup until the GS has finished reading them. */
+        dispose(): void;
+    }
+    interface Material {
+        /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
+        shading?: 0 | 1;
+        /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
+         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff. */
+        baseColor?: Float32Array;
+        texture?: Texture;
+        /** Alpha mask (glTF alphaMode MASK): pixels whose alpha (texture
+         * alpha times vertex alpha) is below the cutoff, in [0,1], are
+         * discarded by the GS alpha test; the rest stay opaque. */
+        alphaCutoff?: number;
+    }
+    interface Geometry {
+        positions: Float32Array; colors?: Float32Array;
+        /** Triangle-list corners; copied into compact batches when storage is
+         * smaller. The original triangle order and vertexCount are preserved. */
+        indices?: Uint32Array;
+        /** One nonzero xyz normal per source vertex; normalized during copy.
+         * Missing DIFFUSE normals are generated per face, before expansion. */
+        normals?: Float32Array;
+        /** One finite uv pair per source vertex, |u|,|v| <= UV_LIMIT. Origin
+         * top-left; outside [0,1] the texture's wrap mode applies. */
+        texcoords?: Float32Array;
+        /** Four joint indices and four nonnegative finite weights per source
+         * vertex, supplied together. Each vertex needs a positive weight;
+         * weights are normalized during copy.
+         * Skin data needs a skin/joint palette to deform (e.g. a loaded glTF node). */
+        joints?: Uint16Array;
+        weights?: Float32Array;
+        /** Concatenated xyz position deltas, one complete source-vertex block
+         * per target (1..MAX_TARGETS). Scene3D.Node.setWeights controls the blend. */
+        targetPositions?: Float32Array;
+        /** Matching concatenated xyz normal deltas; requires base normals. */
+        targetNormals?: Float32Array;
+        material?: Material;
+    }
+    class Mesh {
+        private constructor();
+        /** xyz positions, optional normalized rgba, optional triangle-list indices. Honors subarray(). */
+        static fromGeometry(geometry: Geometry): Mesh;
+        /** Expanded triangle vertex count, at most MAX_VERTICES. */
+        readonly vertexCount: number;
+        /** Model-space AABB: minX, minY, minZ, maxX, maxY, maxZ. */
+        getBounds(): number[]; getBounds(out: Float32Array): Float32Array;
+        createInstance(): Instance;
+        /** Drops this handle; existing instances retain the native mesh. */
+        dispose(): void;
+    }
+    class Instance {
+        private constructor();
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Owned snapshot, or fills and returns out; never a borrowed matrix. */
+        getTransform(out?: Matrix4): Matrix4;
+        /** Local TRS as set (rotation normalized, xyzw): a new Array, or out
+         * filled and returned (no allocation per frame). */
+        getPosition(): number[]; getPosition(out: Float32Array): Float32Array;
+        getRotation(): number[]; getRotation(out: Float32Array): Float32Array;
+        getScale(): number[]; getScale(out: Float32Array): Float32Array;
+        dispose(): void;
+    }
+    /** Synchronous static OBJ/glTF/GLB loading; see docs/3D.md for the supported subset.
+     * Errors name the file and the exact unsupported feature. */
+    function load(path: string, material?: Material): Mesh;
+    /** Self-contained GLB, at most 16 MiB. Borrows bytes for the call and
+     * copies all native data; honors Uint8Array.subarray(), including unaligned
+     * offsets. origin is a nonempty diagnostic name, not an I/O resolver.
+     * URI buffers and external images are rejected. No upload; synchronous
+     * parse/construction on the main thread, with the same static-mesh subset. */
+    function loadMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material): Mesh;
+    type LoaderPhase = 'copy' | 'parse' | 'dependencies' | 'validate' | 'build' | 'done';
+    /** Resumable loadMemory() of one static GLB mesh. The first steps ('copy',
+     * 256 KiB each) snapshot the bytes into memory the loader owns; do not
+     * modify the source before `phase` leaves 'copy'. Then the parse, the
+     * glTF validation and the primitive build (texture decode is one unit;
+     * vertex/index reads and the mesh stages are small slices). Dispose to
+     * abandon; unreferenced loaders are freed by GC. */
+    class Loader {
+        private constructor();
+        /** Phase names by native phase index (the order of phaseStatsInto). */
+        static readonly PHASES: readonly string[];
+        /** Runs up to `units` (1..64, default 1) consecutive units of the same
+         * phase. false while work remains, true once finished. Throws the load
+         * error, and keeps throwing it; then dispose(). */
+        step(units?: number): boolean;
+        /** Runs at least one unit, then more until `budgetMs` (0..1000, default 0 =
+         * one unit) has elapsed: a single call for a time slice, timed by the
+         * native loader. Same results as step(); false while work remains, true
+         * once finished; lastUnits is the number of units that ran. */
+        run(budgetMs?: number): boolean;
+        /** Units, total time and largest single unit per phase so far. */
+        /** Same numbers as `phaseStats`, written into a Float64Array (units, totalMs,
+         * maxMs at index 3 * phase index; at least 3 * PHASES.length elements): no allocation. */
+        phaseStatsInto(out: Float64Array): void;
+        readonly phaseStats: { [phase: string]: { units: number; totalMs: number; maxMs: number } };
+        /** The Mesh, after step() returned true. Spends the loader. */
+        finish(): Mesh;
+        dispose(): void;
+        readonly phase: LoaderPhase | 'disposed';
+        readonly lastPhase: LoaderPhase | 'disposed';
+        /** Native steps the last step() call ran (at most `units`). */
+        readonly lastUnits: number;
+        /** Files named by relative URI (external buffers and images), listed after
+         * the parse step when started with `{ dependencies: true }`; else empty.
+         * Read each one yourself (the loader does no I/O) and give it to provide(). */
+        readonly dependencies: { uri: string; image: boolean; provided: boolean }[];
+        /** Hands over the bytes of dependencies[index] (ArrayBuffer/Uint8Array,
+         * 1 byte to 16 MiB, once). They are used, not copied: do not modify the
+         * buffer until finish() or dispose(). While files are missing step()
+         * returns false and does nothing (phase 'dependencies'). Absolute, scheme,
+         * drive and ".." URIs are rejected, at most 64 files. */
+        provide(index: number, bytes: ArrayBuffer | Uint8Array): void;
+        readonly unitsDone: number;
+        readonly unitsTotal: number;
+    }
+    /** Starts a resumable loadMemory() (same rules and errors, found while stepping). *
+     * `options.borrow: true` uses the bytes in place (no 'copy' phase and no snapshot
+     * RAM) when they are 4-byte aligned, otherwise the snapshot is made as usual; the
+     * buffer is pinned and must not be modified until finish() or dispose(). */
+    function beginMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Material, options?: { dependencies?: boolean; borrow?: boolean }): Loader;
+    /** Bulk setters, one call per frame instead of one per instance: values holds
+     * x, y, z for instances[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any instance changes. Returns the count. */
+    function setPositions(instances: Instance[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Instance.setRotationEuler(). */
+    function setRotationsEuler(instances: Instance[], values: Float32Array): number;
+}
+
+
+/* === Module: Render3D (render3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=render3d,... */
+/** Native opaque unlit/diffuse and textured triangles with homogeneous clipping in C for
+ * crossing objects; VU1 transforms and lights fully contained objects.
+ * Draw never advances animation/physics. Enable Screen zbuffering. */
+declare namespace Render3D {
+    const CULL_NONE: 0; const CULL_BACK: 1; const CULL_FRONT: -1;
+    type CullMode = 0 | 1 | -1;
+    interface Stats {
+        submittedObjects: number; culledObjects: number;
+        /** Accepted objects drawn, even when clipping rejects all their triangles. */
+        drawPasses: number;
+        /** GS/VU1 passes emitted. Batch and Scene3D draws share one pass among
+         * consecutive objects with the same camera, program and texture. */
+        pipelinePasses: number;
+        /** Triangle list sent to VU1 after native clipping; not rasterized count. */
+        triangles: number; vuBatches: number;
+        /** Source triangles of objects retained by AABB culling. */
+        sourceTriangles: number;
+        /** Source triangles partially clipped and producing visible polygons. */
+        clippedTriangles: number;
+        /** Source triangles rejected by precise clipping. */
+        rejectedTriangles: number;
+        /** Stream payload sent inline or by DMA_REF, including chunk padding
+         * and skin joints/weights when applicable.
+         * Excludes tags, constants, texture/program uploads, GS state and 2D draws. */
+        geometryBytes: number;
+        /** Objects crossing the screen edges drawn by VU1 without clipping,
+         * inside the GS guard band (the scissor trims them). */
+        guardBandObjects: number;
+        /** Objects crossing the near plane clipped on VU1 (inside the guard
+         * band otherwise); their triangles count before clipping. */
+        nearClipObjects: number;
+        /** Meshes with morph targets blended on VU1. */
+        vuMorphObjects: number;
+        /** Objects crossing the frustum beyond the guard band, clipped
+         * triangle by triangle in C on the EE: the expensive path (a large
+         * mesh around the camera costs milliseconds). Split such meshes. */
+        cpuClipObjects: number;
+    }
+    /** Lights are borrowed for this call. Omitted lights mean black ambient and
+     * no directional lights. UNLIT materials ignore lights. Scale 0
+     * draws nothing (counted as culled); other singular DIFFUSE normal
+     * transforms throw, naming the reason; drawing does not update lights or transforms.
+     * Pass `stats` to reuse an object every frame: its fields are assigned and
+     * it is returned, instead of allocating a new Stats per call. Pass `null`
+     * to skip the per-call stats (returns undefined, the cheapest call) and
+     * read the totals once per frame with frameStats(). */
+    function draw<T extends object = Stats>(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode?: CullMode,
+        lights?: Lights.Set, stats?: T): T & Stats;
+    function draw(instance: Model3D.Instance, camera: Camera3D.Camera, cullMode: CullMode | undefined,
+        lights: Lights.Set | undefined, stats: null): undefined;
+    /** Totals of every successful Render3D.draw, Batch.draw and Scene3D draw
+     * since the last reset (with or without per-call stats). `reset`
+     * (default true) clears them, so call it once per frame. */
+    /** Linear RGB multiplier in [0, 1] (white by default) applied to the vertex colors of every
+     * following draw, after lighting and before fog: clamp(color * lighting) * tint, or
+     * color * tint for UNLIT. The mesh's colors are not touched and no VU1 time is added (one
+     * constant quad per object, sent when it changes). Global state: set it before each draw or
+     * group that needs another tint, and restore white (1, 1, 1). Texture/vertex alpha are
+     * unaffected. Throws RangeError for a component outside [0, 1]. */
+    function setTint(r: number, g: number, b: number): void;
+    function getTint(): [number, number, number];
+    function frameStats<T extends object = Stats>(stats?: T, reset?: boolean): T & Stats;
+    /** Runs fn with one shared GS/VU1 pass: consecutive draws with the same
+     * camera, program and texture skip the barrier, program upload, camera
+     * constants and GS state (and unchanged lights). The pass closes when fn
+     * returns or throws; fn's result is returned. Inside fn, draw only 3D:
+     * no 2D drawing, flip or camera change. Groups do not nest. */
+    function group<R>(fn: () => R): R;
+    class Batch {
+        constructor();
+        readonly size: number;
+        /** Retains the native instance, independently of its JS handle. */
+        add(instance: Model3D.Instance): this;
+        clear(): this;
+        /** Optional `stats` is reused and returned, as in Render3D.draw(); null returns undefined. */
+        draw<T extends object = Stats>(camera: Camera3D.Camera, cullMode?: CullMode, lights?: Lights.Set,
+            stats?: T): T & Stats;
+        draw(camera: Camera3D.Camera, cullMode: CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Scene3D (scene3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=scene3d,... */
+/** Native transform hierarchy. A Node is the scene-graph instance of a mesh;
+ * world = parent world * local TRS. Setters only mark dirty flags: call
+ * scene.update() (or attachLoop()) before draw and world queries, which throw
+ * while the scene is stale instead of returning outdated data. */
+declare namespace Scene3D {
+    /** Releases reusable CPU skinning/morph buffers after draw returns, for
+     * a level transition or memory pressure. They grow again when needed. */
+    function trimScratch(): void;
+    /** Levels from the root, root included. Deeper hierarchies are rejected. */
+    const MAX_DEPTH: number;
+    /** Bulk setters, one call per frame instead of one per node: values holds
+     * x, y, z for nodes[i] at values[3i..3i+2] (it may be longer). Every
+     * value is checked finite before any node changes. Returns the count. */
+    function setPositions(nodes: Node[], values: Float32Array): number;
+    /** Radians, composed Rz * Ry * Rx as Node.setRotationEuler(). */
+    function setRotationsEuler(nodes: Node[], values: Float32Array): number;
+    /** 2D physics on 3D nodes: x, y and an angle about Z (radians) per node,
+     * the layout of Box2D's `world.readTransforms()`. Each node keeps its z.
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Scene3D.setTransforms2D(crates, transforms);
+     * ``` */
+    function setTransforms2D(nodes: Node[], values: Float32Array): number;
+    interface UpdateStats { visitedNodes: number; worldUpdates: number; boundsUpdates: number; }
+    /** Nearest raycast hit: node, distance along the ray, world point
+     * (x, y, z), unit normal facing the ray (nx, ny, nz) and source triangle
+     * index (-1 for an AABB hit). */
+    interface RaycastHit {
+        node: Node; distance: number; x: number; y: number; z: number;
+        nx: number; ny: number; nz: number; triangle: number;
+    }
+    interface RaycastOptions {
+        /** Test triangles (default true) or only the meshes' world AABBs. */
+        precise?: boolean;
+    }
+    interface DrawStats extends Render3D.Stats {
+        /** Subtrees rejected by their world bounds; their meshes count as culled. */
+        culledSubtrees: number;
+        /** Meshes sent to Render3D, sorted by pipeline in traversal order. */
+        queuedObjects: number;
+    }
+    interface Bounds { min: [number, number, number]; max: [number, number, number]; }
+    class Node {
+        /** Retains the optional mesh natively, independently of its handle. */
+        constructor(mesh?: Model3D.Mesh);
+        /** Replaces the retained mesh; null removes it. */
+        setMesh(mesh: Model3D.Mesh | null): this;
+        readonly hasMesh: boolean;
+        setPosition(x: number, y: number, z: number): this;
+        setScale(x: number, y: number, z: number): this;
+        /** Radians, XYZ local rotations composed Rz * Ry * Rx. */
+        setRotationEuler(x: number, y: number, z: number): this;
+        setRotationQuaternion(x: number, y: number, z: number, w: number): this;
+        /** Native motion, integrated by scene.advance(dt) / attachLoop() without
+         * a JS call per frame. Units per second in the parent space. */
+        setVelocity(x: number, y: number, z: number): this;
+        /** Angular velocity in rad/s about the local axes: direction is the
+         * axis, length the speed. (0, 0, 0) stops the spin. */
+        setSpin(x: number, y: number, z: number): this;
+        /** Hidden nodes and descendants are not drawn nor included in bounds. */
+        visible: boolean;
+        /** Reparents child, keeping its local transform; the parent retains it.
+         * Throws RangeError for cycles, scene roots and MAX_DEPTH overflow. */
+        add(child: Node): this;
+        /** Removes this node from its parent; harmless without one. */
+        detach(): this;
+        /** The same live JS object for this native parent, or null. Wrapper
+         * identity (including subclass/properties) is preserved while live. */
+        getParent(): Node | null;
+        readonly childCount: number;
+        /** The same live JS object for the child at index. */
+        getChild(index: number): Node;
+        /** Always current. Owned snapshot, or fills and returns out. */
+        getLocalTransform(out?: Matrix4): Matrix4;
+        /** Transform of the last update. Throws while stale or outside a scene. */
+        getWorldTransform(out?: Matrix4): Matrix4;
+        /** World AABB of visible meshes in the subtree, or null when empty.
+         * Throws while stale or outside a scene. */
+        getWorldBounds(): Bounds | null;
+        /** Morph target weights (up to 8; missing ones become 0). A mesh with
+         * morph targets is blended in C at draw: base + sum(weight * delta). */
+        setWeights(weights: ArrayLike<number>): this;
+        /** One weight per morph target of the node's mesh (empty without). */
+        getWeights(): number[];
+        /** Invalidates this shared JS wrapper (all aliases). Parents/scenes
+         * retain the native node; later access can create another wrapper.
+         * The wrapper cache is weak and does not keep JS objects alive. */
+        dispose(): void;
+    }
+    class Scene {
+        constructor();
+        /** The same live JS object for the root node owned by the scene. */
+        readonly root: Node;
+        /** True when a node changed after the last update. */
+        readonly stale: boolean;
+        /** True while a Loop POST_UPDATE system updates this scene. */
+        readonly attached: boolean;
+        /** Integrates node motion (setVelocity/setSpin) for dt seconds and
+         * returns the moved node count. attachLoop() does it every frame with
+         * the Loop dt, before update(). */
+        advance(dt: number): number;
+        /** Recomputes dirty world transforms and subtree bounds. Optional
+         * `stats` is reused and returned instead of allocating a new object;
+         * null skips it and returns undefined. */
+        update<T extends object = UpdateStats>(stats?: T): T & UpdateStats;
+        update(stats: null): undefined;
+        /** Culls subtrees, queues meshes and draws them through Render3D.
+         * Never updates the scene; throws while stale. Lights are borrowed.
+         * `stats` as in Render3D.draw(): reused, or null to return undefined;
+         * the render totals feed Render3D.frameStats() either way. */
+        draw<T extends object = DrawStats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
+            stats?: T): T & DrawStats;
+        draw(camera: Camera3D.Camera, cullMode: Render3D.CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null): undefined;
+        /** Nearest visible mesh hit by the ray (e.g. Camera3D.Camera.screenToRay())
+         * within maxDistance (default unlimited), or null. Uses the transforms of
+         * the last update(); throws while stale. Skinned meshes are skipped and
+         * morphed meshes are tested in their base pose. Optional `out` is reused. */
+        raycast<T extends object = RaycastHit>(ray: Camera3D.Ray, maxDistance?: number, options?: RaycastOptions,
+            out?: T): (T & RaycastHit) | null;
+        /** Nodes whose visible, unskinned mesh world AABB overlaps the box, in
+         * traversal order. Optional `out` array is cleared, refilled and returned. */
+        queryBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+            out?: Node[]): Node[];
+        /** Updates natively in Loop POST_UPDATE. Lower priority runs first. */
+        attachLoop(priority?: number): this;
+        detachLoop(): this;
+        /** Also detaches from the Loop; existing node handles stay valid. */
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Animation3D (animation3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=animation3d,... */
+/** Keyframe clips sampled in native code and applied to Scene3D nodes. The
+ * script starts and stops players; poses are not computed in JavaScript.
+ * Players advance in one Loop system (attachLoop()) that runs before Scene3D
+ * systems at the default priorities, or manually with advance(dt). */
+declare namespace Animation3D {
+    /** Default attachLoop() priority: before Scene3D.attachLoop() (0). */
+    const LOOP_PRIORITY: number;
+    interface Track {
+        /** Index into the player's nodes; default 0. */
+        target?: number;
+        path: "position" | "rotation" | "scale" | "weights";
+        /** Seconds, >= 0 and strictly increasing. */
+        times: Float32Array;
+        /** 3 floats per key (position, scale), 4 (rotation xyzw; normalized,
+         * slerp on the short arc) or 1..8 (morph target weights, see
+         * Scene3D.Node.setWeights(); values.length / times.length per key). */
+        values: Float32Array;
+        /** Default "linear". "cubic" is glTF CUBICSPLINE: Hermite between
+         * keys using inTangents/outTangents (rotations normalized after). */
+        interpolation?: "linear" | "step" | "cubic";
+        /** "cubic" only: tangents per key, laid out like values, in value
+         * units per second. */
+        inTangents?: Float32Array;
+        outTangents?: Float32Array;
+    }
+    /** Tracks are copied; the arrays can be reused afterwards. */
+    class Clip {
+        constructor(tracks: Track[]);
+        /** Last key time of all tracks, in seconds. */
+        readonly duration: number;
+        /** Nodes a player needs: highest target + 1. */
+        readonly targetCount: number;
+        dispose(): void;
+    }
+    /** Binds a clip to nodes (retained, also after their handles are
+     * disposed). Created stopped at time 0, speed 1, not looping. Players
+     * stay alive until dispose(), even when no variable holds them. */
+    class Player {
+        constructor(clip: Clip, nodes: Scene3D.Node[]);
+        play(): this;
+        pause(): this;
+        /** Pauses and rewinds (to the end when speed is negative). */
+        stop(): this;
+        /** Seconds; setting it seeks and applies the pose. */
+        time: number;
+        /** Negative plays backwards. */
+        speed: number;
+        loop: boolean;
+        readonly playing: boolean;
+        /** Advances by dt * speed seconds; true when it just reached the end. */
+        advance(dt: number): boolean;
+        dispose(): void;
+    }
+    /** Advances every playing player; returns how many reached their end. */
+    function advance(dt: number): number;
+    /** One native POST_UPDATE system for every player; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
 /* === Module: Mutex (mutex) === */
 /**
  * Native EE mutex primitives.
@@ -491,954 +1574,6 @@ declare namespace Archive {
 }
 
 
-/* === Module: Box2D (box2d) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=box2d,... */
-/**
- * 2D rigid body physics with Box2D 3.2.
- *
- * A `World` owns `Body` objects; bodies carry `Shape`s (circle, box,
- * polygon, capsule, segment) and `Chain`s, and are connected by `Joint`s.
- * Units are meters, kilograms, seconds and radians; keep moving objects
- * between 0.1 and 10 meters and scale to pixels when drawing.
- *
- * Every Box2D object has exactly one script object: `shape.getBody() === body`,
- * and the shapes reported by queries and events can be compared with `===`
- * or used as Map keys. Objects hold their world (`body.world`), so the world
- * stays alive while any of them is reachable; an unreachable world is freed
- * by the GC with everything in it. `destroy()` frees the Box2D object at
- * once: later calls on it throw a TypeError (`isValid()` returns false).
- *
- * Invalid arguments throw instead of reaching Box2D, whose assertions would
- * reset the console: TypeError for wrong types or objects, RangeError for
- * values out of range (NaN and Infinity included). Every number must be
- * finite and within +-1e10; positions, points, distances and vectors
- * (`{ x, y }`) within +-100000 m (Box2D's B2_HUGE).
- *
- * Creating worlds, bodies, shapes, chains or joints, and `world.step()`,
- * throw a RangeError when Box2D would exceed `setMemoryLimit()` or leave less
- * than 256 KB of free RAM: Box2D itself cannot recover from a failed
- * allocation. A refused step leaves the world as it was. The limit goes back
- * to 0 (none) when the VM restarts (`std.reload()`).
- *
- * Performance: every getter allocates an object. To sync many sprites per
- * frame use `world.readTransforms(bodies, float32Array)` (no allocation) or
- * `world.getBodyEvents()` (moved bodies only).
- *
- * Example:
- * ```js
- * const world = Box2D.createWorld({ gravity: { x: 0, y: -10 } });
- *
- * const ground = world.createBody({ position: { x: 0, y: -1 } });
- * ground.createBoxShape({ halfWidth: 20, halfHeight: 1 });
- *
- * const crate = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 0, y: 5 } });
- * crate.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5, friction: 0.4, enableContactEvents: true });
- *
- * while (true) {
- *     world.step(1 / 60, 4);
- *     for (const hit of world.getContactEvents().begin) {
- *         if (hit.shapeA.getBody() === crate || hit.shapeB.getBody() === crate) console.log("landed");
- *     }
- *     const t = crate.getTransform();
- *     drawCrate(t.x * PIXELS_PER_METER, t.y * PIXELS_PER_METER, t.angle);
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace Box2D {
-    /** Box2D library version, `"3.2.0"`. */
-    const version: string;
-    /** Body types for `BodyOptions.type` and `Body.setType()`. */
-    const STATIC_BODY: 0;
-    const KINEMATIC_BODY: 1;
-    const DYNAMIC_BODY: 2;
-    /** Most vertices a polygon (or query proxy) can have: 8. */
-    const MAX_POLYGON_VERTICES: number;
-    /** Most worlds alive at a time (8 on the EE). */
-    const MAX_WORLDS: number;
-
-    /**
-     * Caps the bytes Box2D may hold (0 = no limit, the default). Reset to 0
-     * when the VM restarts.
-     */
-    function setMemoryLimit(bytes: number): void;
-    function getMemoryLimit(): number;
-    /** Bytes currently allocated by Box2D (all worlds). */
-    function getMemoryUsage(): number;
-
-    /**
-     * Character mover: given the desired translation and the planes from
-     * `world.collideMover()`, returns the translation that respects them.
-     * Move the capsule by it, then collide again next frame.
-     */
-    function solvePlanes(dx: number, dy: number, planes: CollisionPlane[]): { x: number; y: number; iterations: number };
-    /**
-     * Removes the parts of a velocity that go into the planes. Pass the same
-     * planes, after `solvePlanes` wrote their `push`.
-     */
-    function clipVector(vx: number, vy: number, planes: CollisionPlane[]): Vec2;
-
-    /** A plane for the mover solver; `collideMover()` results can be passed as they are. */
-    interface CollisionPlane {
-        normal: Vec2;
-        offset: number;
-        /** Most the solver may push along this plane. Default: unlimited. */
-        pushLimit?: number;
-        /** `clipVector` clips against this plane. Default true (false for soft collision). */
-        clipVelocity?: boolean;
-        /** Written by `solvePlanes`: `clipVector` only clips against planes that pushed. */
-        push?: number;
-    }
-
-    type BodyType = 0 | 1 | 2;
-    type ShapeType = 'circle' | 'capsule' | 'segment' | 'polygon' | 'chainSegment';
-    type JointType = 'distance' | 'filter' | 'motor' | 'prismatic' | 'revolute' | 'weld' | 'wheel';
-
-    interface Vec2 {
-        x: number;
-        y: number;
-    }
-
-    interface AABB {
-        lowerX: number;
-        lowerY: number;
-        upperX: number;
-        upperY: number;
-    }
-
-    /**
-     * 64-bit collision bits. Accepted as an integer number (a negative number
-     * is two's complement: `-1` is every bit) or a BigInt. Read back as a
-     * number within +-2^53, as a BigInt beyond (bits 53 to 62).
-     */
-    type Bits = number | bigint;
-
-    /**
-     * Two shapes collide when each one's categoryBits match the other's
-     * maskBits, unless they share a groupIndex: positive always collides,
-     * negative never does.
-     */
-    interface Filter {
-        /** Default 1. */
-        categoryBits?: Bits;
-        /** Default -1 (every category). */
-        maskBits?: Bits;
-        /** Default 0. */
-        groupIndex?: number;
-    }
-
-    /** Filter for queries: shapes whose categoryBits match maskBits, and whose maskBits match categoryBits. */
-    interface QueryFilter {
-        /** Default 1. */
-        categoryBits?: Bits;
-        /** Default -1. */
-        maskBits?: Bits;
-    }
-
-    interface WorldOptions {
-        /** Default `{ x: 0, y: -10 }`. */
-        gravity?: Vec2;
-        /** Let resting bodies sleep. Default true. */
-        enableSleep?: boolean;
-        /** Continuous collision between dynamic and static bodies. Default true. */
-        enableContinuous?: boolean;
-        /** Speed (m/s) below which collisions do not bounce. Default 1. */
-        restitutionThreshold?: number;
-        /** Approach speed (m/s) that reports a hit event. Default 1. */
-        hitEventThreshold?: number;
-        /** Speed cap in m/s, > 0. Default 400. */
-        maximumLinearSpeed?: number;
-        /** Accepted for compatibility (1..32); the EE always simulates on one worker. */
-        workerCount?: number;
-        /** Contact stiffness in Hz, >= 0. Default 30. See `World.setContactTuning()`. */
-        contactHertz?: number;
-        /** Contact damping ratio, >= 0. Default 10. */
-        contactDampingRatio?: number;
-        /** Most speed (m/s) at which overlap is pushed out, >= 0. Default 3. */
-        contactSpeed?: number;
-        /** Softer contacts between bodies of very different mass (experimental). Default false. */
-        enableContactSoftening?: boolean;
-        userData?: any;
-    }
-
-    interface BodyOptions {
-        /** Default STATIC_BODY. */
-        type?: BodyType;
-        position?: Vec2;
-        /** Radians. `rotation` is an alias. */
-        angle?: number;
-        rotation?: number;
-        linearVelocity?: Vec2;
-        angularVelocity?: number;
-        /** >= 0. */
-        linearDamping?: number;
-        /** >= 0. */
-        angularDamping?: number;
-        /** Multiplies the world gravity; may be negative. Default 1. */
-        gravityScale?: number;
-        /** Speed below which the body may sleep, >= 0. Default 0.05 m/s. */
-        sleepThreshold?: number;
-        /** Stops rotation. */
-        fixedRotation?: boolean;
-        /** Blocks motion along world x (e.g. a 2D side view with vertical-only motion). */
-        lockLinearX?: boolean;
-        /** Blocks motion along world y. */
-        lockLinearY?: boolean;
-        /** Continuous collision against other dynamic bodies too (fast projectiles). */
-        isBullet?: boolean;
-        enableSleep?: boolean;
-        isAwake?: boolean;
-        isEnabled?: boolean;
-        /** Lets the body spin past Box2D's rotation speed cap (round wheels only). Default false. */
-        allowFastRotation?: boolean;
-        /**
-         * Reuse contact points between steps. Default true (faster); turn it
-         * off for characters that must not catch on ghost collisions.
-         */
-        enableContactRecycling?: boolean;
-        /** Debug name, cut to 10 bytes (B2_NAME_LENGTH) at a character boundary. */
-        name?: string;
-        userData?: any;
-    }
-
-    /** Surface properties of a shape; see `Shape.setSurfaceMaterial()`. */
-    interface SurfaceMaterial {
-        /** >= 0. Default 0.6. */
-        friction?: number;
-        /** Bounciness, >= 0 (above 1 gains energy). Default 0. */
-        restitution?: number;
-        /** >= 0. Default 0. */
-        rollingResistance?: number;
-        /** Conveyor belt speed along the surface. Default 0. */
-        tangentSpeed?: number;
-        /** Your own material id (e.g. for footstep sounds). Not used by Box2D. Default 0. */
-        userMaterialId?: Bits;
-        /** Debug draw color 0xRRGGBB; 0 = the default color. */
-        customColor?: number;
-    }
-
-    /** Mass properties. `center` is local; the inertia is about the center of mass. */
-    interface MassData {
-        mass: number;
-        center: Vec2;
-        rotationalInertia: number;
-    }
-
-    /** Options shared by every `create*Shape` method. */
-    interface ShapeOptions extends SurfaceMaterial {
-        /** kg/m^2, >= 0. Default 1. */
-        density?: number;
-        /** Detects overlaps without colliding; see `World.getSensorEvents()`. */
-        isSensor?: boolean;
-        /** Report this shape to sensors (visitors need it too). Default false. */
-        enableSensorEvents?: boolean;
-        /** Contact begin/end events. Default false. */
-        enableContactEvents?: boolean;
-        /** Hit events above `hitEventThreshold`. Default false. */
-        enableHitEvents?: boolean;
-        filter?: Filter;
-        userData?: any;
-    }
-
-    interface CircleOptions extends ShapeOptions {
-        /** > 0. */
-        radius: number;
-        /** Local center. Default `{ x: 0, y: 0 }`. */
-        center?: Vec2;
-    }
-
-    interface BoxOptions extends ShapeOptions {
-        /** > 0. */
-        halfWidth: number;
-        /** > 0. */
-        halfHeight: number;
-        /** Local center. */
-        center?: Vec2;
-        /** Local rotation in radians. */
-        angle?: number;
-    }
-
-    interface PolygonOptions extends ShapeOptions {
-        /** 3 to 8 local points; their convex hull is used. */
-        vertices: Vec2[];
-        /** Rounds the corners, >= 0. Default 0. */
-        radius?: number;
-    }
-
-    interface CapsuleOptions extends ShapeOptions {
-        /** Local centers of the two half circles; more than 0.005 apart. */
-        point1: Vec2;
-        point2: Vec2;
-        /** > 0. */
-        radius: number;
-    }
-
-    interface SegmentOptions extends ShapeOptions {
-        /** Local end points; more than 0.005 apart. */
-        point1: Vec2;
-        point2: Vec2;
-    }
-
-    interface ChainOptions extends SurfaceMaterial {
-        /** Connects the last point to the first. Default false. */
-        isLoop?: boolean;
-        enableSensorEvents?: boolean;
-        filter?: Filter;
-        userData?: any;
-    }
-
-    interface JointOptions {
-        /** Let the two bodies collide with each other. Default false. */
-        collideConnected?: boolean;
-        /** Constraint force (N) above which the joint reports a joint event. Default: never. */
-        forceThreshold?: number;
-        /** Constraint torque (N·m) above which the joint reports a joint event. Default: never. */
-        torqueThreshold?: number;
-        /** Stiffness of the joint constraint in Hz, >= 0 (advanced). Default 60. */
-        constraintHertz?: number;
-        /** Damping of the joint constraint, >= 0 (advanced). Default 2. */
-        constraintDampingRatio?: number;
-        userData?: any;
-    }
-
-    /**
-     * `anchor` is a world point where both bodies are joined. Without it,
-     * each body is joined at its own origin. Joints start relaxed: the
-     * current relative angle is the zero angle of revolute joints and is
-     * kept by weld joints.
-     */
-    interface AnchorOptions extends JointOptions {
-        anchor?: Vec2;
-    }
-
-    interface SpringOptions {
-        enableSpring?: boolean;
-        /** Stiffness in Hz, >= 0. */
-        hertz?: number;
-        /** >= 0 (1 = critically damped). */
-        dampingRatio?: number;
-    }
-
-    interface DistanceJointOptions extends JointOptions, SpringOptions {
-        /** World point used by both bodies. */
-        anchor?: Vec2;
-        /** Local point on body A (when `anchor` is not given). */
-        anchorA?: Vec2;
-        /** Local point on body B (when `anchor` is not given). */
-        anchorB?: Vec2;
-        /** Rest length, > 0. Default: the current distance between the anchors. */
-        length?: number;
-        enableLimit?: boolean;
-        minLength?: number;
-        maxLength?: number;
-        enableMotor?: boolean;
-        maxMotorForce?: number;
-        motorSpeed?: number;
-        /**
-         * Spring force range (N), lower <= upper: lower bounds the tension, upper
-         * the compression (upperSpringForce 0 makes a spring that only pulls).
-         * Default unlimited.
-         */
-        lowerSpringForce?: number;
-        upperSpringForce?: number;
-    }
-
-    interface RevoluteJointOptions extends AnchorOptions, SpringOptions {
-        enableLimit?: boolean;
-        /** Radians, within +-0.99 * PI, lowerAngle <= upperAngle. */
-        lowerAngle?: number;
-        upperAngle?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorTorque?: number;
-        /** Angle (radians) the spring pulls towards. Default 0. */
-        targetAngle?: number;
-    }
-
-    interface PrismaticJointOptions extends AnchorOptions, SpringOptions {
-        /** World direction of the slide at creation. Default `{ x: 1, y: 0 }`. */
-        axis?: Vec2;
-        enableLimit?: boolean;
-        lowerTranslation?: number;
-        upperTranslation?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorForce?: number;
-        /** Translation (m) the spring pulls towards. Default 0. */
-        targetTranslation?: number;
-    }
-
-    interface WeldJointOptions extends AnchorOptions {
-        /** 0 = rigid. */
-        linearHertz?: number;
-        angularHertz?: number;
-        linearDampingRatio?: number;
-        angularDampingRatio?: number;
-    }
-
-    interface WheelJointOptions extends AnchorOptions, SpringOptions {
-        /** World direction of the suspension at creation. Default `{ x: 0, y: 1 }`. */
-        axis?: Vec2;
-        enableLimit?: boolean;
-        lowerTranslation?: number;
-        upperTranslation?: number;
-        enableMotor?: boolean;
-        motorSpeed?: number;
-        maxMotorTorque?: number;
-    }
-
-    /** Drives body B relative to body A (top-down friction, animated platforms). */
-    interface MotorJointOptions extends JointOptions {
-        linearVelocity?: Vec2;
-        angularVelocity?: number;
-        maxVelocityForce?: number;
-        maxVelocityTorque?: number;
-        linearHertz?: number;
-        linearDampingRatio?: number;
-        maxSpringForce?: number;
-        angularHertz?: number;
-        angularDampingRatio?: number;
-        maxSpringTorque?: number;
-    }
-
-    interface Contact {
-        shapeA: Shape;
-        shapeB: Shape;
-        /** From shape A to shape B. */
-        normal: Vec2;
-        /** 1 or 2 points. */
-        points: { point: Vec2; separation: number; normalImpulse: number }[];
-    }
-
-    interface CastHit {
-        shape: Shape;
-        point: Vec2;
-        normal: Vec2;
-        /** Position along the cast, 0 (start) to 1 (end). */
-        fraction: number;
-    }
-
-    interface MoverPlane {
-        shape: Shape;
-        /** Plane normal, pointing out of the shape. */
-        normal: Vec2;
-        /** Plane offset, relative to the mover origin. */
-        offset: number;
-        /** Contact point on the shape, relative to the mover origin. */
-        point: Vec2;
-    }
-
-    /**
-     * Events of the last step. A shape destroyed since then reads as null:
-     * always check `end` events, and the others when shapes are destroyed
-     * between `step()` and the read.
-     */
-    interface ContactEvents {
-        begin: { shapeA: Shape; shapeB: Shape }[];
-        end: { shapeA: Shape | null; shapeB: Shape | null }[];
-        hit: { shapeA: Shape; shapeB: Shape; point: Vec2; normal: Vec2; approachSpeed: number }[];
-    }
-
-    /** See ContactEvents about destroyed shapes. */
-    interface SensorEvents {
-        begin: { sensor: Shape; visitor: Shape }[];
-        end: { sensor: Shape | null; visitor: Shape | null }[];
-    }
-
-    /** A body that moved in the last step (awake bodies only; bodies destroyed since are left out). */
-    interface BodyMoveEvent {
-        body: Body;
-        x: number;
-        y: number;
-        angle: number;
-        /** The body went to sleep in this step. */
-        fellAsleep: boolean;
-    }
-
-    /** Sizes of the simulation, from `World.getCounters()`. */
-    interface Counters {
-        bodyCount: number;
-        shapeCount: number;
-        contactCount: number;
-        jointCount: number;
-        islandCount: number;
-        stackUsed: number;
-        staticTreeHeight: number;
-        treeHeight: number;
-        taskCount: number;
-        awakeContactCount: number;
-        recycledContactCount: number;
-        /** Bytes held by this world. */
-        byteCount: number;
-        /** Constraints per solver graph color (24 colors). */
-        colorCounts: number[];
-    }
-
-    interface World {
-        /**
-         * Advances the simulation. Default 1/60 s and 4 sub-steps (1 to 64).
-         * Use a fixed time step for stable results. Throws a RangeError, and
-         * leaves the world as it was, once the memory budget is spent (see
-         * `Box2D.setMemoryLimit()`).
-         */
-        step(timeStep?: number, subStepCount?: number): void;
-        createBody(options?: BodyOptions): Body;
-
-        createDistanceJoint(bodyA: Body, bodyB: Body, options?: DistanceJointOptions): Joint;
-        createRevoluteJoint(bodyA: Body, bodyB: Body, options?: RevoluteJointOptions): Joint;
-        createPrismaticJoint(bodyA: Body, bodyB: Body, options?: PrismaticJointOptions): Joint;
-        createWeldJoint(bodyA: Body, bodyB: Body, options?: WeldJointOptions): Joint;
-        createWheelJoint(bodyA: Body, bodyB: Body, options?: WheelJointOptions): Joint;
-        createMotorJoint(bodyA: Body, bodyB: Body, options?: MotorJointOptions): Joint;
-        /** Only disables collision between the two bodies. */
-        createFilterJoint(bodyA: Body, bodyB: Body, options?: JointOptions): Joint;
-
-        getGravity(): Vec2;
-        setGravity(x: number, y: number): void;
-        enableContinuous(flag: boolean): void;
-        isContinuousEnabled(): boolean;
-        enableSleeping(flag: boolean): void;
-        isSleepingEnabled(): boolean;
-        setRestitutionThreshold(value: number): void;
-        getRestitutionThreshold(): number;
-        setHitEventThreshold(value: number): void;
-        getHitEventThreshold(): number;
-        /** > 0. */
-        setMaximumLinearSpeed(value: number): void;
-        getMaximumLinearSpeed(): number;
-        getAwakeBodyCount(): number;
-        /**
-         * Contact softness (advanced): stiffness in Hz, damping ratio and the
-         * most speed (m/s) at which overlap is pushed out; all >= 0.
-         * Defaults 30, 10, 3.
-         */
-        setContactTuning(hertz: number, dampingRatio: number, pushSpeed: number): void;
-        /** Distance (m) within which contact points are reused between steps, >= 0 (0 disables). */
-        setContactRecycleDistance(distance: number): void;
-        getContactRecycleDistance(): number;
-        /** Solver warm starting; disabling it only makes stacks less stable (testing). */
-        enableWarmStarting(flag: boolean): void;
-        isWarmStartingEnabled(): boolean;
-        /** Speculative contacts (testing). */
-        enableSpeculative(flag: boolean): void;
-        getCounters(): Counters;
-        /** Rebalances the tree of static shapes, e.g. after building a level. */
-        rebuildStaticTree(): void;
-        getUserData(): any;
-        setUserData(value: any): void;
-
-        /** Closest shape hit by the ray from origin to origin + translation, or null. */
-        castRay(originX: number, originY: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit | null;
-        /** Every shape hit by the ray, nearest first. */
-        raycastAll(originX: number, originY: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        /** Shapes whose bounds overlap the box (a broad test: bounds are slightly padded). */
-        queryAABB(lowerX: number, lowerY: number, upperX: number, upperY: number, filter?: QueryFilter): Shape[];
-        /** Shapes overlapping the convex hull of 1 to 8 world points, rounded by radius. */
-        overlapShape(points: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
-        overlapShape(points: Vec2[], filter?: QueryFilter): Shape[];
-        overlapPolygon(vertices: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
-        overlapPolygon(vertices: Vec2[], filter?: QueryFilter): Shape[];
-        overlapCircle(x: number, y: number, radius: number, filter?: QueryFilter): Shape[];
-        overlapCapsule(x1: number, y1: number, x2: number, y2: number, radius: number, filter?: QueryFilter): Shape[];
-        /** Sweeps a shape and returns every hit, nearest first. */
-        castShape(points: Vec2[], radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castPolygon(vertices: Vec2[], radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castCircle(x: number, y: number, radius: number, translationX: number, translationY: number,
-            filter?: QueryFilter): CastHit[];
-        castCapsule(x1: number, y1: number, x2: number, y2: number, radius: number,
-            translationX: number, translationY: number, filter?: QueryFilter): CastHit[];
-
-        /**
-         * Character mover: sweeps a capsule (centers x1,y1 / x2,y2 relative to
-         * x,y; radius > 0.01) and returns the fraction of the translation
-         * it can move.
-         */
-        castMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
-            translationX: number, translationY: number, filter?: QueryFilter): number;
-        /** Collision planes around a capsule mover, relative to x,y. */
-        collideMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
-            filter?: QueryFilter): MoverPlane[];
-
-        /** Events of the last step. Only shapes with the matching enable*Events option report them. */
-        getContactEvents(): ContactEvents;
-        getSensorEvents(): SensorEvents;
-        /** Cheapest way to sync sprites: only the bodies that moved. */
-        getBodyEvents(): BodyMoveEvent[];
-        /**
-         * Joints whose force or torque exceeded their threshold in the last
-         * step (breakable joints: destroy them here).
-         */
-        getJointEvents(): { joint: Joint }[];
-        /**
-         * Writes x, y, angle of each body into out[3i], out[3i + 1],
-         * out[3i + 2] and returns the body count. No object is allocated:
-         * the fastest way to sync sprites every frame.
-         */
-        readTransforms(bodies: Body[], out: Float32Array): number;
-        /** Milliseconds spent in each phase of the last step (EE cycle counter). */
-        getProfile(): {
-            step: number; pairs: number; collide: number; solve: number; solverSetup: number;
-            constraints: number; prepareConstraints: number; integrateVelocities: number; warmStart: number;
-            solveImpulses: number; integratePositions: number; relaxImpulses: number; applyRestitution: number;
-            storeImpulses: number; splitIslands: number; transforms: number; sensorHits: number;
-            jointEvents: number; hitEvents: number; refit: number; bullets: number; sleepIslands: number;
-            sensors: number;
-        };
-        /**
-         * The whole simulation state, between steps. Checksummed: a damaged
-         * image is rejected by `restore`. Valid for this build only.
-         */
-        snapshot(): ArrayBuffer;
-        /**
-         * Returns the world to a snapshot of itself. Objects that existed then
-         * keep their script objects and user data; objects created since are
-         * destroyed; objects destroyed since come back as new script objects.
-         * RangeError for a rejected image (the world is unchanged). If the
-         * image fails midway the world is destroyed and an InternalError thrown.
-         */
-        restore(image: ArrayBuffer | ArrayBufferView): true;
-        /** Radial impulse on the shapes within radius + falloff. */
-        explode(x: number, y: number, radius: number, falloff: number, impulsePerLength: number, maskBits?: Bits): void;
-
-        /** Frees the world and everything in it. Returns false if already destroyed. */
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    interface Body {
-        readonly world: World;
-
-        getType(): BodyType;
-        setType(type: BodyType): void;
-        getPosition(): Vec2;
-        /** Teleports the body, keeping its angle. */
-        setPosition(x: number, y: number): void;
-        /** Radians. */
-        getAngle(): number;
-        /** Position and angle in one call. */
-        getTransform(): { x: number; y: number; angle: number };
-        setTransform(x: number, y: number, angle: number): void;
-        /** Moves a kinematic body to the target over `duration` seconds (> 0) with velocities. */
-        setTargetTransform(x: number, y: number, angle: number, duration: number): void;
-        getLinearVelocity(): Vec2;
-        setLinearVelocity(vx: number, vy: number): void;
-        getAngularVelocity(): number;
-        setAngularVelocity(w: number): void;
-
-        /** Force at a world point. `wake` defaults to true. */
-        applyForce(fx: number, fy: number, px: number, py: number, wake?: boolean): void;
-        applyForceToCenter(fx: number, fy: number, wake?: boolean): void;
-        applyTorque(torque: number, wake?: boolean): void;
-        applyLinearImpulse(ix: number, iy: number, px: number, py: number, wake?: boolean): void;
-        applyLinearImpulseToCenter(ix: number, iy: number, wake?: boolean): void;
-        applyAngularImpulse(impulse: number, wake?: boolean): void;
-
-        getMass(): number;
-        getLinearDamping(): number;
-        setLinearDamping(damping: number): void;
-        getAngularDamping(): number;
-        setAngularDamping(damping: number): void;
-        getGravityScale(): number;
-        setGravityScale(scale: number): void;
-        isAwake(): boolean;
-        setAwake(flag: boolean): void;
-        isEnabled(): boolean;
-        setEnabled(flag: boolean): void;
-        isFixedRotation(): boolean;
-        setFixedRotation(flag: boolean): void;
-        isBullet(): boolean;
-        setBullet(flag: boolean): void;
-
-        /** Local point to world. */
-        getWorldPoint(x: number, y: number): Vec2;
-        /** World point to local. */
-        getLocalPoint(x: number, y: number): Vec2;
-        /** Local direction to world (rotation only). */
-        getWorldVector(x: number, y: number): Vec2;
-        /** World direction to local (rotation only). */
-        getLocalVector(x: number, y: number): Vec2;
-        /** Velocity of a world point moving with the body. */
-        getWorldPointVelocity(x: number, y: number): Vec2;
-        /** Velocity of a local point of the body, in world coordinates. */
-        getLocalPointVelocity(x: number, y: number): Vec2;
-        /** Center of mass in world coordinates. */
-        getWorldCenter(): Vec2;
-        /** Center of mass in local coordinates. */
-        getLocalCenter(): Vec2;
-        /** About the center of mass, kg·m^2. */
-        getRotationalInertia(): number;
-        getMassData(): MassData;
-        /**
-         * Overrides the mass computed from the shapes (fields left out keep
-         * their value; mass and inertia >= 0) until the shapes change or
-         * `applyMassFromShapes()` is called.
-         */
-        setMassData(data: Partial<MassData>): void;
-        /** Recomputes mass after shape density or geometry changes. */
-        applyMassFromShapes(): void;
-        computeAABB(): AABB;
-        /** Drops the forces and torques applied since the last step. */
-        clearForces(): void;
-        /** Wakes the bodies touching this one. */
-        wakeTouching(): void;
-        /** When false the body never sleeps. Default true. */
-        enableSleep(flag: boolean): void;
-        isSleepEnabled(): boolean;
-        /** Speed (m/s) below which the body may sleep, >= 0. */
-        setSleepThreshold(threshold: number): void;
-        getSleepThreshold(): number;
-        /** See `BodyOptions.enableContactRecycling`. */
-        enableContactRecycling(flag: boolean): void;
-        isContactRecyclingEnabled(): boolean;
-        /** Sets the flag on every shape of the body (read it with `shape.areContactEventsEnabled()`). */
-        enableContactEvents(flag: boolean): void;
-        /** Sets the flag on every shape of the body. */
-        enableHitEvents(flag: boolean): void;
-        /** Debug name, cut to 10 bytes at a character boundary. */
-        setName(name: string): void;
-        getName(): string;
-
-        createCircleShape(options: CircleOptions): Shape;
-        createBoxShape(options: BoxOptions): Shape;
-        createPolygonShape(options: PolygonOptions): Shape;
-        createCapsuleShape(options: CapsuleOptions): Shape;
-        createSegmentShape(options: SegmentOptions): Shape;
-        /**
-         * Chain of segments from 4 or more local points, consecutive points
-         * more than 0.005 apart. Segments are one-sided: they collide on the
-         * right of the direction from one point to the next, so terrain
-         * walked on from above is listed right to left, and a loop listed
-         * counter-clockwise collides on the outside. An open chain uses its
-         * first and last points only to smooth the ends: n points make
-         * n - 3 segments (a loop makes n).
-         */
-        createChain(points: Vec2[], options?: ChainOptions): Chain;
-        /** Shapes of the body, chain segments included. */
-        getShapes(): Shape[];
-        getJoints(): Joint[];
-        /** Touching contacts of the body's shapes (e.g. "is the player grounded?"). */
-        getContacts(): Contact[];
-        getMotionLocks(): { linearX: boolean; linearY: boolean; angularZ: boolean };
-        /** Fields left out keep their value; `angularZ` is `fixedRotation`. */
-        setMotionLocks(locks: { linearX?: boolean; linearY?: boolean; angularZ?: boolean }): void;
-
-        getUserData(): any;
-        setUserData(value: any): void;
-        /** Frees the body with its shapes, chains and joints. Returns false if already destroyed. */
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    interface Shape {
-        readonly world: World;
-
-        getType(): ShapeType;
-        getBody(): Body;
-        getFriction(): number;
-        setFriction(friction: number): void;
-        getRestitution(): number;
-        setRestitution(restitution: number): void;
-        getDensity(): number;
-        /** `updateBodyMass` defaults to true. */
-        setDensity(density: number, updateBodyMass?: boolean): void;
-        isSensor(): boolean;
-        enableSensorEvents(flag: boolean): void;
-        areSensorEventsEnabled(): boolean;
-        enableContactEvents(flag: boolean): void;
-        areContactEventsEnabled(): boolean;
-        enableHitEvents(flag: boolean): void;
-        areHitEventsEnabled(): boolean;
-        getFilter(): { categoryBits: Bits; maskBits: Bits; groupIndex: number };
-        /** Fields left out keep their value. */
-        setFilter(filter: Filter): void;
-        getUserData(): any;
-        setUserData(value: any): void;
-
-        /** World point inside the shape. */
-        testPoint(x: number, y: number): boolean;
-        getClosestPoint(x: number, y: number): Vec2;
-        /** World bounds, slightly padded. */
-        getAABB(): AABB;
-        /** Local geometry; each throws a TypeError for another shape type. */
-        getCircle(): { center: Vec2; radius: number };
-        getCapsule(): { center1: Vec2; center2: Vec2; radius: number };
-        getPolygon(): { vertices: Vec2[]; normals: Vec2[]; centroid: Vec2; radius: number; count: number };
-        getSegment(): { point1: Vec2; point2: Vec2 };
-        getChainSegment(): { ghost1: Vec2; segment: { point1: Vec2; point2: Vec2 }; ghost2: Vec2; chain: Chain };
-        /** Touching contacts of this shape. */
-        getContacts(): Contact[];
-        /** Sensors only: the shapes inside, as of the last step. */
-        getSensorOverlaps(): Shape[];
-
-        /**
-         * Replace the geometry (the type may change), with the options of the
-         * matching `create*Shape`. The body mass is kept: call
-         * `body.applyMassFromShapes()`. Chain segments throw a TypeError.
-         */
-        setCircle(circle: { radius: number; center?: Vec2 }): void;
-        setBox(box: { halfWidth: number; halfHeight: number; center?: Vec2; angle?: number }): void;
-        setPolygon(polygon: { vertices: Vec2[]; radius?: number }): void;
-        setCapsule(capsule: { point1: Vec2; point2: Vec2; radius: number }): void;
-        setSegment(segment: { point1: Vec2; point2: Vec2 }): void;
-        getSurfaceMaterial(): Required<SurfaceMaterial>;
-        /** Fields left out keep their value. */
-        setSurfaceMaterial(material: SurfaceMaterial): void;
-        /** Mass of this shape alone, from its density. */
-        computeMassData(): MassData;
-        /** Ray against this shape only (world coordinates); null when missed. */
-        rayCast(originX: number, originY: number, translationX: number, translationY: number): CastHit | null;
-        /**
-         * Air force on a circle, capsule or polygon of a dynamic body (other
-         * shapes are ignored). `drag` (>= 0) scales the shape's own velocity
-         * against the wind, `lift` the force across it. `wake` defaults to true.
-         */
-        applyWind(windX: number, windY: number, drag: number, lift: number, wake?: boolean): void;
-
-        /**
-         * `updateBodyMass` defaults to true. Returns false if already
-         * destroyed. Chain segments go away with their chain: destroying one
-         * throws a TypeError.
-         */
-        destroy(updateBodyMass?: boolean): boolean;
-        isValid(): boolean;
-    }
-
-    interface Chain {
-        readonly world: World;
-
-        getBody(): Body;
-        /** The chain segments (shapes of type 'chainSegment'). */
-        getShapes(): Shape[];
-        getUserData(): any;
-        setUserData(value: any): void;
-        destroy(): boolean;
-        isValid(): boolean;
-    }
-
-    /**
-     * Methods specific to a joint type throw a TypeError on other types.
-     * Types noted per method.
-     */
-    interface Joint {
-        readonly world: World;
-
-        getType(): JointType;
-        getBodyA(): Body;
-        getBodyB(): Body;
-        getUserData(): any;
-        setUserData(value: any): void;
-        setCollideConnected(flag: boolean): void;
-        getCollideConnected(): boolean;
-        wakeBodies(): void;
-        /** See `JointOptions.forceThreshold` and `World.getJointEvents()`. */
-        setForceThreshold(force: number): void;
-        getForceThreshold(): number;
-        setTorqueThreshold(torque: number): void;
-        getTorqueThreshold(): number;
-        getConstraintForce(): Vec2;
-        getConstraintTorque(): number;
-        /** Constraint error: meters apart the anchors are (ignoring allowed motion). */
-        getLinearSeparation(): number;
-        /** Constraint error in radians. */
-        getAngularSeparation(): number;
-        /** See `JointOptions.constraintHertz`; both >= 0. */
-        setConstraintTuning(hertz: number, dampingRatio: number): void;
-        getConstraintTuning(): { hertz: number; dampingRatio: number };
-        /** Joint frame in body A's (or B's) local space: anchor and axis angle. */
-        getLocalFrameA(): { x: number; y: number; angle: number };
-        getLocalFrameB(): { x: number; y: number; angle: number };
-        setLocalFrameA(x: number, y: number, angle: number): void;
-        setLocalFrameB(x: number, y: number, angle: number): void;
-
-        /** distance, revolute, prismatic, wheel. */
-        enableSpring(flag: boolean): void;
-        isSpringEnabled(): boolean;
-        setSpringHertz(hertz: number): void;
-        getSpringHertz(): number;
-        setSpringDampingRatio(ratio: number): void;
-        getSpringDampingRatio(): number;
-        enableLimit(flag: boolean): void;
-        isLimitEnabled(): boolean;
-        /** Length range (distance), angle (revolute, within +-0.99 * PI) or translation (prismatic, wheel). */
-        setLimits(lower: number, upper: number): void;
-        getLimits(): { lower: number; upper: number };
-        enableMotor(flag: boolean): void;
-        isMotorEnabled(): boolean;
-        setMotorSpeed(speed: number): void;
-        getMotorSpeed(): number;
-
-        /** distance, prismatic. */
-        setMaxMotorForce(force: number): void;
-        getMaxMotorForce(): number;
-        getMotorForce(): number;
-        /** revolute, wheel. */
-        setMaxMotorTorque(torque: number): void;
-        getMaxMotorTorque(): number;
-        getMotorTorque(): number;
-
-        /** revolute: current angle in radians. */
-        getAngle(): number;
-        /**
-         * revolute: angle the spring pulls towards. Like the other setters,
-         * this does not wake sleeping bodies: call `wakeBodies()`.
-         */
-        setTargetAngle(angle: number): void;
-        getTargetAngle(): number;
-        /** prismatic: translation along the axis and its speed. */
-        getTranslation(): number;
-        getSpeed(): number;
-        /** prismatic: translation the spring pulls towards (does not wake the bodies). */
-        setTargetTranslation(translation: number): void;
-        getTargetTranslation(): number;
-        /** distance: rest length (> 0) and current length. */
-        getLength(): number;
-        setLength(length: number): void;
-        getCurrentLength(): number;
-        /** distance: see `DistanceJointOptions.lowerSpringForce`; lower <= upper. */
-        setSpringForceRange(lower: number, upper: number): void;
-        getSpringForceRange(): { lower: number; upper: number };
-
-        /** weld, motor. */
-        setLinearHertz(hertz: number): void;
-        getLinearHertz(): number;
-        setLinearDampingRatio(ratio: number): void;
-        getLinearDampingRatio(): number;
-        setAngularHertz(hertz: number): void;
-        getAngularHertz(): number;
-        setAngularDampingRatio(ratio: number): void;
-        getAngularDampingRatio(): number;
-
-        /** motor. */
-        setLinearVelocity(x: number, y: number): void;
-        getLinearVelocity(): Vec2;
-        setAngularVelocity(velocity: number): void;
-        getAngularVelocity(): number;
-        setMaxVelocityForce(force: number): void;
-        getMaxVelocityForce(): number;
-        setMaxVelocityTorque(torque: number): void;
-        getMaxVelocityTorque(): number;
-        setMaxSpringForce(force: number): void;
-        getMaxSpringForce(): number;
-        setMaxSpringTorque(torque: number): void;
-        getMaxSpringTorque(): number;
-
-        /** `wakeBodies` defaults to true. Returns false if already destroyed. */
-        destroy(wakeBodies?: boolean): boolean;
-        isValid(): boolean;
-    }
-
-    /**
-     * Creates a world. At most `MAX_WORLDS` exist at a time: destroy() the
-     * ones you no longer need (unreachable ones are collected first).
-     */
-    function createWorld(options?: WorldOptions): World;
-}
-
-
 /* === Module: Color (color) === */
 /**
  * Packs RGBA components into the 32-bit color format used by AthenaEnv.
@@ -1479,1070 +1614,6 @@ declare namespace Color {
     function setB(color: Value, value: number): Value;
     /** Returns `color` with its alpha component replaced. */
     function setA(color: Value, value: number): Value;
-}
-
-
-/* === Module: Box2DDraw (box2ddraw) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=box2ddraw,... */
-/**
- * Debug drawing of a Box2D world: shape outlines, joints, bounds, contacts
- * and centers of mass, in Box2D's colors (static bodies green, awake
- * dynamic bodies pink, sleeping ones gray). Lines are batched into one GS
- * packet stream per call and what lies outside the screen is skipped.
- *
- * Example:
- * ```js
- * while (true) {
- *     world.step(1 / 60, 4);
- *     Screen.clear(BLACK);
- *     Box2DDraw.draw(world, { scale: 32, offsetX: 320, offsetY: 400 });
- *     Screen.flip();
- * }
- * ```
- */
-declare namespace Box2DDraw {
-    interface Options {
-        /** Pixels per meter, 0.001 to 1e6. Default 32. */
-        scale?: number;
-        /** Screen position of the world origin. Default: the screen center. */
-        offsetX?: number;
-        offsetY?: number;
-        /** World y up, screen y down. Default true. */
-        flipY?: boolean;
-        /** Translucent shape interiors (needs alpha blending). Default false. */
-        fill?: boolean;
-        /** Default true. */
-        shapes?: boolean;
-        /** Default true. */
-        joints?: boolean;
-        /** Joint limits, springs and frames. Default false. */
-        jointExtras?: boolean;
-        /** Shape bounding boxes. Default false. */
-        bounds?: boolean;
-        /** Contact points and normals. Default false. */
-        contacts?: boolean;
-        /** Centers of mass. Default false. */
-        mass?: boolean;
-    }
-
-    /** Draws the world. Call between Screen.clear() and Screen.flip(). */
-    function draw(world: Box2D.World, options?: Options): void;
-}
-
-
-/* === Module: Loop (loop) === */
-/**
- * Game loop driven by the runtime.
- *
- * `Loop.run()` registers the frame handlers and returns immediately; frames
- * start once the entry script finishes. Each frame clears the screen, runs
- * `update` and `draw`, then flips. Timers, promises and async functions keep
- * running between frames, and the frame rate follows VSync.
- *
- * Variable step: `update(dt)` runs once per frame with the time since the
- * previous frame, in seconds.
- * ```js
- * let x = 0;
- * Loop.run(dt => {
- *     x += 120 * dt; // 120 pixels per second at any frame rate
- *     Draw.rect(x, 200, 32, 32, Color.new(255, 255, 255));
- * });
- * ```
- *
- * Fixed step: `update(step)` runs zero or more times per frame with the same
- * `step`, as physics engines expect, and `draw(alpha)` once per frame.
- * ```js
- * Loop.run({
- *     update(step) { world.step(step, 4); },
- *     draw(alpha) { Box2DDraw.draw(world); },
- * }, { fixedStep: 1 / 60 });
- * ```
- */
-declare namespace Loop {
-    /** Frame handlers. `this` inside them is the handlers object. */
-    interface Handlers {
-        /**
-         * Advances the game. Receives the scaled frame delta in seconds, or
-         * `fixedStep` when set; the first frame's delta is `0`.
-         */
-        update?(dt: number): void;
-        /**
-         * Draws the frame after the updates. With `fixedStep`, `alpha` (0..1)
-         * is the fraction of a step not simulated yet, to interpolate
-         * between the previous and the current state; otherwise it is `1`.
-         */
-        draw?(alpha: number): void;
-    }
-
-    interface Options {
-        /** Clears the screen before each frame. Defaults to `true`. */
-        clear?: boolean;
-        /** Packed RGBA color used to clear. Defaults to opaque black. */
-        clearColor?: number;
-        /**
-         * Longest real frame time counted, in seconds; longer stalls such as
-         * loading are cut to it. `0` disables the limit. Defaults to `0.25`.
-         */
-        maxDelta?: number;
-        /**
-         * Runs `update` with this constant step, in seconds, as many times as
-         * the elapsed time holds. `0`, the default, runs it once per frame
-         * with the frame delta.
-         */
-        fixedStep?: number;
-        /**
-         * Fixed steps per frame at most; the time beyond it is dropped so a
-         * slow frame cannot snowball. Defaults to `5`.
-         */
-        maxSteps?: number;
-        /**
-         * Vertical blanks per frame: `2` holds a steady 30 FPS on NTSC and
-         * 25 FPS on PAL. Defaults to `1`.
-         */
-        vsyncInterval?: number;
-    }
-
-    interface Stats {
-        /** Frames per second, measured over the last second. */
-        fps: number;
-        /** Real duration of the last frame in milliseconds, capped by `maxDelta`. */
-        frameMs: number;
-        /**
-         * Milliseconds of work in the last frame: from the previous flip up to
-         * this one, timers and promises included, without the VSync wait.
-         */
-        cpuMs: number;
-        /** `update` calls in the last frame. */
-        steps: number;
-        /** Interpolation factor passed to the last `draw`. */
-        alpha: number;
-    }
-
-    /**
-     * Starts the loop. A function is the same as `{ update: fn }`. Called
-     * again, even from a handler, it replaces the handlers and options without
-     * restarting the frame timing; the rest of the current frame is skipped.
-     * An exception thrown by a handler stops the program.
-     */
-    function run(handlers: ((dt: number) => void) | Handlers, options?: Options): void;
-    /**
-     * Stops the loop after the current frame; the program ends once no timers
-     * remain. Registered systems stay registered and run again with the next
-     * `Loop.run()`.
-     */
-    function stop(): void;
-    /** Returns whether the loop is running. */
-    function isRunning(): boolean;
-    /**
-     * Scales the time passed to `update`: `0.5` is slow motion and `0`
-     * pauses the game. At `0`, a variable-step `update` still runs with a
-     * delta of `0`, and a fixed-step one does not run. `draw` always runs.
-     */
-    function setTimeScale(scale: number): void;
-    /** Returns the time scale; `1` by default. */
-    function getTimeScale(): number;
-    /** Returns the scaled delta of the current frame, in seconds. */
-    function getDeltaTime(): number;
-    /** Returns the scaled time since the loop started, in seconds. */
-    function getElapsedTime(): number;
-    /** Returns the real time since the loop started, in seconds, ignoring the time scale. */
-    function getRealElapsedTime(): number;
-    /** Returns the number of frames since the loop started. */
-    function getFrameCount(): number;
-    /** Returns the frame statistics of the last frame. */
-    function getStats(): Stats;
-
-    /**
-     * A system: per-frame work that a module or the game registers once, and
-     * that runs around the `update` and `draw` handlers of `Loop.run()` for as
-     * long as the loop runs, surviving `Loop.run()` replacements and
-     * `Loop.stop()`. Each frame runs, in order:
-     *
-     * 1. `preUpdate(dt)` of every system, once;
-     * 2. `update(step)` of every system, then the `update` handler: once with
-     *    `dt`, or once per fixed step with `fixedStep`;
-     * 3. `postUpdate(dt)` of every system, once;
-     * 4. `preDraw(alpha)`, the `draw` handler, then `postDraw(alpha)`, for
-     *    overlays such as debug information or screen transitions.
-     *    `postDraw` runs whenever `preDraw` did, even if `draw` stopped the
-     *    loop, so a system can close what it opened (Camera2D's view).
-     *
-     * Within a phase, systems run by ascending `priority`, then in the order
-     * they were added. `this` is the system object. An exception thrown by a
-     * system stops the program, as one thrown by a handler.
-     */
-    interface System {
-        /** Unique name, for `removeSystem()` and `getSystems()`. */
-        name?: string;
-        /** Lower runs first. Integer; defaults to `0`. */
-        priority?: number;
-        /**
-         * `preUpdate` and `postUpdate` receive the real delta, ignoring
-         * `setTimeScale()`: for menus and transitions that keep moving while
-         * the game is paused. Defaults to `false`.
-         */
-        realTime?: boolean;
-        preUpdate?(dt: number): void;
-        /** Same cadence and argument as the `update` handler. */
-        update?(step: number): void;
-        postUpdate?(dt: number): void;
-        preDraw?(alpha: number): void;
-        postDraw?(alpha: number): void;
-    }
-
-    /** A registered system, as listed by `getSystems()`. */
-    interface SystemInfo {
-        name: string | undefined;
-        priority: number;
-        realTime: boolean;
-        /** Phases the system runs in, e.g. `["update", "postDraw"]`. */
-        phases: Array<"preUpdate" | "update" | "postUpdate" | "preDraw" | "postDraw">;
-        /** True for systems registered by native modules. */
-        native: boolean;
-    }
-
-    /**
-     * Registers a system and returns it. Its methods are read now: replacing
-     * them later has no effect until it is added again. A system added during
-     * a frame starts with the next phase. Throws when the object has no phase
-     * method, was already added, or its name is taken.
-     *
-     * @example
-     * ```js
-     * const flash = Loop.addSystem({
-     *     name: "flash",
-     *     priority: 100,
-     *     alpha: 128,              // 0x80 is opaque on the GS
-     *     postUpdate(dt) { this.alpha = Math.max(0, this.alpha - 256 * dt); },
-     *     postDraw() { Draw.rect(0, 0, 640, 448, Color.new(255, 255, 255, this.alpha)); },
-     * });
-     * ```
-     */
-    function addSystem<T extends System>(system: T): T;
-    /**
-     * Unregisters a system, given the object or its name. Returns whether it
-     * was registered. A system removed during a phase does not run again.
-     */
-    function removeSystem(system: System | string): boolean;
-    /** Registered systems, in run order. */
-    function getSystems(): SystemInfo[];
-}
-
-
-/* === Module: Camera2D (camera2d) === */
-/**
- * 2D cameras, applied in C by every 2D draw: `Draw`, `Image`, `Font` and
- * `TileMap` go through the camera's transform before reaching the GS, so the
- * game draws in world coordinates and never subtracts the camera by hand.
- *
- * `Camera2D.main` is the current camera from the start. It shows the world
- * from (0, 0) at zoom 1, exactly like the screen, so nothing changes until
- * it moves. While `Loop.run()` runs, the current camera is updated after the
- * game's `update` and applied around its `draw`; `Camera2D.screenSpace()`
- * draws the HUD without it. Cameras use the scaled time of the Loop.
- *
- * A camera's position is the world point shown at its anchor (the center of
- * its viewport by default). Zoom is screen pixels per world unit, rotation is
- * in radians (clockwise on screen) and smoothing speeds are rates per second
- * (frame-rate independent: `1 - exp(-rate * dt)` of the distance each frame;
- * 0 means rigid).
- *
- * Example:
- * ```js
- * const cam = Camera2D.main;
- * cam.follow(player, { lerp: 8, deadzone: { w: 64, h: 32 }, lookahead: 40 });
- * cam.setBounds(0, 0, mapWidth, mapHeight);   // centered if the map is smaller
- * cam.zoom = 1.5;
- *
- * Loop.run({
- *     update(dt) { player.update(dt); if (hit) cam.shake(6, 0.3); },
- *     draw() {
- *         cam.draw(() => sky.draw(0, 0), { parallax: 0.3 });   // slower layer
- *         level.render(0, 0);                    // TileMap, in world space
- *         heroImage.draw(player.x, player.y);    // Image, in world space
- *         Camera2D.screenSpace(() => font.print(10, 10, `HP ${hp}`));
- *     },
- * });
- *
- * // Split screen: one camera per viewport, no current camera.
- * const left = new Camera2D.Camera({ viewport: { x: 0, y: 0, w: 320, h: 448 } });
- * const right = new Camera2D.Camera({ viewport: { x: 320, y: 0, w: 320, h: 448 } });
- * left.follow(p1); right.follow(p2);
- * Camera2D.setCurrent(null);
- * // in draw(): left.draw(drawWorld); right.draw(drawWorld);
- * ```
- *
- * Under a rotation, rectangles (images, glyphs, TileMap sprites) are drawn as
- * two triangles (TileMap sprites, on VU1, as triangle strips). While a camera
- * is applied, what lies entirely outside its viewport is skipped in C before
- * reaching the GS: images, rectangles, circles, each sprite of
- * `Image.drawList()`, whole texts, and the cells of `TileMap` grids.
- */
-declare namespace Camera2D {
-    interface Point {
-        x: number;
-        y: number;
-    }
-
-    interface Rect {
-        x: number;
-        y: number;
-        w: number;
-        h: number;
-    }
-
-    /** A number for both axes, `[x, y]`, `{ x, y }` or `{ w, h }`. */
-    type Pair = number | [number, number] | { x: number; y: number } | { w: number; h: number };
-
-    /** Anything with a position in world space: a player, an enemy, a point. */
-    interface Target {
-        x: number;
-        y: number;
-    }
-
-    interface CameraOptions {
-        /** World point at the anchor; defaults to half the viewport (the identity view). */
-        x?: number;
-        y?: number;
-        /** Both axes; `zoomX`/`zoomY` override one. Default 1. */
-        zoom?: number;
-        zoomX?: number;
-        zoomY?: number;
-        /** Radians, clockwise on screen. */
-        rotation?: number;
-        /** Screen rectangle the camera draws into; null (default) is the whole screen. */
-        viewport?: Rect | null;
-        /** Point of the viewport the position is shown at, 0..1. Default [0.5, 0.5]. */
-        anchor?: Pair;
-        /** Round the translation to whole pixels (no shimmer on pixel art). Default true. */
-        pixelSnap?: boolean;
-        /** World bounds the camera never shows past. */
-        bounds?: Rect | null;
-        /** See `Camera.boundsIgnoreRotation`. Default false. */
-        boundsIgnoreRotation?: boolean;
-        /** Make it the current camera. */
-        current?: boolean;
-        /** See `Camera.realTime`. Default false. */
-        realTime?: boolean;
-        /** See `Camera.debug`. Default false. */
-        debug?: boolean;
-    }
-
-    interface FollowOptions {
-        /** Smoothing rate per axis, per second; 0 (default) follows rigidly. Try 5-10. */
-        lerp?: Pair;
-        /**
-         * Screen pixels around the anchor where the target moves without
-         * moving the camera: a box of the screen, whatever the zoom and
-         * rotation. The target may rest anywhere in it, off the center.
-         */
-        deadzone?: Pair;
-        /**
-         * Screen pixels to look ahead of the target's motion, kept once it
-         * stops (so the target rests that far off the center, less the dead
-         * zone). Same distance on screen at any zoom.
-         */
-        lookahead?: Pair;
-        /** How fast the lookahead turns around, per second. Default 4. */
-        lookaheadLerp?: number;
-        /** World offset added to the target (e.g. to look a bit above the player). */
-        offset?: Pair;
-        /**
-         * With several targets: zoom to keep them all in view. `margin` is in
-         * screen pixels (default 32), `min`/`max` limit the zoom (0.5 and 2),
-         * `lerp` smooths it (4 per second).
-         */
-        autoZoom?: boolean | { min?: number; max?: number; margin?: number; lerp?: number };
-        /** Jump to the target now instead of easing from the current position. Default true. */
-        snap?: boolean;
-        /**
-         * For `Loop.run()` with `fixedStep`, when the game draws positions
-         * blended by `alpha`: the camera follows the target blended the
-         * same way (sampled before each step and after the last), so the
-         * target does not jitter against the scenery. Default false.
-         */
-        interpolate?: boolean;
-        /**
-         * Zooms out as the target speeds up: `max` (default 1) at rest,
-         * `min` (0.8) at `speed` world units per second (300) or faster.
-         * In a zone with a zoom, that zoom takes the place of `max`.
-         * `lerp` smooths the zoom (4 per second). `autoZoom` wins over it.
-         */
-        zoomBySpeed?: boolean | { min?: number; max?: number; speed?: number; lerp?: number };
-    }
-
-    interface Zone extends Rect {
-        /** Zoom while the target is in this zone. */
-        zoom?: number;
-        /** Follow smoothing while the target is in this zone. */
-        lerp?: Pair;
-        /** Target offset (world units) while the target is in this zone. */
-        offset?: Pair;
-    }
-
-    interface ZoneOptions {
-        /** Seconds to glide from one zone to the next (0: cut). */
-        transition?: number;
-        /** Called when the target enters a zone: its index and the previous one (-1 for none). */
-        onChange?: (this: Camera, zone: number, previous: number) => void;
-    }
-
-    interface TraumaOptions {
-        /** Pixels at full trauma. Default 16. */
-        intensity?: number;
-        /** Radians at full trauma. Default 0. */
-        rotation?: number;
-        /** Trauma lost per second. Default 1. */
-        decay?: number;
-        /** Oscillations per second. Default 25. */
-        frequency?: number;
-    }
-
-    interface RepeatOptions extends DrawOptions {
-        /** Where one copy sits in the layer. Default (0, 0). */
-        x?: number;
-        y?: number;
-        /** Repeat along each axis. Default true. */
-        repeatX?: boolean;
-        repeatY?: boolean;
-    }
-
-    /** What `state()` returns and `setState()` takes: JSON-friendly. */
-    interface State {
-        x: number;
-        y: number;
-        zoomX: number;
-        zoomY: number;
-        rotation: number;
-        anchor: Point;
-        /** null: the whole screen. */
-        viewport: Rect | null;
-        bounds: Rect | null;
-        boundsIgnoreRotation: boolean;
-        pixelSnap: boolean;
-        realTime: boolean;
-    }
-
-    interface TransitionOptions {
-        /** Maps 0..1 to the blend. Default smoothstep; e.g. `Ease.inOutCubic`. */
-        ease?: (t: number) => number;
-        /** Runs on real time, also while the game is paused. */
-        realTime?: boolean;
-    }
-
-    interface StackOptions extends TransitionOptions {
-        /** Seconds of the transition; 0 (default) cuts. */
-        duration?: number;
-    }
-
-    interface ShakeOptions {
-        /** Oscillations per second. Default 25. */
-        frequency?: number;
-        /** Largest rotation, in radians. Default 0. */
-        rotation?: number;
-    }
-
-    interface DrawOptions {
-        /**
-         * 1 (default) draws the world; 0 draws in the viewport at zoom 1 like
-         * the screen; between them, a background layer that scrolls (and
-         * zooms) slower than the world. Per axis with `[x, y]`.
-         */
-        parallax?: Pair;
-    }
-
-    /** The world-to-screen transform: screen = (xx*x + xy*y + tx, yx*x + yy*y + ty). */
-    interface Matrix {
-        xx: number;
-        xy: number;
-        yx: number;
-        yy: number;
-        tx: number;
-        ty: number;
-    }
-
-    class Camera {
-        constructor(options?: CameraOptions);
-
-        /** World point shown at the anchor. Setting it stops a pan. */
-        x: number;
-        y: number;
-        /** Uniform zoom (reads `zoomX`). Setting it stops a `zoomTo()`. */
-        zoom: number;
-        zoomX: number;
-        zoomY: number;
-        /** Radians, clockwise on screen. */
-        rotation: number;
-        pixelSnap: boolean;
-        /** Reads as `{ x, y }`; set with any `Pair`. */
-        anchor: Point;
-        /** The viewport in screen pixels (the whole screen when none was set); null resets it. */
-        viewport: Rect | null;
-        /** World bounds, or null. */
-        bounds: Rect | null;
-        /**
-         * Bounds and zones clamp the view as if it were not turned: the
-         * camera stays on its target near the edges, and the corners of a
-         * turned view may show past the bounds. Default false: nothing past
-         * the bounds ever shows, so a turned camera is pushed inward.
-         */
-        boundsIgnoreRotation: boolean;
-        /** Index of the zone in force, or -1. */
-        readonly zone: number;
-        readonly following: boolean;
-        readonly shaking: boolean;
-        /** Letterbox bar height, as a fraction of the viewport. */
-        readonly letterboxAmount: number;
-        /** Opacity of the fade overlay, 0..128. */
-        readonly fadeAlpha: number;
-        /** Whether this is `Camera2D.getCurrent()`. */
-        readonly isCurrent: boolean;
-        /**
-         * Runs on the real (unscaled) time of the Loop: follows, shakes and
-         * fades keep going while `Loop.setTimeScale(0)` pauses the game
-         * (pause menus that fade the screen).
-         */
-        realTime: boolean;
-        /**
-         * Draws what drives the camera over its viewport: dead zone (cyan),
-         * anchor (white), target (green), goal (blue), lookahead (orange),
-         * bounds (red) and zones (magenta, the active one brighter).
-         */
-        debug: boolean;
-        /** Current trauma, 0..1 (`addTrauma()`). */
-        readonly trauma: number;
-
-        setPosition(x: number, y: number): this;
-        /** Moves by (dx, dy), within the bounds. */
-        move(dx: number, dy: number): this;
-        setZoom(zoomX: number, zoomY?: number): this;
-        setViewport(x: number, y: number, w: number, h: number): this;
-        setViewport(rect: Rect | null): this;
-        /**
-         * The camera never shows past these bounds; a smaller area is
-         * centered. Turned, the view covers more of the world (its bounding
-         * box), so near an edge a rotation pushes the camera inward and a
-         * followed target rests off the center (see `boundsIgnoreRotation`).
-         */
-        setBounds(x: number, y: number, w: number, h: number): this;
-        setBounds(rect: Rect | null): this;
-
-        /**
-         * Follows a target (read every frame, so moving the object is
-         * enough), or several: their center, with `autoZoom` to fit them all.
-         * A single target needs numeric x and y now (TypeError otherwise); later
-         * frames keep the last position if one goes missing. In an array,
-         * targets whose x or y is not a number are skipped that frame.
-         */
-        follow(target: Target | Target[], options?: FollowOptions): this;
-        unfollow(): this;
-        /** Jumps to the follow target now: no smoothing. */
-        snap(): this;
-
-        /**
-         * Rooms: while the target is inside a zone, that zone is the camera's
-         * bounds (and zoom). The last zone stays in force between zones.
-         * `null` removes them. At most 32.
-         */
-        setZones(zones: Zone[] | null, options?: ZoneOptions): this;
-
-        /** Shakes by up to `intensity` pixels, fading out over `duration` seconds. */
-        shake(intensity: number, duration: number, options?: ShakeOptions): this;
-        /**
-         * Adds trauma (clamped to 0..1): impacts add up, the view shakes by
-         * its square and it decays over time. The options are kept for
-         * later calls.
-         */
-        addTrauma(amount: number, options?: TraumaOptions): this;
-        /** Pushes the view by (dx, dy) screen pixels, springing back (default 0.15 s). */
-        kick(dx: number, dy: number, duration?: number): this;
-        /** Stops the shake, the trauma and the kick. */
-        stopShake(): this;
-
-        /*
-         * Timed changes. Each promise resolves with true when the change ends
-         * and false if another one of the same kind replaced it.
-         */
-        /** Eases the zoom (geometrically: 1 to 4 looks as steady as 4 to 1). */
-        zoomTo(zoom: number, duration: number): Promise<boolean>;
-        /** Eases to a point; suspends the follow until it arrives. */
-        panTo(x: number, y: number, duration: number): Promise<boolean>;
-        /**
-         * Fades the viewport overlay to `color` (its alpha, 0..128, is the
-         * final opacity): `Color.new(0, 0, 0, 128)` fades out to black,
-         * `Color.new(0, 0, 0, 0)` fades back in.
-         */
-        fade(color: number, duration: number): Promise<boolean>;
-        /** Shows `color` over the viewport and fades it out (default 0.2 s). */
-        flash(color: number, duration?: number): Promise<boolean>;
-        /** Black bars, each `amount` (0..0.5) of the viewport's height. */
-        letterbox(amount: number, duration?: number): Promise<boolean>;
-
-        worldToScreen(x: number, y: number): Point;
-        screenToWorld(x: number, y: number): Point;
-        /** World box the viewport shows (its bounding box when rotated), for culling. */
-        visibleRect(): Rect;
-        isVisible(x: number, y: number, w?: number, h?: number): boolean;
-        /**
-         * Culls many boxes in one call: `rects` holds (x, y, w, h) per box;
-         * `out` gets 1 for each visible box and 0 otherwise. Returns how many
-         * are visible.
-         */
-        cull(rects: Float32Array, out?: Uint8Array): number;
-
-        /** Draws in this camera's world space and viewport until `end()`. Pairs nest (8 deep). */
-        begin(options?: DrawOptions): void;
-        /** Draws the camera's fade, flash and letterbox, and restores the previous view. */
-        end(): void;
-        /**
-         * `begin()`, `fn()`, `end()`, even if `fn` throws or leaves pairs of
-         * its own open (they are closed too). Returns what `fn` returns.
-         */
-        draw<T>(fn: () => T, options?: DrawOptions): T;
-        /** Draws with (0, 0) at the viewport's corner, clipped to it: per-player HUDs. */
-        viewportSpace<T>(fn: () => T): T;
-
-        makeCurrent(): this;
-        /** Advances this camera alone (without `Loop.run()`, use `Camera2D.update()`). */
-        update(dt: number): this;
-        getMatrix(options?: DrawOptions): Matrix;
-        /**
-         * Draws `image` repeated to cover what the camera shows of a layer
-         * (`parallax`, as `draw()`): skies, far hills. Returns how many
-         * copies were drawn (at most 1024).
-         */
-        drawRepeat(image: Image, options?: RepeatOptions): number;
-        /** The pose and settings (not targets, zones or running effects), for saves. */
-        state(): State;
-        /** Applies what `state()` returned; missing keys are left as they are. */
-        setState(state: Partial<State>): this;
-    }
-
-    /** The default camera: current from the start, showing the screen as before. */
-    const main: Camera;
-
-    /** The camera applied around `Loop.run()`'s draw, or null for none. */
-    function getCurrent(): Camera | null;
-    /** Changes it at once (null: draw without a camera, e.g. in split screen). */
-    function setCurrent(camera: Camera | null): void;
-    /**
-     * Makes `camera` current, gliding from the current one's position, zoom,
-     * rotation and viewport over `duration` seconds. `ease` maps 0..1 to the
-     * blend (default smoothstep; e.g. `Ease.inOutCubic`).
-     */
-    function transition(camera: Camera, duration: number,
-        options?: TransitionOptions): Promise<boolean>;
-    /**
-     * Makes `camera` current and remembers the one it replaces (or none),
-     * so `pop()` goes back to it: cutscenes, map screens. 8 deep.
-     */
-    function push(camera: Camera, options?: StackOptions): Promise<boolean>;
-    /** Goes back to the camera the last `push()` replaced. */
-    function pop(options?: StackOptions): Promise<boolean>;
-    /**
-     * `culled`: draws skipped by culling in the last frame drawn under
-     * `Loop.run()` (images, rectangles, circles, drawList sprites, texts,
-     * TileMap grid cells); `pushed`: depth of `push()`.
-     */
-    function getStats(): { culled: number; pushed: number };
-
-    /** Draws with no camera and the whole screen: HUD, menus. */
-    function screenSpace<T>(fn: () => T): T;
-    /** Updates every camera: for games that do not use `Loop.run()`. */
-    function update(dt: number): void;
-    /** Drops any open camera: the identity view and the whole screen. */
-    function reset(): void;
-}
-
-
-/* === Module: Collision (collision) === */
-/**
- * Light 2D collision and simple physics, in C. For platformers, top-down
- * games and shooters that want predictable, tile-friendly movement; Box2D
- * remains the choice for rigid bodies, joints and polygons.
- *
- * A `World` holds bodies (axis-aligned rectangles and circles) in a spatial
- * hash, and optionally a grid of tiles: solid tiles, one-way platforms and
- * floor slopes. Bodies move with a sweep along x, then along y: they slide
- * along walls, land on floors, walk up and down slopes and never tunnel
- * through thin walls, whatever their speed.
- *
- * Body types:
- * - `"static"` (default): moved only by you; blocks others.
- * - `"kinematic"`: moves through everything, by its velocity or when you
- *   set `x`/`y` (a tween, a path): moving platforms, elevators, doors. It
- *   carries the dynamic bodies standing on it and pushes those in its way;
- *   one caught against something solid is `crushed`.
- * - `"dynamic"`: gravity, damping, speed limits and velocity, blocked by
- *   what it collides with; bounces with `bounce`.
- *
- * A world steps itself with the Loop's scaled time before the game's
- * `update` (so `Loop.setTimeScale(0)` pauses it); pass `autoStep: false`
- * and call `world.step(dt)` to step it yourself. Any body can also be moved
- * with collisions by `world.move(body, dx, dy)`, like a character
- * controller.
- *
- * Positions are in world units with y pointing down: a rectangle is placed
- * by its top-left corner, a circle by its center. Velocities are in units
- * per second, gravity in units per second squared.
- *
- * Layers and masks are 32-bit flags: two bodies collide when each one's
- * `mask` has a bit of the other's `layer`. Read back, they are signed
- * integers, like the results of `|` and `<<`.
- *
- * Example:
- * ```js
- * const SOLID = 1, PLAYER = 2, ENEMY = 4, COIN = 8;
- * const world = new Collision.World({ gravity: { x: 0, y: 900 } });
- * world.setGrid({
- *     columns: 40, rows: 15, tileWidth: 16, tileHeight: 16,
- *     tiles: levelIds,                        // the ids given to TileMap.setTiles()
- *     solid: [1, 2, 3], oneWay: [4], slopes: { 5: "45r", 6: "45l" },
- * });
- * const player = world.add({ type: "dynamic", x: 32, y: 32, w: 12, h: 24,
- *     layer: PLAYER, mask: SOLID | ENEMY | COIN });
- * const lift = world.add({ type: "kinematic", x: 200, y: 160, w: 48, h: 8 });
- * Tween.to(lift, { x: 320 }, 2, { yoyo: true, repeat: Infinity });   // carries the player
- * world.add({ x: 300, y: 100, r: 6, sensor: true, layer: COIN });
- * world.onEnter = (sensor, body) => { if (body === player) sensor.remove(); };
- *
- * Loop.run({
- *     update() {
- *         player.vx = pad.pressed(Gamepad.RIGHT) ? 120 : pad.pressed(Gamepad.LEFT) ? -120 : 0;
- *         if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = -330;
- *         player.dropThrough = pad.pressed(Gamepad.DOWN);   // fall through one-way platforms
- *     },
- *     draw() {
- *         hero.draw(player.centerX, player.bottom);        // a sprite with origin [0.5, 1]
- *         world.drawDebug();
- *     },
- * });
- * ```
- */
-declare namespace Collision {
-    type BodyType = "static" | "kinematic" | "dynamic";
-
-    /** -1: blocked moving left, 1: moving right, 0: not blocked. */
-    type WallSide = -1 | 0 | 1;
-
-    /** A shape outside a world, or a body. */
-    type Shape = Body | { x: number; y: number; w: number; h: number } |
-        { x: number; y: number; r: number };
-
-    /**
-     * A floor slope: heights of its surface at the tile's left and right
-     * sides, as fractions of the tile height (0 = the tile's bottom, 1 = its
-     * top). Presets: `"45r"` rises to the right ([0, 1]), `"45l"` falls
-     * ([1, 0]); gentle slopes over two tiles: `"22r1"` then `"22r2"` rise
-     * ([0, 0.5], [0.5, 1]), `"22l1"` then `"22l2"` fall.
-     */
-    type Slope = [number, number] | "45r" | "45l" | "22r1" | "22r2" | "22l1" | "22l2";
-
-    interface WorldOptions {
-        /** Side of the spatial hash cells: about the size of a typical body. Default 64. */
-        cellSize?: number;
-        /** Default { x: 0, y: 0 }. */
-        gravity?: { x: number; y: number } | [number, number];
-        /**
-         * Stepped by the Loop's scaled time before the game's update (default
-         * true on the main script; workers step with `step()`).
-         */
-        autoStep?: boolean;
-    }
-
-    interface BodyOptions {
-        /** Rectangle: top-left corner. Circle: center. Default 0. */
-        x?: number;
-        y?: number;
-        /** A rectangle: its size. */
-        w?: number;
-        h?: number;
-        /** A circle: its radius (instead of w and h). */
-        r?: number;
-        /** Default "static". */
-        type?: BodyType;
-        vx?: number;
-        vy?: number;
-        /** Default 1. */
-        layer?: number;
-        /** Default -1: every layer. */
-        mask?: number;
-        /** Found by queries, pairs and onEnter/onExit, but never blocks nor is blocked. */
-        sensor?: boolean;
-        /** Blocks only bodies coming from above (jump-through platforms). */
-        oneWay?: boolean;
-        /** Dynamic bodies: gravity multiplier (default 1). */
-        gravityScale?: number;
-        /** Dynamic bodies: velocity decay rate in 1/s (default 0). */
-        damping?: number;
-        /** Dynamic bodies: velocity kept after hitting something, 0 to 1 (default 0). */
-        bounce?: number;
-        /** Dynamic bodies: speed limits per axis (0, the default, is none). */
-        maxSpeedX?: number;
-        maxSpeedY?: number;
-    }
-
-    interface GridOptions {
-        /** At most 4096 each, and 1048576 tiles in all (1024 x 1024, 4096 x 256...). */
-        columns: number;
-        rows: number;
-        tileWidth: number;
-        tileHeight: number;
-        /** Top-left corner of the grid. Default 0. */
-        x?: number;
-        y?: number;
-        /**
-         * Row-major tile ids, `columns * rows` long (copied); default all 0.
-         * The same ids as `TileMap.Instance.setTiles()`: a grid instance's
-         * `grid` gives columns, rows and the tile size.
-         */
-        tiles?: Uint16Array | number[];
-        /** Ids of solid tiles. */
-        solid?: number[];
-        /** Ids of one-way platforms (solid from above only). */
-        oneWay?: number[];
-        /** Floor slopes by id. Below the surface the tile is solid; its high side is a wall. */
-        slopes?: { [id: number]: Slope };
-        /** Layer of the tiles, for masks. Default 1. */
-        layer?: number;
-    }
-
-    /**
-     * A blocking contact: another body (`tile` is -1) or a tile (`body` is
-     * null), and the normal of the surface hit, pointing away from it:
-     * { normalX: 0, normalY: -1 } for a floor.
-     */
-    interface Contact {
-        body: Body | null;
-        tile: number;
-        column: number;
-        row: number;
-        normalX: number;
-        normalY: number;
-    }
-
-    interface MoveResult {
-        /** Distance actually moved. */
-        dx: number;
-        dy: number;
-        onGround: boolean;
-        hitCeiling: boolean;
-        hitWall: WallSide;
-        /** What stopped the x sweep and the y sweep. */
-        contacts: Contact[];
-    }
-
-    interface RayHit {
-        x: number;
-        y: number;
-        normalX: number;
-        normalY: number;
-        /** Of the segment, 0 to 1. */
-        fraction: number;
-        distance: number;
-        /** The body hit, or null for a tile. */
-        body: Body | null;
-        /** The tile id hit, or -1 for a body. */
-        tile: number;
-        column: number;
-        row: number;
-    }
-
-    interface RaycastOptions {
-        /** Layers hit (bodies, and the grid when its layer is in it). Default -1. */
-        mask?: number;
-        /** A body to skip, such as the one casting the ray. */
-        ignore?: Body | null;
-        /** Also hit sensors. Default false. */
-        sensors?: boolean;
-    }
-
-    class World {
-        constructor(options?: WorldOptions);
-        gravityX: number;
-        gravityY: number;
-        readonly cellSize: number;
-        readonly bodyCount: number;
-        autoStep: boolean;
-        /**
-         * Called after each step when a dynamic body begins a contact: it
-         * lands or steps onto another body, or starts pushing a wall or a
-         * ceiling. Resting contacts (standing, walking along a floor,
-         * pushing the same wall) are not repeated every step. `this` is the
-         * world, which may be changed from it.
-         */
-        onContact: ((this: World, body: Body, contact: Contact) => void) | null;
-        /**
-         * Called after each step when a sensor starts overlapping a body it
-         * collides with (layers and masks): pickups, damage zones, triggers.
-         * Two static bodies are never a pair; two sensors are one pair. The
-         * world may be changed from it (removing the coin, for instance).
-         * Overlaps are only tracked while `onEnter` or `onExit` is set.
-         */
-        onEnter: ((this: World, sensor: Body, other: Body) => void) | null;
-        /** As `onEnter`, when the overlap ends. A removed body gets no exit. */
-        onExit: ((this: World, sensor: Body, other: Body) => void) | null;
-        /** The grid's geometry, or undefined without one. */
-        readonly grid: { columns: number; rows: number; tileWidth: number; tileHeight: number;
-            x: number; y: number; layer: number } | undefined;
-
-        /** Adds a body: `w` and `h` make a rectangle, `r` a circle. */
-        add(options: BodyOptions): Body;
-        /** Removes a body of this world; false when it is not in it. */
-        remove(body: Body): boolean;
-        /** Removes every body. */
-        clear(): void;
-        bodies(): Body[];
-
-        /**
-         * Moves a body by (dx, dy) with collisions: along x, then along y,
-         * each time stopping at the first thing in the way. Walking into a
-         * slope follows its floor; a body that stood on the ground steps up
-         * small ledges and sticks to floors going down, as far as the
-         * steepest slope of the grid needs. Fast bodies move in several
-         * sweeps of at most half a tile, so they never take a wall for a
-         * step. Sensors move freely; kinematic bodies move through
-         * everything, carrying and pushing (as setting `x`/`y` does).
-         * Updates `onGround`, `onCeiling`, `onWall` and `ground`.
-         *
-         * `out`, when given, receives the result instead of a new object
-         * (its `contacts` array is emptied and reused): moving many bodies
-         * every frame then allocates nothing.
-         */
-        move<T extends object = MoveResult>(body: Body, dx: number, dy: number, out?: T): T & MoveResult;
-        /**
-         * Advances the world: kinematic bodies move by their velocity,
-         * carrying their riders and pushing what is in their way, then
-         * dynamic bodies get gravity, damping and speed limits and move; a
-         * blocked axis loses its velocity or bounces. Then `onContact`,
-         * `onEnter` and `onExit` run. With `autoStep` the Loop calls it.
-         */
-        step(dt: number): void;
-
-        /** Uses a grid of tiles, replacing the previous one. */
-        setGrid(options: GridOptions): void;
-        clearGrid(): void;
-        /** Tile id at a cell, or -1 outside the grid. */
-        getTile(column: number, row: number): number;
-        /** Changes a cell (a door opens, a block breaks); false outside the grid. */
-        setTile(column: number, row: number, id: number): boolean;
-        /** The cell holding a point, or null outside the grid. */
-        cellAt(x: number, y: number): { column: number; row: number; tile: number } | null;
-        /**
-         * Whether a point is inside something solid: a solid tile, a slope
-         * below its surface or a body that is not a sensor, on a layer of
-         * `mask` (default -1). One-way platforms are not solid. For ledge
-         * checks and AI ("is there floor ahead?").
-         */
-        solidAt(x: number, y: number, mask?: number): boolean;
-
-        /** Bodies overlapping a rectangle whose layer is in `mask` (default -1). Sensors included. */
-        query(x: number, y: number, w: number, h: number, mask?: number): Body[];
-        queryCircle(x: number, y: number, r: number, mask?: number): Body[];
-        queryPoint(x: number, y: number, mask?: number): Body[];
-        /** Bodies overlapping `body` that it collides with (layers and masks), sensors too. */
-        overlapping(body: Body): Body[];
-        /**
-         * Overlapping pairs [a, b] with `a` on a layer of `layerA` and `b` on
-         * a layer of `layerB`, found in C: bullets against enemies without a
-         * loop over every pair in JavaScript. Masks are not used; each pair
-         * is reported once. More than 65536 pairs throw a RangeError.
-         */
-        pairs(layerA: number, layerB: number): Array<[Body, Body]>;
-        /**
-         * The same pairs, passed to `callback` instead of built into arrays;
-         * returns how many there were. Pairs of a body removed by an earlier
-         * call are skipped.
-         */
-        pairs(layerA: number, layerB: number, callback: (a: Body, b: Body) => void): number;
-        /**
-         * First body or tile hit by the segment from (x1, y1) to (x2, y2).
-         * Shapes and solid tiles holding the start are ignored; one-way tiles
-         * and bodies are only hit from above.
-         */
-        raycast(x1: number, y1: number, x2: number, y2: number,
-            options?: RaycastOptions): RayHit | null;
-
-        /**
-         * Outlines the bodies and tiles in view, through the current camera:
-         * static bodies white, kinematic blue, dynamic green, sensors yellow,
-         * tiles red, one-way platforms orange. Call it in `draw`.
-         */
-        drawDebug(options?: { bodies?: boolean; tiles?: boolean }): void;
-    }
-
-    /**
-     * A body of a world, made by `world.add()`. After `remove()` it is
-     * detached: `valid` is false and other properties throw.
-     */
-    class Body {
-        private constructor();
-        /** The world, or null once removed. */
-        readonly world: World | null;
-        readonly valid: boolean;
-        readonly shape: "rect" | "circle";
-        type: BodyType;
-        /**
-         * Setting them teleports the body, without collisions, and clears its
-         * contact state. A kinematic body moves instead, carrying its riders
-         * and pushing what is in its way: animate platforms with Tween.
-         */
-        x: number;
-        y: number;
-        /** Size: a circle's is 2 r and read-only. */
-        w: number;
-        h: number;
-        /** Radius of a circle; undefined for a rectangle. */
-        r: number | undefined;
-        /** Center of the body. */
-        readonly centerX: number;
-        readonly centerY: number;
-        /** Right and bottom edges of its bounds: `bottom` is where the feet are. */
-        readonly right: number;
-        readonly bottom: number;
-        vx: number;
-        vy: number;
-        layer: number;
-        mask: number;
-        sensor: boolean;
-        oneWay: boolean;
-        /** Falls through one-way platforms while set. */
-        dropThrough: boolean;
-        gravityScale: number;
-        damping: number;
-        bounce: number;
-        maxSpeedX: number;
-        maxSpeedY: number;
-        /** Contact state after the last move or step of this body. */
-        readonly onGround: boolean;
-        readonly onCeiling: boolean;
-        readonly onWall: WallSide;
-        /** The body stood on, or null (in the air or on a tile). */
-        readonly ground: Body | null;
-        /**
-         * A kinematic body pushed it into something solid during the last
-         * step (or since, by setting its `x`/`y`): it is caught between them.
-         * The game decides what that means; the kinematic body keeps moving.
-         */
-        readonly crushed: boolean;
-
-        /** `world.move(this, dx, dy, out)`. */
-        move<T extends object = MoveResult>(dx: number, dy: number, out?: T): T & MoveResult;
-        /** Teleports the body, without collisions, and clears its contact state. */
-        setPosition(x: number, y: number): void;
-        /** Axis-aligned bounds (a circle's box). */
-        getBounds(): { x: number; y: number; w: number; h: number };
-        /** Removes the body from its world; false if it was already removed. */
-        remove(): boolean;
-    }
-
-    /** Whether two shapes overlap (touching is not overlapping). */
-    function overlaps(a: Shape, b: Shape): boolean;
-    /** The shortest move that takes `a` out of `b`, or null when they do not overlap. */
-    function resolve(a: Shape, b: Shape): { x: number; y: number } | null;
-    /** Where the segment enters the shape, or null when it misses or starts inside. */
-    function segment(x1: number, y1: number, x2: number, y2: number, shape: Shape):
-        { fraction: number; x: number; y: number; normalX: number; normalY: number } | null;
 }
 
 
@@ -3222,11 +2293,29 @@ declare namespace System {
         nativeStack: number;
         /** Current native allocations in bytes. */
         allocs: number;
+        /** Highest observed current native allocation total in bytes since startup. */
+        allocsPeak: number;
+        /** Failed nonzero native allocation requests since startup. */
+        allocationFailures: number;
         /** Total reported usage in bytes. */
         used: number;
+        /** Total arena and mapped regions requested from the EE heap. */
+        heapReserved: number;
+        /** Bytes in allocator in-use chunks, including chunk overhead. */
+        heapAllocated: number;
+        /** Approximate allocator metadata/alignment overhead in bytes. */
+        heapOverhead: number;
+        /** Bytes in reusable free chunks. */
+        heapFree: number;
+        /** Number of free chunks in the allocator. */
+        heapFreeChunks: number;
+        /** Free bytes in the topmost releasable chunk. */
+        heapTopFree: number;
+        /** Free bytes outside the top chunk; a fragmentation indicator. */
+        heapNonTopFree: number;
         /** Bytes allocated by the QuickJS runtime, measured like `allocs` and part of it. */
         jsHeap: number;
-        /** QuickJS memory limit in bytes: half of the RAM free when the runtime started. */
+        /** Current QuickJS allocation ceiling in bytes. Initially half of free RAM at runtime start; may be recalculated with `setNativeMemoryHeadroom()`. */
         jsLimit: number;
         /** Live JavaScript objects. */
         jsObjects: number;
@@ -3247,6 +2336,13 @@ declare namespace System {
         /** PS2 machine type identifier. */
         MachineType: number;
     }
+
+    /** Recalculates the QuickJS heap ceiling using current free EE memory and
+     * leaves `bytes` available for native assets at this snapshot. Call at a
+     * phase boundary before loading assets. Native allocations made later can
+     * consume this headroom. At least 64 KiB must remain available for JS.
+     * Returns the resulting QuickJS allocation limit in bytes. */
+    function setNativeMemoryHeadroom(bytes: number): number;
 
     /** Memory-card status returned by `getMCInfo()`. */
     interface MemoryCardInfo {
@@ -3533,6 +2629,3210 @@ declare namespace Debug {
 }
 
 
+/* === Module: Profiler (profiler) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=profiler,... */
+/**
+ * Where the frame time goes, measured in C.
+ *
+ * Timer scopes read the EE cycle counter (COP0 Count) in C, so a begin/end
+ * pair costs far less than two System.getMilliseconds() calls; counters sum
+ * values per frame. Each frame closes into a ring of the last `HISTORY`
+ * frames, from which `stats()` gives the last value, average, 95th
+ * percentile and peak. Timers are inclusive: nested scopes count in their
+ * parents too. A single begin/end span must be shorter than about 14 s (the
+ * counter wraps).
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=profiler,...`
+ * (brings Loop and Debug).
+ *
+ * Example:
+ * ```js
+ * import * as Render3D from "Render3D";
+ * Profiler.auto();                       // close frames after every Loop draw
+ * Profiler.attachRender3D(Render3D);     // 3d.* counters + C clipper warning
+ * Profiler.overlay(true);                // one line per scope in Debug
+ *
+ * const AI = Profiler.scope("ai");       // ids skip the name lookup
+ * Profiler.begin(AI); updateAI(); Profiler.end(AI);
+ * Profiler.measure("physics", () => world.step(dt));
+ * Profiler.count("chunks.rebuilt", rebuilt);
+ * ```
+ */
+declare namespace Profiler {
+    /** Frames kept per scope (120). */
+    const HISTORY: number;
+    const MAX_SCOPES: number;
+    /** Open scopes at once. */
+    const MAX_DEPTH: number;
+    /** A scope id from scope()/counter(), or its name (1 to 31 printable characters). */
+    type Scope = number | string;
+
+    interface Stats {
+        name: string;
+        kind: "timer" | "counter";
+        /** Frames in the window. */
+        samples: number;
+        /** Per frame: milliseconds for timers, summed values for counters. */
+        last: number;
+        average: number;
+        p95: number;
+        peak: number;
+        /** begin() (or count()) calls in the last frame and on average. */
+        lastCalls: number;
+        averageCalls: number;
+    }
+
+    /** Id of a timer scope, registered on first use. Scope 0 is "frame". */
+    function scope(name: string): number;
+    /** Id of a counter, registered on first use. */
+    function counter(name: string): number;
+    /** Opens a timer scope; a name is registered on first use. */
+    function begin(scope: Scope): void;
+    /** Closes the innermost scope; when given, it must be that scope (throws otherwise). */
+    function end(scope?: Scope): void;
+    /** Runs fn inside a timer scope and returns its result; closes on throw too. */
+    function measure<R>(scope: Scope, fn: () => R): R;
+    /** Adds value (default 1) to a counter for this frame. */
+    function count(scope: Scope, value?: number): void;
+    /** Raw unsigned clock; wraps after about 14.5 s on the EE. */
+    function ticks(): number;
+    /** Converts an unsigned tick difference: ticksToMilliseconds((end - start) >>> 0). */
+    function ticksToMilliseconds(ticks: number): number;
+    /**
+     * Closes the frame and returns its length in ms. Not needed with auto().
+     * Open scopes are split: their time so far goes to this frame.
+     */
+    function frame(): number;
+    /** Closes the frames after every draw of Loop.run(). Returns whether on. */
+    function auto(on?: boolean): boolean;
+    /** Stats over the last `frames` frames (default the whole history). Optional `out` is reused. */
+    function stats<T extends object = Stats>(scope: Scope, frames?: number, out?: T): T & Stats;
+    /** Registered scope names, by id. */
+    function names(): string[];
+    /** Unmatched end() calls and begin() beyond MAX_DEPTH since the reset. */
+    function errors(): number;
+    /**
+     * Records Render3D.frameStats() at each frame() as the counters
+     * 3d.triangles, 3d.objects, 3d.passes, 3d.culled and 3d.cpuClip, and
+     * logs (at most every 5 s, unless `warn: false`) when objects are
+     * clipped in C on the EE. Pass the Render3D namespace, or null to stop.
+     */
+    function attachRender3D(render3d: typeof Render3D | null, options?: { warn?: boolean }): void;
+    /** Shows a line per scope in the Debug overlay (turning it on), over `frames` frames (default 60). */
+    function overlay(on?: boolean, options?: { frames?: number }): boolean;
+    /** The overlay line of a scope, e.g. "1.23 ms p95 2.10 max 3.40". */
+    function describe(scope: Scope, frames?: number): string;
+    /** Stats of every scope (allocates; for logs and tests). */
+    function report(frames?: number): Stats[];
+    /** Prints report() with console.log. */
+    function log(frames?: number): void;
+    /** Clears the history; forget = true also drops the names (ids become invalid). */
+    function reset(forget?: boolean): void;
+}
+
+
+/* === Module: Scene (scene) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=scene,... */
+/**
+ * Scenes and their assets.
+ *
+ * A scene is a screen of the game (title, level, pause menu): a class that
+ * extends `Scene`, names the assets it needs in `static assets`, and gets
+ * `enter`, `update`, `draw`, `pause`, `resume` and `exit` calls. The static
+ * methods of `Scene` manage a stack of them:
+ *
+ * - `Scene.go(Level)` loads the level's assets in the background (while the
+ *   current scene fades out, with `transition: "fade"`), exits the current
+ *   scenes, releases what only they used, and enters the level;
+ * - `Scene.push(Pause)` puts a scene over the current one, which pauses and
+ *   keeps being drawn below; `Scene.pop({ result })` resumes it;
+ * - a loading screen shows only when loading outlasts the transition.
+ *
+ * Assets are reference counted by kind and path: an asset two scenes use is
+ * loaded once and survives going from one to the other (the next scene's
+ * assets are acquired before the previous scene's are released). Images load
+ * through an ImageList (decoded on a worker), sound effects, fonts and sprite
+ * sheets through their background jobs, so frames keep coming while loading.
+ *
+ * Transitions and loading run on real time: a pause menu that sets
+ * `Loop.setTimeScale(0)` can still go to another scene.
+ *
+ * @example
+ * ```js
+ * class Level1 extends Scene {
+ *     static root = "assets/level1";
+ *     static assets = {
+ *         images: { tiles: { path: "tiles.png", upload: "lock" } },
+ *         sheets: { hero: "hero.json" },                 // Aseprite / TexturePacker
+ *         sfx:    { jump: "jump.adp" },
+ *         music:  { theme: { path: "level1.ogg", loop: true } },
+ *         fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
+ *         data:   { map: "map.json" },
+ *     };
+ *     enter(assets) {
+ *         this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" });
+ *         assets.music.theme.play();
+ *     }
+ *     update(dt) {
+ *         if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu);
+ *     }
+ *     draw() { this.hero.draw(this.x, this.y); }
+ *     exit() { this.assets.music.theme.stop(); }
+ * }
+ *
+ * Scene.run(Title);                                        // starts the Loop
+ * // later, from a scene:
+ * Scene.go(Level1, { transition: "fade", duration: 0.5 });
+ * ```
+ */
+/**
+ * `A` types the loaded assets and `P` the params, for editors:
+ * `class Level extends Scene<{ images: { tiles: Image } }, { number: number }>`.
+ */
+declare class Scene<A = any, P = any> {
+    /** What `go()`/`push()` passed as `options.params`. */
+    readonly params: P;
+    /** The loaded assets, as the manifest names them; set before `enter()`, null after `exit()`. */
+    assets: A;
+
+    constructor(params?: P);
+
+    /** The assets are loaded; the scene starts. May return a promise (the loading screen stays). */
+    enter(assets: A, params: P): void | Promise<void>;
+    update(dt: number): void;
+    draw(alpha: number): void;
+    /** A scene was pushed over this one. */
+    pause(): void;
+    /** The scene above was popped, with its `pop({ result })`. */
+    resume(result?: any): void;
+    /** The scene leaves; its `defer()` clean-ups run and its assets are released after this. */
+    exit(): void;
+
+    /**
+     * Runs `fn` when the scene leaves, after `exit()`, last registered
+     * first: for what the scene started and would outlive it (tweens,
+     * sprites, Loop systems, music). Returns `fn`.
+     */
+    defer<F extends () => void>(fn: F): F;
+    /**
+     * More assets while the scene runs (the next area of a level): a group,
+     * released when the scene leaves. Paths are relative to the class's root
+     * unless `options` gives another (a string is the root).
+     */
+    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
+
+    /**
+     * The assets this scene needs: a manifest, or a function of the params
+     * that returns one. Paths are relative to `root`.
+     */
+    static assets?: Scene.Manifest | ((params: any) => Scene.Manifest);
+    /** Directory the manifest's paths are relative to. */
+    static root?: string;
+
+    /**
+     * Replaces every scene with a new one: loads its assets (during the
+     * fade-out), exits the old scenes and releases their assets, then enters
+     * the new one. Resolves with the new scene once it runs. Requests made
+     * meanwhile wait their turn.
+     */
+    static go<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions): Promise<T>;
+    /** A scene over the current one, which pauses: a pause menu, a dialog. */
+    static push<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
+    /** Leaves the top scene; the one below resumes with `options.result`. Resolves with it. */
+    static pop(options?: Scene.PopOptions): Promise<Scene | null>;
+    /**
+     * Replaces only the top scene; the ones below stay (and are not resumed).
+     * `drawBelow`/`updateBelow` default to the replaced scene's. With an
+     * empty stack it is a `go()`.
+     */
+    static replace<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
+    /**
+     * Starts loading a scene's assets now (the level while the title runs),
+     * so `go()`/`push()` find them loaded. The group is released when that
+     * scene class enters, by `reset()`, or with `release()`.
+     */
+    static preload(SceneClass: new (params?: any) => Scene, params?: any): Scene.AssetGroup;
+    /**
+     * Starts `Loop.run()` with the manager's update and draw, and goes to the
+     * first scene. `loopOptions` go to `Loop.run()` (fixedStep, clearColor...).
+     * @throws TypeError when the Loop already runs: call `Scene.update()` and
+     * `Scene.draw()` from its handlers instead.
+     */
+    static run<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions,
+        loopOptions?: Loop.Options): Promise<T>;
+    /**
+     * For a custom loop: updates the running scenes (the top one, and those
+     * below it that asked for `updateBelow`). Throws the error of a scene
+     * that could not load when there is no `onError`. An exception of a
+     * scene's `enter()`, `exit()`, `pause()` or `resume()` during a switch
+     * is thrown too (inside `Loop.run()` it stops the Loop); the switch is
+     * cancelled, a scene whose `enter()` threw leaves without `exit()`, and
+     * the manager goes on with the next request.
+     */
+    static update(dt: number): void;
+    /** For a custom loop: draws the visible scenes, then the transition and loading screen. */
+    static draw(alpha?: number): void;
+    /** Leaves every scene at once and releases their assets and preloads. */
+    static reset(): void;
+    /**
+     * A named transition for go/push/pop/replace: `draw(amount, info)`
+     * covers `amount` (0..1) of the screen, in screen space.
+     */
+    static defineTransition(name: string, draw: Scene.TransitionDraw): void;
+
+    /** The top scene, or null. */
+    static readonly current: Scene | null;
+    /** Every scene, bottom first. */
+    static readonly stack: Scene[];
+    /** A go, push or pop is in progress. */
+    static readonly busy: boolean;
+    /** Loading progress of the scene being loaded, 0..1. */
+    static readonly progress: number;
+    /**
+     * Draws the loading screen in screen space while a scene loads: `null`
+     * shows nothing. The default is a progress bar.
+     */
+    static loadingScreen: ((progress: number, info: Scene.LoadingInfo) => void) | null;
+    /** Seconds of loading before the loading screen shows. Default 0.15. */
+    static loadingDelay: number;
+    /** Seconds a loading screen that showed stays at least. Default 0.3. */
+    static minLoadingTime: number;
+    /**
+     * Seconds of loading after which the scene's pending assets are logged
+     * once, each named: the file that hangs. Default 10; 0 never.
+     */
+    static slowLoadWarning: number;
+    /**
+     * Seconds after which a scene that has not loaded fails like a missing
+     * file (`onError`, or thrown from the next update) with a
+     * `Scene.TimeoutError` listing what was still loading. `timeout` in
+     * the request's options overrides it. Default 0: never.
+     */
+    static loadTimeout: number;
+    /**
+     * Called when a scene cannot load (a missing file): the current scene
+     * stays. The error names the request and scene (`"Scene.go(Level1):
+     * cannot load image 'x.png'"`), with the original as `cause`. Without
+     * it, the error is thrown from the next `update`, which stops the Loop.
+     */
+    static onError: ((error: Error, SceneClass: (new (params?: any) => Scene) | null) => void) | null;
+}
+
+declare namespace Scene {
+    /** A path, or the path with options. */
+    type Spec<T = {}> = string | ({ path: string } & T);
+
+    interface ImageSpec {
+        /** When the texture goes to VRAM: at first draw (default), now, or now and locked. */
+        upload?: "draw" | "bind" | "lock";
+        /** Same as `upload: "lock"`. */
+        lock?: boolean;
+        /** ImageList priority. */
+        priority?: number;
+    }
+
+    /**
+     * What a scene needs, by kind and name: `assets.images.hero` and so on.
+     * Built-in kinds:
+     * - `images`: `Image`, through an ImageList with a decoder thread;
+     * - `sheets`: `Sprite.Sheet`, from a `.json` (Aseprite, TexturePacker)
+     *   or an image with the options of `Sprite.Sheet.fromGrid()`;
+     * - `sfx`: `Sound.Sfx`; `music`: `Sound.Stream` (`{ path, loop }`);
+     * - `fonts`: `Font` (`{ path, size, preload }`);
+     * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
+     *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
+     *   (`data` and `text` fall back to `std.loadFile()` without Thread).
+     *   JSON is parsed on the script thread (objects can only be built
+     *   there): keep data files small, or split a large level.
+     * `Scene.Assets.define()` adds kinds.
+     */
+    interface Manifest {
+        images?: Record<string, Spec<ImageSpec>>;
+        sheets?: Record<string, Spec<Record<string, any>>>;
+        sfx?: Record<string, Spec>;
+        music?: Record<string, Spec<{ loop?: boolean }>>;
+        fonts?: Record<string, Spec<{ size?: number; preload?: boolean | string }>>;
+        data?: Record<string, Spec>;
+        text?: Record<string, Spec>;
+        binary?: Record<string, Spec>;
+        [kind: string]: Record<string, Spec<any>> | undefined;
+    }
+
+    /** What a transition's draw gets, besides the amount of screen to cover (0..1). */
+    interface TransitionInfo {
+        /** "out" while the amount rises, "hold" while loading, "in" while it falls. */
+        phase: "out" | "hold" | "in";
+        color: number;
+        width: number;
+        height: number;
+        direction: "left" | "right" | "up" | "down";
+    }
+
+    type TransitionDraw = (amount: number, info: TransitionInfo) => void;
+
+    interface TransitionOptions {
+        /**
+         * Default "none". "fade" blends `color` over the switch; "wipe" slides
+         * a band of it across (see `direction`); a name from
+         * `Scene.defineTransition()`, or `{ draw(amount, info) }` drawn in
+         * screen space.
+         */
+        transition?: "none" | "fade" | "wipe" | string | { draw: TransitionDraw };
+        /** Seconds of the whole transition, out and in. Default 0.4. */
+        duration?: number;
+        /** Transition color (`Color.new()`); default black. */
+        color?: number;
+        /** The way a wipe's edge moves. Default "left". */
+        direction?: "left" | "right" | "up" | "down";
+    }
+
+    interface RequestOptions {
+        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
+        timeout?: number;
+    }
+
+    interface GoOptions extends TransitionOptions, RequestOptions {
+        /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
+        params?: any;
+        /**
+         * Exits and releases the old scenes before loading the new one: for
+         * scenes that do not fit in memory together (shared assets reload).
+         */
+        unloadFirst?: boolean;
+    }
+
+    interface PushOptions extends TransitionOptions, RequestOptions {
+        params?: any;
+        /** The scenes below keep being drawn. Default true. */
+        drawBelow?: boolean;
+        /** The scenes below keep being updated. Default false. */
+        updateBelow?: boolean;
+    }
+
+    interface PopOptions extends TransitionOptions {
+        /** Given to the `resume()` of the scene below. */
+        result?: any;
+    }
+
+    interface LoadingInfo {
+        scene: (new (params?: any) => Scene) | null;
+        loaded: number;
+        total: number;
+    }
+
+    interface LoadOptions {
+        /** Directory the paths are relative to. */
+        root?: string;
+        /**
+         * Seconds to wait: past it the group fails (or `load()` rejects) with
+         * a `TimeoutError`. The loads themselves go on, and are freed when
+         * they end if nobody holds them.
+         */
+        timeout?: number;
+    }
+
+    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
+    interface TimeoutError extends Error {
+        code: "TIMEOUT";
+        /** What was still loading. */
+        pending: { kind: string; name: string; path: string; state: string }[];
+    }
+
+    /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
+    interface AssetGroup {
+        /** What is still loading. */
+        pending(): { kind: string; name: string; path: string; state: string }[];
+        /** The manifest's names with the loaded values. */
+        readonly assets: any;
+        readonly loaded: number;
+        readonly total: number;
+        /** 0..1. */
+        readonly progress: number;
+        readonly done: boolean;
+        readonly failed: boolean;
+        readonly error: Error | null;
+        /** Resolves with `assets`, or rejects with the first error. */
+        readonly ready: Promise<any>;
+        /** Lets go of every asset; each is freed once nobody else holds it. */
+        release(): void;
+    }
+
+    interface Loader<T = any> {
+        /** Set cancel() to abort pending work when its last holder releases. */
+        load(path: string, spec: any, handle: { cancel?: () => void }): T | PromiseLike<T>;
+        /** Applies what a later holder of a cached asset asks for (images: a lock). */
+        reuse?(asset: T, spec: any): void;
+        /**
+         * Releases it once nobody holds it. Asked for while a frame is being
+         * drawn, it runs at the start of the next frame (the frame's GS
+         * packet may still use the asset).
+         */
+        free(asset: T, spec: any): void;
+        /** Tells apart loads of one path with different options (e.g. a font size). */
+        key?(path: string, spec: any): string;
+    }
+
+    namespace Assets {
+        /** Milliseconds of ImageList work per frame while images load. Default 4. */
+        let budgetMs: number;
+        /**
+         * Seconds without images to load before the ImageList's decoder
+         * thread (and its stack) closes; it opens again when needed. Default 5.
+         */
+        let imageListIdleTime: number;
+        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
+        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
+        /** One asset; release it with `release(asset)`. A string option is the root. */
+        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
+        /**
+         * Releases one hold of an asset from `load()`; false if it is not
+         * held. A load released before it ends keeps running and is reused if
+         * the asset is asked for again (queued images are cancelled).
+         */
+        function release(asset: object): boolean;
+        /** The same, by the kind and spec it was loaded with: for strings (`text`). */
+        function release(kind: string, spec: Spec<any>, root?: string): boolean;
+        /** A new kind of asset for manifests. */
+        function define(kind: string, loader: Loader): void;
+        /**
+         * For `Debug.watch()`: held assets, still loading, holders, by kind,
+         * and frees waiting for the next frame.
+         */
+        function stats(): { entries: number; loading: number; refs: number; byKind: Record<string, number>;
+            pendingFrees: number; imageListOpen: boolean };
+        /** Every held asset, for finding leaks. */
+        function list(): { kind: string; path: string; refs: number; state: string }[];
+        /**
+         * The ImageList work, deferred frees and idle close of a frame `dt`
+         * seconds long, for games without `Loop.run()`.
+         */
+        function update(dt?: number): void;
+    }
+}
+
+
+/* === Module: Assets3D (assets3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=assets3d,... */
+/**
+ * 3D asset kinds for `Scene.Assets` manifests, reference counted like the
+ * built-in kinds: shared by scenes, disposed when the last holder lets go.
+ *
+ * - `meshes`: `Model3D.Mesh`, `"ship.obj"` or `{ path, material }`
+ *   (`baseColor` may be a plain array);
+ * - `textures3d`: `Model3D.Texture` (PNG/JPEG/BMP files are read and decoded by a job, then
+ *   adopted in O(1): a job-pool worker reads and decodes the file, so neither file I/O nor the decode
+ *   (about 80 ms for 256x256 on the EE) runs inside update(); `asyncRead: false` selects `Texture.load`), `{ path, filter, wrap, upload }`
+ *   (`upload: true` makes it resident in VRAM during the loading screen);
+ * - `gltf`: `GLTF3D.Asset`, `{ path, material }` (needs GLTF3D); freeing it
+ *   disposes its nodes and clips and detaches its root.
+ *
+ * GLB mesh/scene reads use Thread jobs by default, one read at a time
+ * (16 MiB maximum). `gltf` scenes are then built in resumable units by
+ * `GLTF3D.Loader` (parse, validation, one primitive or node, links, one skin
+ * or animation) spread across update() calls; single GLB meshes use
+ * `Model3D.Loader` (copy, parse, validate, build). Under a budget, update()
+ * runs as many units as fit (the native loader times each unit; one unit can
+ * overshoot). Loaders borrow the bytes read by the job (no copy). The `stepped`
+ * option (`false`) builds a whole GLB per update() call instead, and
+ * `Assets3D.setStepped()` changes the default; it does not affect the cache key.
+ * `.gltf` files and GLBs that name relative external buffers/images are
+ * resolved explicitly: the loader lists the files, Assets3D reads each one on a
+ * Thread job (paths relative to the model, no ".." or absolute URIs, at most 64
+ * files) and hands the bytes over. `{ asyncRead: false }` selects the existing
+ * path loader. `{ maxBytes }` lowers the per-file job limit and is part of
+ * cache identity. OBJ/MTL and standalone textures use path loaders. Without
+ * `GLTF3D.beginMemory`/`Model3D.beginMemory` only `.glb` goes through jobs.
+ * The budget is soft: one unit (a texture decode, a large primitive, a mesh,
+ * an upload) can exceed it; stats().phases reports each phase's largest. Releasing the last
+ * holder cancels queued/read jobs; another holder keeps the shared load alive.
+ * Importing the module registers the kinds. Call update() without Loop.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=assets3d,...`
+ *
+ * Example:
+ * ```js
+ * class Level extends Scene {
+ *     static root = "assets/level1";
+ *     static assets = {
+ *         meshes: { ship: { path: "ship.obj", material: { shading: Model3D.DIFFUSE } } },
+ *         textures3d: { rock: { path: "rock.png", filter: 1, wrap: 3, upload: true } },
+ *         gltf: { hero: "hero.glb" },
+ *     };
+ *     enter(assets) { this.scene.root.add(assets.gltf.hero.root); }
+ * }
+ * ```
+ */
+declare namespace Assets3D {
+    /** Soft main-thread budget in milliseconds (default 8); no strict bound. */
+    const budgetMs: number;
+    function setBudget(ms: number): void;
+    /** Default of the per-asset `stepped` option (default true). */
+    function setStepped(stepped: boolean): void;
+    /** Polls reads without waiting and starts/constructs work. Returns operations run. */
+    function update(): number;
+    /** Read progress (bytes) is separate from construction progress (units,
+     * only for resumable gltf loads; unitsTotal is 0 until validation counts them). */
+    function pending(): { path: string; phase: 'queued' | 'reading' | 'dependencies' | 'construct'; bytesDone: number; bytesTotal: number;
+        constructPhase: GLTF3D.LoaderPhase | Model3D.LoaderPhase | 'disposed' | null; unitsDone: number; unitsTotal: number }[];
+    interface LoadMetrics {
+        path: string; mode: 'job-memory' | 'job-memory-steps' | 'job-decode' | 'path'; bytes: number;
+        /** External files read for a .gltf or a GLB with relative URIs, and their wall time. */
+        dependencies?: number; dependencyWaitMs?: number;
+        /** Elapsed wall time waiting for read/poll, including intervening frames. */
+        readWaitMs: number;
+        /** Parse + native/JS construction (also I/O/decode for path loaders). */
+        constructMs: number;
+        /** Resumable loads: units run (begin, steps and finish). */
+        steps?: number;
+        uploadMs: number;
+    }
+    /** CPU clocks include instrumentation; spans must finish before EE wrap (~14.5s).
+     * Maxima are cumulative for this runtime. Cached texture upload requests
+     * contribute to maxUploadMs, even when no new load runs. maxConstructionMs is
+     * the largest single construction unit; phases lists each resumable unit kind
+     * (count = units run, maxMs = the largest single unit; 'begin' creates the loader, 'finish' wraps the result in JS handles; no 'copy' phase for job reads). */
+    function stats(): { queued: number; reading: number; completed: number; failed: number; cancelled: number;
+        lastFrameMs: number; maxFrameMs: number; maxConstructionMs: number; maxUploadMs: number;
+        lastLoad: LoadMetrics | null; budgetMs: number;
+        phases: { [phase: string]: { count: number; totalMs: number; maxMs: number } } };
+    /** Clears lastLoad, the frame/construction/upload maxima and phases; counters and the queue stay. */
+    function resetStats(): void;
+    const KINDS: string[];
+}
+
+
+/* === Module: Sound (sound) === */
+/**
+ * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
+ * one streamed music track (WAV or Ogg Vorbis).
+ *
+ * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
+ * first time a sound is created or played. `audsrv = true` in athena.ini is
+ * still accepted and loads them at boot instead.
+ *
+ * Streams:
+ * - one plays at a time; `play()` on another stream replaces it (there is no
+ *   crossfade: audsrv has a single stream voice);
+ * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
+ *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
+ *   float) is converted on the EE while it plays; see `converted`;
+ * - `pause()` keeps the position heard, so `play()` resumes exactly there;
+ * - seeking, or switching to a stream of the same format, has no gap: the
+ *   new audio follows the ~0.1 s audsrv already holds (other formats pause
+ *   ~0.15 s while audsrv is reconfigured);
+ * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
+ * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
+ *   does not interrupt the music; the frame loop only has to keep calling
+ *   `Screen.flip()` (or otherwise block) for audio to flow;
+ * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
+ *
+ * Sound effects:
+ * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
+ *   (or `adpenc`; `-L` for a looping sample). Files that would make the
+ *   SPU2 play past their end are refused (`CORRUPT`);
+ * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
+ *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
+ * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
+ *   does not stall the frame;
+ * - after `IOP.reset()` a sample is uploaded again from its file the next
+ *   time it plays.
+ *
+ * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
+ * for wrong argument types, `RangeError` for values out of range,
+ * `InternalError` for I/O, format or IOP failures.
+ *
+ * @example
+ * ```js
+ * const music = new Sound.Stream("music/theme.ogg");
+ * music.loop = true;
+ * music.onLoop = () => console.log("theme looped");
+ * music.play({ fade: 1000 });
+ *
+ * const jump = new Sound.Sfx("sfx/jump.adp");
+ * jump.volume = 80;
+ * jump.pan = -30;
+ *
+ * const pad = Gamepad.player(0);
+ * Loop.run(() => {
+ *     Gamepad.update();
+ *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
+ *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
+ *     Sound.process();
+ * });
+ * ```
+ */
+declare namespace Sound {
+    type ErrorCode =
+        | 'INVALID_ARGUMENT'
+        /** The file could not be opened. */
+        | 'NOT_FOUND'
+        | 'IO'
+        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
+        | 'BAD_FORMAT'
+        /** ADPCM data the SPU2 would play past its end (truncated file). */
+        | 'CORRUPT'
+        | 'NO_MEMORY'
+        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
+        | 'SPU_MEMORY'
+        /** audsrv could not be loaded or started on the IOP. */
+        | 'IOP'
+        /** The streaming thread could not be started. */
+        | 'THREAD'
+        /** Sfx.pitch, or assigning Sfx.loop. */
+        | 'UNSUPPORTED'
+        /** The object was used after free(). */
+        | 'FREED'
+        /** The loadSfxAsync() job was cancelled. */
+        | 'CANCELLED';
+
+    interface Error {
+        code: ErrorCode;
+        message: string;
+    }
+
+    /** SPU2 sample memory in bytes. */
+    interface MemoryStats {
+        /** Sample memory in SPU2 RAM (~2 MiB). */
+        total: number;
+        /** From the start of sample memory to the end of the last sample. */
+        used: number;
+        /** After the last sample: the largest sample that still fits. */
+        free: number;
+        /**
+         * Freed but not reusable yet: audsrv only reclaims memory at the end,
+         * so a sample freed before later ones leaves a hole until those are
+         * freed too. Load long-lived samples first.
+         */
+        wasted: number;
+        /** Samples loaded. */
+        samples: number;
+    }
+
+    interface FadeOptions {
+        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
+        fade?: number;
+    }
+
+    /** Number of SPU2 voices available to sound effects (24). */
+    const CHANNELS: number;
+
+    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
+    function setVolume(volume: number): void;
+    /** Music stream volume set with `setVolume()`. */
+    function getVolume(): number;
+    /**
+     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
+     * still sounding follow at once.
+     */
+    function setSfxVolume(volume: number): void;
+    function getSfxVolume(): number;
+    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
+    function findChannel(): number;
+    /** SPU2 sample memory use. */
+    function getMemoryStats(): MemoryStats;
+    /**
+     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
+     * since the last call, each at most once per call, and returns how many
+     * ran. An exception thrown by a callback propagates.
+     */
+    function process(): number;
+
+    /**
+     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
+     * Dropping it cancels the job (and frees the sample if nobody took it).
+     */
+    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
+        readonly __brand: 'SoundJob';
+    }
+
+    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
+
+    interface JobStatus<T> {
+        state: JobState;
+        /** When `state` is `'done'`. The same object on every later poll. */
+        result?: T;
+        /** When `state` is `'failed'` or `'cancelled'`. */
+        error?: Error;
+    }
+
+    /**
+     * Starts loading a sound effect: a worker thread reads and checks the
+     * file while the frame loop runs, then the `poll()` that sees it read
+     * uploads it to SPU2 memory (a short DMA, on the script thread).
+     *
+     * @example
+     * ```js
+     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
+     * // each frame:
+     * const status = Sound.poll(job);
+     * if (status.state === "done") boom = status.result;
+     * ```
+     */
+    function loadSfxAsync(path: string): Job<Sfx>;
+    /** The job's state without blocking; uploads the sample once it was read. */
+    function poll<T>(job: Job<T>): JobStatus<T>;
+    /**
+     * Blocks until the job is no longer running or `timeoutMs` passes
+     * (default: no limit), letting other threads run meanwhile, then
+     * returns `poll(job)`.
+     */
+    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
+    /** The job ends as `'cancelled'` unless it already finished. */
+    function cancel(job: Job<unknown>): void;
+
+    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
+    class Stream {
+        /** Opens `path`; also callable without `new`. Does not start playback. */
+        constructor(path: string);
+        /**
+         * Starts, or resumes from `position`. Stops the stream that was
+         * playing. With `fade` it starts silent and rises to full volume;
+         * during a fade-out it cancels the fade.
+         */
+        play(options?: FadeOptions): void;
+        /**
+         * Pauses at the position heard. With `fade` it keeps playing (and
+         * `playing()` stays true) until the fade-out ends.
+         */
+        pause(options?: FadeOptions): void;
+        /** Pauses and rewinds to the start, after the fade-out if any. */
+        stop(options?: FadeOptions): void;
+        /** True from `play()` until paused, stopped, or its last sample is heard. */
+        playing(): boolean;
+        /** Moves to the start; keeps playing if it was. */
+        rewind(): void;
+        /** Closes the file. Using the object afterwards throws `FREED`. */
+        free(): void;
+        /** Restart from the beginning at the end instead of stopping. */
+        loop: boolean;
+        /**
+         * Playback position heard, in milliseconds; assigning seeks (clamped
+         * to 0..length). Right after a seek it reads the target, and starts
+         * moving once the new audio is heard (~0.1 s later).
+         */
+        position: number;
+        /**
+         * Called by `Sound.process()` after the stream's last sample was
+         * heard (without `loop`); `this` is the stream.
+         */
+        onEnd: ((this: Stream) => void) | null;
+        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
+        onLoop: ((this: Stream) => void) | null;
+        /**
+         * The stream's last sample was heard (without `loop`); cleared by
+         * `play()`, a seek or `rewind()`.
+         */
+        readonly ended: boolean;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate of the file in Hz. */
+        readonly rate: number;
+        /** 1 (mono) or 2 (stereo). */
+        readonly channels: number;
+        readonly format: 'wav' | 'ogg';
+        /**
+         * audsrv cannot play the file's format, so it is converted to 16-bit
+         * at a supported rate on the EE (a little CPU while playing).
+         */
+        readonly converted: boolean;
+    }
+
+    /** An ADPCM sample resident in SPU2 memory. */
+    class Sfx {
+        /** Loads and uploads `path` (.adp); also callable without `new`. */
+        constructor(path: string);
+        /**
+         * Plays on `channel` (0-23), or on any free channel when omitted.
+         * Returns the channel used, or -1 when that channel (or every channel)
+         * is busy. The volume and pan are applied to the channel first.
+         */
+        play(channel?: number): number;
+        /**
+         * Whether this sample is still playing on `channel`. A looping
+         * sample plays until `stop()`, `free()` or `IOP.reset()`.
+         */
+        playing(channel: number): boolean;
+        /**
+         * Silences this sample on `channel`, or on every channel it plays on.
+         * audsrv cannot key a voice off, so it is muted: `playing()` turns
+         * false at once and the channel is free for the next `play()`.
+         */
+        stop(channel?: number): void;
+        /**
+         * Releases the SPU2 memory. Using the object afterwards throws.
+         * Voices still playing this sample are stopped as with `stop()`.
+         */
+        free(): void;
+        /** 0 to 100, applied on the next `play()`. Default 100. */
+        volume: number;
+        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
+        pan: number;
+        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
+        readonly loop: boolean;
+        /**
+         * Always 0. audsrv plays samples at the rate they were encoded with;
+         * assigning throws `UNSUPPORTED`.
+         */
+        readonly pitch: number;
+        /** Duration in milliseconds. */
+        readonly length: number;
+        /** Sample rate in Hz. */
+        readonly rate: number;
+    }
+}
+
+
+/* === Module: Audio3D (audio3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=audio3d,... */
+/**
+ * Positional sound: footsteps, engines, rivers, monsters off screen.
+ *
+ * A Source plays a Sound.Sfx at a world position (or on a Scene3D node);
+ * the listener is usually the camera. Every frame a Loop system (after the
+ * scene updates) computes, in C, each playing source's volume from its
+ * distance (1 up to minDistance, 0 from maxDistance; "inverse" falls like
+ * minDistance / distance, "linear" in a straight line) and its stereo pan
+ * from the listener's right axis, and applies them to the SPU2 voice. The
+ * sample's own volume and pan are left for its other plays.
+ *
+ * Voices: sources share up to `setMaxVoices(n)` SPU2 channels (default 24). Each update the
+ * sources that want to sound are ranked by `priority`, then loudness (gain * volume, after
+ * occlusion), then distance, then creation order: deterministic, with no random stealing. The best
+ * hold voices; the others are culled by their `cull` policy: "stop" ends the source, "virtual" keeps it
+ * pending and restarts it from the beginning when it ranks again (the SPU2 cannot seek). The default
+ * is "virtual" for looping samples and "stop" for one-shots. A source remembers the Sound voice it
+ * started and only controls that voice: a channel that ended, was muted or reused by another sample
+ * (yours or another Sound user's) is never touched. The SPU2 cannot key a voice off, so a channel
+ * taken from a source is reusable once its sample has played one pass; a start that finds no free
+ * channel counts as culled and a virtual source retries on the next update.
+ *
+ * Occlusion (opt-in, `setOcclusion`): a provider (a Collision3D.World, or a function) tells how blocked
+ * the line from the listener to a voiced source is; at most `maxQueries` sources are asked per
+ * update, the stalest first, and the answer is eased in so the gain never jumps. No provider means
+ * no cost; Collision3D is not required by this module.
+ *
+ * The SPU2 mixes stereo only: sounds behind the listener are not muffled
+ * or told apart from those in front. Not in the default build:
+ * `node tools/modules.js configure --modules=audio3d,...`
+ *
+ * Example:
+ * ```js
+ * Audio3D.setListener(camera);
+ * const river = new Audio3D.Source(waterLoop, { x: 10, y: 0, z: -4, minDistance: 2, maxDistance: 25 });
+ * river.play();
+ * const growl = new Audio3D.Source(growlSfx, { node: monster, maxDistance: 40 });
+ * if (aggro) growl.play();
+ * ```
+ */
+declare namespace Audio3D {
+    interface SourceOptions {
+        x?: number; y?: number; z?: number;
+        /** Follow this node's world position (of the last scene update); null stops. */
+        node?: Scene3D.Node | null;
+        /** Full volume up to here (default 1). */
+        minDistance?: number;
+        /** Silent from here (default 30). */
+        maxDistance?: number;
+        rolloff?: "inverse" | "linear";
+        /** At full gain, 0-100 (default 100). */
+        volume?: number;
+        /** 0 (mono) to 1 (hard left/right); default 0.8. */
+        panStrength?: number;
+        /** -1000 to 1000, default 0: higher wins a voice before loudness is compared. */
+        priority?: number;
+        /** What happens when the source loses its voice: default "virtual" for loops, "stop" for one-shots. */
+        cull?: "default" | "stop" | "virtual";
+    }
+    class Source {
+        /** Keeps the Sfx alive; a freed Sfx stops the source. */
+        constructor(sfx: Sound.Sfx, options?: SourceOptions);
+        readonly playing: boolean;
+        /** Voice in use, -1 when not playing. */
+        readonly channel: number;
+        /** Levels applied last. */
+        readonly volume: number;
+        readonly pan: number;
+        /** Wants to sound but holds no voice (a "virtual" source that was outranked or out of range). */
+        readonly pending: boolean;
+        /** Current smoothed occlusion, 0 (clear) to 1 (blocked). */
+        readonly occlusion: number;
+        /** Starts at the current levels; may take the voice of a lower-ranked source. Returns the channel, or -1
+         * when beyond maxDistance (unless force), no voice is free or it was outranked (a "virtual" source then waits). */
+        play(options?: { force?: boolean }): number;
+        stop(): this;
+        setPosition(x: number, y: number, z: number): this;
+        configure(options: SourceOptions): this;
+        /** Stops and releases the source. */
+        dispose(): void;
+    }
+    /** Listens from the camera (retained; null keeps the last position). */
+    function setListener(camera: Camera3D.Camera | null): void;
+    /** Listens from a point with a right-hand axis. */
+    function setListener(x: number, y: number, z: number, rightX: number, rightY: number, rightZ: number): void;
+    /** Levels a source at (x, y, z) would get now, without playing. */
+    function levels(x: number, y: number, z: number, options?: SourceOptions): { volume: number; pan: number; distance: number };
+    const MAX_VOICES: 24;
+    /** Voices Audio3D may hold at once, 1 to 24 (default 24); the rest of the channels stay for other Sound users. */
+    function setMaxVoices(count: number): void;
+    interface Stats {
+        /** Sources that want to sound (playing or pending). */
+        sources: number;
+        /** Of those, the audible ones competing for voices. */
+        candidates: number;
+        /** Voices held after the update. */
+        voices: number;
+        /** Voices taken from a lower-ranked source. */
+        stolen: number;
+        /** Sources that lost or could not get a voice (any reason). */
+        culled: number;
+        /** Voices started by the update. */
+        started: number;
+        /** Occlusion queries asked, and how many failed (the previous value is kept). */
+        queries: number; queryErrors: number;
+        /** Updates since the stalest occlusion answer of a voiced source. */
+        oldestResult: number;
+    }
+    /** Counters of the last update (the Loop system's, or yours). */
+    function stats(): Stats;
+    interface OcclusionOptions {
+        /** Sources asked per update, 1 to 256 (default 4). */
+        maxQueries?: number;
+        /** Updates before a source is asked again, 1 to 3600 (default 6). */
+        interval?: number;
+        /** How much a fully blocked source is attenuated, 0 to 1 (default 0.8). */
+        strength?: number;
+        /** Easing toward the answer per update, (0, 1] (default 0.25). */
+        smoothing?: number;
+        /** Collision3D layer mask of the world provider (default all). */
+        mask?: number;
+    }
+    /**
+     * Turns occlusion on with a provider, or off with null. A Collision3D.World blocks a source when its
+     * ray from the listener meets geometry before the source; a function (x0, y0, z0, x1, y1, z1) returns
+     * the blocked fraction 0..1 (an exception or a non-finite answer counts as a failed query).
+     * Throws TypeError for anything else (or a World when Collision3D is not built).
+     */
+    function setOcclusion(provider: Collision3D.World | ((x0: number, y0: number, z0: number, x1: number, y1: number, z1: number) => number) | null,
+        options?: OcclusionOptions): void;
+    /** Applies every source's levels now (the Loop system does it each frame); returns the counters. */
+    function update(): Stats;
+}
+
+
+/* === Module: Bench (bench) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=bench,... */
+/**
+ * One synchronous benchmark batch per frame, timed by the native Profiler
+ * clock. Setup, teardown, summary sorting and checkpoints are not timed.
+ * Samples are milliseconds per invocation (batch time / iterations),
+ * including timer/JS overhead; no overhead is subtracted. Include an empty
+ * task as a reference for small kernels. Every batch must finish within
+ * the EE clock's approximately 14.5-second wrap interval.
+ * Draw tasks measure CPU submission; include an explicit GS wait in the
+ * task to measure completion. Report metadata should identify platform,
+ * build options, revision, scene and whether the task waits for the GS.
+ * Not in the default build: configure with --modules=bench,usbmass.
+ */
+declare namespace Bench {
+    interface Task<T = any> {
+        name: string;
+        setup?(): T;
+        run(context: T, iteration: number): unknown;
+        /** Called once even when setup/run fails; context may be undefined after a failed setup. */
+        teardown?(context: T | undefined): void;
+        /** Per-batch preparation outside the work timer, including warmup. */
+        beforeBatch?(context: T): void;
+        /** Runs even if beforeBatch/run throws or cancels; outside the work timer. */
+        afterBatch?(context: T): void;
+        /** Once before teardown, even on error/cancel. Snapshot counters/memory here. */
+        inspect?(context: T | undefined): unknown;
+        /** Scene, data sizes, phase boundaries and explicit GS-wait policy. */
+        metadata?: Record<string, unknown>;
+        warmup?: number;
+        samples?: number;
+        iterations?: number;
+    }
+    interface Result {
+        name: string;
+        status: "completed" | "error" | "cancelled";
+        warmup: number; samples: number; iterations: number;
+        averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+        metadata: Record<string, unknown>;
+        /** Successful measured batches in execution order, without warmup or failed batches. */
+        sampleTicks: number[];
+        /** Work time per invocation, i.e. sampleTicks converted and divided by iterations. */
+        sampleMs: number[];
+        /** Total batch CPU time, including beforeBatch/afterBatch, never divided by iterations.
+         * Excludes setup, inspect, teardown, checkpoints and the rest of the application frame.
+         * This is a lower bound on frame CPU cost, not a total frame measurement. */
+        batchCpu: {
+            averageMs: number; p95Ms: number; minMs: number; maxMs: number;
+            sampleMs: number[]; overBudget: number;
+        };
+        metrics?: unknown;
+        error?: string;
+    }
+    interface Report {
+        version: 2; label: string; metadata: Record<string, unknown>;
+        frameBudgetMs: number;
+        status: "running" | "completed" | "cancelled" | "error";
+        results: Result[];
+    }
+    interface Options {
+        label?: string;
+        metadata?: Record<string, unknown>;
+        /** Warmup batches, default 30; 0..10000. */
+        warmup?: number;
+        /** Measured batches, default 120; 1..10000. */
+        samples?: number;
+        /** Work invocations per batch, default 1; 1..10000. */
+        iterations?: number;
+        /** Total target frame budget in ms, default 1000/60. Used for batchCpu.overBudget.
+         * Each batch AND its preparation/cleanup must finish before the EE clock wraps. */
+        frameBudgetMs?: number;
+        /** Rewrites JSON between tasks; writable device required, not an atomic save. */
+        path?: string;
+        onResult?(result: Result, report: Report): void;
+    }
+    class Runner {
+        constructor(tasks: Task[], options?: Options);
+        readonly report: Report;
+        readonly done: boolean;
+        /** Executes one batch; false when finished. Reentrant calls throw. */
+        step(): boolean;
+        /** Cleanup now, or after the current callback returns. */
+        cancel(): void;
+    }
+    /**
+     * Attaches to the existing Loop; it must be running to settle the promise.
+     * Task failures resolve with an error report; checkpoint/onResult failures reject.
+     */
+    function run(tasks: Task[], options?: Options): Promise<Report>;
+    /** Writes JSON using std.open; path/open/write errors throw. */
+    function save(report: Report, path: string): void;
+}
+
+
+/* === Module: Box2D (box2d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=box2d,... */
+/**
+ * 2D rigid body physics with Box2D 3.2.
+ *
+ * A `World` owns `Body` objects; bodies carry `Shape`s (circle, box,
+ * polygon, capsule, segment) and `Chain`s, and are connected by `Joint`s.
+ * Units are meters, kilograms, seconds and radians; keep moving objects
+ * between 0.1 and 10 meters and scale to pixels when drawing.
+ *
+ * Every Box2D object has exactly one script object: `shape.getBody() === body`,
+ * and the shapes reported by queries and events can be compared with `===`
+ * or used as Map keys. Objects hold their world (`body.world`), so the world
+ * stays alive while any of them is reachable; an unreachable world is freed
+ * by the GC with everything in it. `destroy()` frees the Box2D object at
+ * once: later calls on it throw a TypeError (`isValid()` returns false).
+ *
+ * Invalid arguments throw instead of reaching Box2D, whose assertions would
+ * reset the console: TypeError for wrong types or objects, RangeError for
+ * values out of range (NaN and Infinity included). Every number must be
+ * finite and within +-1e10; positions, points, distances and vectors
+ * (`{ x, y }`) within +-100000 m (Box2D's B2_HUGE).
+ *
+ * Creating worlds, bodies, shapes, chains or joints, and `world.step()`,
+ * throw a RangeError when Box2D would exceed `setMemoryLimit()` or leave less
+ * than 256 KB of free RAM: Box2D itself cannot recover from a failed
+ * allocation. A refused step leaves the world as it was. The limit goes back
+ * to 0 (none) when the VM restarts (`std.reload()`).
+ *
+ * Performance: every getter allocates an object. To sync many sprites per
+ * frame use `world.readTransforms(bodies, float32Array)` (no allocation) or
+ * `world.getBodyEvents()` (moved bodies only).
+ *
+ * Example:
+ * ```js
+ * const world = Box2D.createWorld({ gravity: { x: 0, y: -10 } });
+ *
+ * const ground = world.createBody({ position: { x: 0, y: -1 } });
+ * ground.createBoxShape({ halfWidth: 20, halfHeight: 1 });
+ *
+ * const crate = world.createBody({ type: Box2D.DYNAMIC_BODY, position: { x: 0, y: 5 } });
+ * crate.createBoxShape({ halfWidth: 0.5, halfHeight: 0.5, friction: 0.4, enableContactEvents: true });
+ *
+ * while (true) {
+ *     world.step(1 / 60, 4);
+ *     for (const hit of world.getContactEvents().begin) {
+ *         if (hit.shapeA.getBody() === crate || hit.shapeB.getBody() === crate) console.log("landed");
+ *     }
+ *     const t = crate.getTransform();
+ *     drawCrate(t.x * PIXELS_PER_METER, t.y * PIXELS_PER_METER, t.angle);
+ *     Screen.flip();
+ * }
+ * ```
+ */
+declare namespace Box2D {
+    /** Box2D library version, `"3.2.0"`. */
+    const version: string;
+    /** Body types for `BodyOptions.type` and `Body.setType()`. */
+    const STATIC_BODY: 0;
+    const KINEMATIC_BODY: 1;
+    const DYNAMIC_BODY: 2;
+    /** Most vertices a polygon (or query proxy) can have: 8. */
+    const MAX_POLYGON_VERTICES: number;
+    /** Most worlds alive at a time (8 on the EE). */
+    const MAX_WORLDS: number;
+
+    /**
+     * Caps the bytes Box2D may hold (0 = no limit, the default). Reset to 0
+     * when the VM restarts.
+     */
+    function setMemoryLimit(bytes: number): void;
+    function getMemoryLimit(): number;
+    /** Bytes currently allocated by Box2D (all worlds). */
+    function getMemoryUsage(): number;
+
+    /**
+     * Character mover: given the desired translation and the planes from
+     * `world.collideMover()`, returns the translation that respects them.
+     * Move the capsule by it, then collide again next frame.
+     */
+    function solvePlanes(dx: number, dy: number, planes: CollisionPlane[]): { x: number; y: number; iterations: number };
+    /**
+     * Removes the parts of a velocity that go into the planes. Pass the same
+     * planes, after `solvePlanes` wrote their `push`.
+     */
+    function clipVector(vx: number, vy: number, planes: CollisionPlane[]): Vec2;
+
+    /** A plane for the mover solver; `collideMover()` results can be passed as they are. */
+    interface CollisionPlane {
+        normal: Vec2;
+        offset: number;
+        /** Most the solver may push along this plane. Default: unlimited. */
+        pushLimit?: number;
+        /** `clipVector` clips against this plane. Default true (false for soft collision). */
+        clipVelocity?: boolean;
+        /** Written by `solvePlanes`: `clipVector` only clips against planes that pushed. */
+        push?: number;
+    }
+
+    type BodyType = 0 | 1 | 2;
+    type ShapeType = 'circle' | 'capsule' | 'segment' | 'polygon' | 'chainSegment';
+    type JointType = 'distance' | 'filter' | 'motor' | 'prismatic' | 'revolute' | 'weld' | 'wheel';
+
+    interface Vec2 {
+        x: number;
+        y: number;
+    }
+
+    interface AABB {
+        lowerX: number;
+        lowerY: number;
+        upperX: number;
+        upperY: number;
+    }
+
+    /**
+     * 64-bit collision bits. Accepted as an integer number (a negative number
+     * is two's complement: `-1` is every bit) or a BigInt. Read back as a
+     * number within +-2^53, as a BigInt beyond (bits 53 to 62).
+     */
+    type Bits = number | bigint;
+
+    /**
+     * Two shapes collide when each one's categoryBits match the other's
+     * maskBits, unless they share a groupIndex: positive always collides,
+     * negative never does.
+     */
+    interface Filter {
+        /** Default 1. */
+        categoryBits?: Bits;
+        /** Default -1 (every category). */
+        maskBits?: Bits;
+        /** Default 0. */
+        groupIndex?: number;
+    }
+
+    /** Filter for queries: shapes whose categoryBits match maskBits, and whose maskBits match categoryBits. */
+    interface QueryFilter {
+        /** Default 1. */
+        categoryBits?: Bits;
+        /** Default -1. */
+        maskBits?: Bits;
+    }
+
+    interface WorldOptions {
+        /** Default `{ x: 0, y: -10 }`. */
+        gravity?: Vec2;
+        /** Let resting bodies sleep. Default true. */
+        enableSleep?: boolean;
+        /** Continuous collision between dynamic and static bodies. Default true. */
+        enableContinuous?: boolean;
+        /** Speed (m/s) below which collisions do not bounce. Default 1. */
+        restitutionThreshold?: number;
+        /** Approach speed (m/s) that reports a hit event. Default 1. */
+        hitEventThreshold?: number;
+        /** Speed cap in m/s, > 0. Default 400. */
+        maximumLinearSpeed?: number;
+        /** Accepted for compatibility (1..32); the EE always simulates on one worker. */
+        workerCount?: number;
+        /** Contact stiffness in Hz, >= 0. Default 30. See `World.setContactTuning()`. */
+        contactHertz?: number;
+        /** Contact damping ratio, >= 0. Default 10. */
+        contactDampingRatio?: number;
+        /** Most speed (m/s) at which overlap is pushed out, >= 0. Default 3. */
+        contactSpeed?: number;
+        /** Softer contacts between bodies of very different mass (experimental). Default false. */
+        enableContactSoftening?: boolean;
+        userData?: any;
+    }
+
+    interface BodyOptions {
+        /** Default STATIC_BODY. */
+        type?: BodyType;
+        position?: Vec2;
+        /** Radians. `rotation` is an alias. */
+        angle?: number;
+        rotation?: number;
+        linearVelocity?: Vec2;
+        angularVelocity?: number;
+        /** >= 0. */
+        linearDamping?: number;
+        /** >= 0. */
+        angularDamping?: number;
+        /** Multiplies the world gravity; may be negative. Default 1. */
+        gravityScale?: number;
+        /** Speed below which the body may sleep, >= 0. Default 0.05 m/s. */
+        sleepThreshold?: number;
+        /** Stops rotation. */
+        fixedRotation?: boolean;
+        /** Blocks motion along world x (e.g. a 2D side view with vertical-only motion). */
+        lockLinearX?: boolean;
+        /** Blocks motion along world y. */
+        lockLinearY?: boolean;
+        /** Continuous collision against other dynamic bodies too (fast projectiles). */
+        isBullet?: boolean;
+        enableSleep?: boolean;
+        isAwake?: boolean;
+        isEnabled?: boolean;
+        /** Lets the body spin past Box2D's rotation speed cap (round wheels only). Default false. */
+        allowFastRotation?: boolean;
+        /**
+         * Reuse contact points between steps. Default true (faster); turn it
+         * off for characters that must not catch on ghost collisions.
+         */
+        enableContactRecycling?: boolean;
+        /** Debug name, cut to 10 bytes (B2_NAME_LENGTH) at a character boundary. */
+        name?: string;
+        userData?: any;
+    }
+
+    /** Surface properties of a shape; see `Shape.setSurfaceMaterial()`. */
+    interface SurfaceMaterial {
+        /** >= 0. Default 0.6. */
+        friction?: number;
+        /** Bounciness, >= 0 (above 1 gains energy). Default 0. */
+        restitution?: number;
+        /** >= 0. Default 0. */
+        rollingResistance?: number;
+        /** Conveyor belt speed along the surface. Default 0. */
+        tangentSpeed?: number;
+        /** Your own material id (e.g. for footstep sounds). Not used by Box2D. Default 0. */
+        userMaterialId?: Bits;
+        /** Debug draw color 0xRRGGBB; 0 = the default color. */
+        customColor?: number;
+    }
+
+    /** Mass properties. `center` is local; the inertia is about the center of mass. */
+    interface MassData {
+        mass: number;
+        center: Vec2;
+        rotationalInertia: number;
+    }
+
+    /** Options shared by every `create*Shape` method. */
+    interface ShapeOptions extends SurfaceMaterial {
+        /** kg/m^2, >= 0. Default 1. */
+        density?: number;
+        /** Detects overlaps without colliding; see `World.getSensorEvents()`. */
+        isSensor?: boolean;
+        /** Report this shape to sensors (visitors need it too). Default false. */
+        enableSensorEvents?: boolean;
+        /** Contact begin/end events. Default false. */
+        enableContactEvents?: boolean;
+        /** Hit events above `hitEventThreshold`. Default false. */
+        enableHitEvents?: boolean;
+        filter?: Filter;
+        userData?: any;
+    }
+
+    interface CircleOptions extends ShapeOptions {
+        /** > 0. */
+        radius: number;
+        /** Local center. Default `{ x: 0, y: 0 }`. */
+        center?: Vec2;
+    }
+
+    interface BoxOptions extends ShapeOptions {
+        /** > 0. */
+        halfWidth: number;
+        /** > 0. */
+        halfHeight: number;
+        /** Local center. */
+        center?: Vec2;
+        /** Local rotation in radians. */
+        angle?: number;
+    }
+
+    interface PolygonOptions extends ShapeOptions {
+        /** 3 to 8 local points; their convex hull is used. */
+        vertices: Vec2[];
+        /** Rounds the corners, >= 0. Default 0. */
+        radius?: number;
+    }
+
+    interface CapsuleOptions extends ShapeOptions {
+        /** Local centers of the two half circles; more than 0.005 apart. */
+        point1: Vec2;
+        point2: Vec2;
+        /** > 0. */
+        radius: number;
+    }
+
+    interface SegmentOptions extends ShapeOptions {
+        /** Local end points; more than 0.005 apart. */
+        point1: Vec2;
+        point2: Vec2;
+    }
+
+    interface ChainOptions extends SurfaceMaterial {
+        /** Connects the last point to the first. Default false. */
+        isLoop?: boolean;
+        enableSensorEvents?: boolean;
+        filter?: Filter;
+        userData?: any;
+    }
+
+    interface JointOptions {
+        /** Let the two bodies collide with each other. Default false. */
+        collideConnected?: boolean;
+        /** Constraint force (N) above which the joint reports a joint event. Default: never. */
+        forceThreshold?: number;
+        /** Constraint torque (N·m) above which the joint reports a joint event. Default: never. */
+        torqueThreshold?: number;
+        /** Stiffness of the joint constraint in Hz, >= 0 (advanced). Default 60. */
+        constraintHertz?: number;
+        /** Damping of the joint constraint, >= 0 (advanced). Default 2. */
+        constraintDampingRatio?: number;
+        userData?: any;
+    }
+
+    /**
+     * `anchor` is a world point where both bodies are joined. Without it,
+     * each body is joined at its own origin. Joints start relaxed: the
+     * current relative angle is the zero angle of revolute joints and is
+     * kept by weld joints.
+     */
+    interface AnchorOptions extends JointOptions {
+        anchor?: Vec2;
+    }
+
+    interface SpringOptions {
+        enableSpring?: boolean;
+        /** Stiffness in Hz, >= 0. */
+        hertz?: number;
+        /** >= 0 (1 = critically damped). */
+        dampingRatio?: number;
+    }
+
+    interface DistanceJointOptions extends JointOptions, SpringOptions {
+        /** World point used by both bodies. */
+        anchor?: Vec2;
+        /** Local point on body A (when `anchor` is not given). */
+        anchorA?: Vec2;
+        /** Local point on body B (when `anchor` is not given). */
+        anchorB?: Vec2;
+        /** Rest length, > 0. Default: the current distance between the anchors. */
+        length?: number;
+        enableLimit?: boolean;
+        minLength?: number;
+        maxLength?: number;
+        enableMotor?: boolean;
+        maxMotorForce?: number;
+        motorSpeed?: number;
+        /**
+         * Spring force range (N), lower <= upper: lower bounds the tension, upper
+         * the compression (upperSpringForce 0 makes a spring that only pulls).
+         * Default unlimited.
+         */
+        lowerSpringForce?: number;
+        upperSpringForce?: number;
+    }
+
+    interface RevoluteJointOptions extends AnchorOptions, SpringOptions {
+        enableLimit?: boolean;
+        /** Radians, within +-0.99 * PI, lowerAngle <= upperAngle. */
+        lowerAngle?: number;
+        upperAngle?: number;
+        enableMotor?: boolean;
+        motorSpeed?: number;
+        maxMotorTorque?: number;
+        /** Angle (radians) the spring pulls towards. Default 0. */
+        targetAngle?: number;
+    }
+
+    interface PrismaticJointOptions extends AnchorOptions, SpringOptions {
+        /** World direction of the slide at creation. Default `{ x: 1, y: 0 }`. */
+        axis?: Vec2;
+        enableLimit?: boolean;
+        lowerTranslation?: number;
+        upperTranslation?: number;
+        enableMotor?: boolean;
+        motorSpeed?: number;
+        maxMotorForce?: number;
+        /** Translation (m) the spring pulls towards. Default 0. */
+        targetTranslation?: number;
+    }
+
+    interface WeldJointOptions extends AnchorOptions {
+        /** 0 = rigid. */
+        linearHertz?: number;
+        angularHertz?: number;
+        linearDampingRatio?: number;
+        angularDampingRatio?: number;
+    }
+
+    interface WheelJointOptions extends AnchorOptions, SpringOptions {
+        /** World direction of the suspension at creation. Default `{ x: 0, y: 1 }`. */
+        axis?: Vec2;
+        enableLimit?: boolean;
+        lowerTranslation?: number;
+        upperTranslation?: number;
+        enableMotor?: boolean;
+        motorSpeed?: number;
+        maxMotorTorque?: number;
+    }
+
+    /** Drives body B relative to body A (top-down friction, animated platforms). */
+    interface MotorJointOptions extends JointOptions {
+        linearVelocity?: Vec2;
+        angularVelocity?: number;
+        maxVelocityForce?: number;
+        maxVelocityTorque?: number;
+        linearHertz?: number;
+        linearDampingRatio?: number;
+        maxSpringForce?: number;
+        angularHertz?: number;
+        angularDampingRatio?: number;
+        maxSpringTorque?: number;
+    }
+
+    interface Contact {
+        shapeA: Shape;
+        shapeB: Shape;
+        /** From shape A to shape B. */
+        normal: Vec2;
+        /** 1 or 2 points. */
+        points: { point: Vec2; separation: number; normalImpulse: number }[];
+    }
+
+    interface CastHit {
+        shape: Shape;
+        point: Vec2;
+        normal: Vec2;
+        /** Position along the cast, 0 (start) to 1 (end). */
+        fraction: number;
+    }
+
+    interface MoverPlane {
+        shape: Shape;
+        /** Plane normal, pointing out of the shape. */
+        normal: Vec2;
+        /** Plane offset, relative to the mover origin. */
+        offset: number;
+        /** Contact point on the shape, relative to the mover origin. */
+        point: Vec2;
+    }
+
+    /**
+     * Events of the last step. A shape destroyed since then reads as null:
+     * always check `end` events, and the others when shapes are destroyed
+     * between `step()` and the read.
+     */
+    interface ContactEvents {
+        begin: { shapeA: Shape; shapeB: Shape }[];
+        end: { shapeA: Shape | null; shapeB: Shape | null }[];
+        hit: { shapeA: Shape; shapeB: Shape; point: Vec2; normal: Vec2; approachSpeed: number }[];
+    }
+
+    /** See ContactEvents about destroyed shapes. */
+    interface SensorEvents {
+        begin: { sensor: Shape; visitor: Shape }[];
+        end: { sensor: Shape | null; visitor: Shape | null }[];
+    }
+
+    /** A body that moved in the last step (awake bodies only; bodies destroyed since are left out). */
+    interface BodyMoveEvent {
+        body: Body;
+        x: number;
+        y: number;
+        angle: number;
+        /** The body went to sleep in this step. */
+        fellAsleep: boolean;
+    }
+
+    /** Sizes of the simulation, from `World.getCounters()`. */
+    interface Counters {
+        bodyCount: number;
+        shapeCount: number;
+        contactCount: number;
+        jointCount: number;
+        islandCount: number;
+        stackUsed: number;
+        staticTreeHeight: number;
+        treeHeight: number;
+        taskCount: number;
+        awakeContactCount: number;
+        recycledContactCount: number;
+        /** Bytes held by this world. */
+        byteCount: number;
+        /** Constraints per solver graph color (24 colors). */
+        colorCounts: number[];
+    }
+
+    interface World {
+        /**
+         * Advances the simulation. Default 1/60 s and 4 sub-steps (1 to 64).
+         * Use a fixed time step for stable results. Throws a RangeError, and
+         * leaves the world as it was, once the memory budget is spent (see
+         * `Box2D.setMemoryLimit()`).
+         */
+        step(timeStep?: number, subStepCount?: number): void;
+        createBody(options?: BodyOptions): Body;
+
+        createDistanceJoint(bodyA: Body, bodyB: Body, options?: DistanceJointOptions): Joint;
+        createRevoluteJoint(bodyA: Body, bodyB: Body, options?: RevoluteJointOptions): Joint;
+        createPrismaticJoint(bodyA: Body, bodyB: Body, options?: PrismaticJointOptions): Joint;
+        createWeldJoint(bodyA: Body, bodyB: Body, options?: WeldJointOptions): Joint;
+        createWheelJoint(bodyA: Body, bodyB: Body, options?: WheelJointOptions): Joint;
+        createMotorJoint(bodyA: Body, bodyB: Body, options?: MotorJointOptions): Joint;
+        /** Only disables collision between the two bodies. */
+        createFilterJoint(bodyA: Body, bodyB: Body, options?: JointOptions): Joint;
+
+        getGravity(): Vec2;
+        setGravity(x: number, y: number): void;
+        enableContinuous(flag: boolean): void;
+        isContinuousEnabled(): boolean;
+        enableSleeping(flag: boolean): void;
+        isSleepingEnabled(): boolean;
+        setRestitutionThreshold(value: number): void;
+        getRestitutionThreshold(): number;
+        setHitEventThreshold(value: number): void;
+        getHitEventThreshold(): number;
+        /** > 0. */
+        setMaximumLinearSpeed(value: number): void;
+        getMaximumLinearSpeed(): number;
+        getAwakeBodyCount(): number;
+        /**
+         * Contact softness (advanced): stiffness in Hz, damping ratio and the
+         * most speed (m/s) at which overlap is pushed out; all >= 0.
+         * Defaults 30, 10, 3.
+         */
+        setContactTuning(hertz: number, dampingRatio: number, pushSpeed: number): void;
+        /** Distance (m) within which contact points are reused between steps, >= 0 (0 disables). */
+        setContactRecycleDistance(distance: number): void;
+        getContactRecycleDistance(): number;
+        /** Solver warm starting; disabling it only makes stacks less stable (testing). */
+        enableWarmStarting(flag: boolean): void;
+        isWarmStartingEnabled(): boolean;
+        /** Speculative contacts (testing). */
+        enableSpeculative(flag: boolean): void;
+        getCounters(): Counters;
+        /** Rebalances the tree of static shapes, e.g. after building a level. */
+        rebuildStaticTree(): void;
+        getUserData(): any;
+        setUserData(value: any): void;
+
+        /** Closest shape hit by the ray from origin to origin + translation, or null. */
+        castRay(originX: number, originY: number, translationX: number, translationY: number,
+            filter?: QueryFilter): CastHit | null;
+        /** Every shape hit by the ray, nearest first. */
+        raycastAll(originX: number, originY: number, translationX: number, translationY: number,
+            filter?: QueryFilter): CastHit[];
+        /** Shapes whose bounds overlap the box (a broad test: bounds are slightly padded). */
+        queryAABB(lowerX: number, lowerY: number, upperX: number, upperY: number, filter?: QueryFilter): Shape[];
+        /** Shapes overlapping the convex hull of 1 to 8 world points, rounded by radius. */
+        overlapShape(points: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
+        overlapShape(points: Vec2[], filter?: QueryFilter): Shape[];
+        overlapPolygon(vertices: Vec2[], radius?: number, filter?: QueryFilter): Shape[];
+        overlapPolygon(vertices: Vec2[], filter?: QueryFilter): Shape[];
+        overlapCircle(x: number, y: number, radius: number, filter?: QueryFilter): Shape[];
+        overlapCapsule(x1: number, y1: number, x2: number, y2: number, radius: number, filter?: QueryFilter): Shape[];
+        /** Sweeps a shape and returns every hit, nearest first. */
+        castShape(points: Vec2[], radius: number, translationX: number, translationY: number,
+            filter?: QueryFilter): CastHit[];
+        castPolygon(vertices: Vec2[], radius: number, translationX: number, translationY: number,
+            filter?: QueryFilter): CastHit[];
+        castCircle(x: number, y: number, radius: number, translationX: number, translationY: number,
+            filter?: QueryFilter): CastHit[];
+        castCapsule(x1: number, y1: number, x2: number, y2: number, radius: number,
+            translationX: number, translationY: number, filter?: QueryFilter): CastHit[];
+
+        /**
+         * Character mover: sweeps a capsule (centers x1,y1 / x2,y2 relative to
+         * x,y; radius > 0.01) and returns the fraction of the translation
+         * it can move.
+         */
+        castMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
+            translationX: number, translationY: number, filter?: QueryFilter): number;
+        /** Collision planes around a capsule mover, relative to x,y. */
+        collideMover(x: number, y: number, x1: number, y1: number, x2: number, y2: number, radius: number,
+            filter?: QueryFilter): MoverPlane[];
+
+        /** Events of the last step. Only shapes with the matching enable*Events option report them. */
+        getContactEvents(): ContactEvents;
+        getSensorEvents(): SensorEvents;
+        /** Cheapest way to sync sprites: only the bodies that moved. */
+        getBodyEvents(): BodyMoveEvent[];
+        /**
+         * Joints whose force or torque exceeded their threshold in the last
+         * step (breakable joints: destroy them here).
+         */
+        getJointEvents(): { joint: Joint }[];
+        /**
+         * Writes x, y, angle of each body into out[3i], out[3i + 1],
+         * out[3i + 2] and returns the body count. No object is allocated:
+         * the fastest way to sync sprites every frame.
+         */
+        readTransforms(bodies: Body[], out: Float32Array): number;
+        // `out` goes as it is to Sprite.drawAll(sprites, out, { stride: 3 })
+        // and Scene3D.setTransforms2D(nodes, out).
+        /** Milliseconds spent in each phase of the last step (EE cycle counter). */
+        getProfile(): {
+            step: number; pairs: number; collide: number; solve: number; solverSetup: number;
+            constraints: number; prepareConstraints: number; integrateVelocities: number; warmStart: number;
+            solveImpulses: number; integratePositions: number; relaxImpulses: number; applyRestitution: number;
+            storeImpulses: number; splitIslands: number; transforms: number; sensorHits: number;
+            jointEvents: number; hitEvents: number; refit: number; bullets: number; sleepIslands: number;
+            sensors: number;
+        };
+        /**
+         * The whole simulation state, between steps. Checksummed: a damaged
+         * image is rejected by `restore`. Valid for this build only.
+         */
+        snapshot(): ArrayBuffer;
+        /**
+         * Returns the world to a snapshot of itself. Objects that existed then
+         * keep their script objects and user data; objects created since are
+         * destroyed; objects destroyed since come back as new script objects.
+         * RangeError for a rejected image (the world is unchanged). If the
+         * image fails midway the world is destroyed and an InternalError thrown.
+         */
+        restore(image: ArrayBuffer | ArrayBufferView): true;
+        /** Radial impulse on the shapes within radius + falloff. */
+        explode(x: number, y: number, radius: number, falloff: number, impulsePerLength: number, maskBits?: Bits): void;
+
+        /** Frees the world and everything in it. Returns false if already destroyed. */
+        destroy(): boolean;
+        isValid(): boolean;
+    }
+
+    interface Body {
+        readonly world: World;
+
+        getType(): BodyType;
+        setType(type: BodyType): void;
+        getPosition(): Vec2;
+        /** Teleports the body, keeping its angle. */
+        setPosition(x: number, y: number): void;
+        /** Radians. */
+        getAngle(): number;
+        /** Position and angle in one call. */
+        getTransform(): { x: number; y: number; angle: number };
+        setTransform(x: number, y: number, angle: number): void;
+        /** Moves a kinematic body to the target over `duration` seconds (> 0) with velocities. */
+        setTargetTransform(x: number, y: number, angle: number, duration: number): void;
+        getLinearVelocity(): Vec2;
+        setLinearVelocity(vx: number, vy: number): void;
+        getAngularVelocity(): number;
+        setAngularVelocity(w: number): void;
+
+        /** Force at a world point. `wake` defaults to true. */
+        applyForce(fx: number, fy: number, px: number, py: number, wake?: boolean): void;
+        applyForceToCenter(fx: number, fy: number, wake?: boolean): void;
+        applyTorque(torque: number, wake?: boolean): void;
+        applyLinearImpulse(ix: number, iy: number, px: number, py: number, wake?: boolean): void;
+        applyLinearImpulseToCenter(ix: number, iy: number, wake?: boolean): void;
+        applyAngularImpulse(impulse: number, wake?: boolean): void;
+
+        getMass(): number;
+        getLinearDamping(): number;
+        setLinearDamping(damping: number): void;
+        getAngularDamping(): number;
+        setAngularDamping(damping: number): void;
+        getGravityScale(): number;
+        setGravityScale(scale: number): void;
+        isAwake(): boolean;
+        setAwake(flag: boolean): void;
+        isEnabled(): boolean;
+        setEnabled(flag: boolean): void;
+        isFixedRotation(): boolean;
+        setFixedRotation(flag: boolean): void;
+        isBullet(): boolean;
+        setBullet(flag: boolean): void;
+
+        /** Local point to world. */
+        getWorldPoint(x: number, y: number): Vec2;
+        /** World point to local. */
+        getLocalPoint(x: number, y: number): Vec2;
+        /** Local direction to world (rotation only). */
+        getWorldVector(x: number, y: number): Vec2;
+        /** World direction to local (rotation only). */
+        getLocalVector(x: number, y: number): Vec2;
+        /** Velocity of a world point moving with the body. */
+        getWorldPointVelocity(x: number, y: number): Vec2;
+        /** Velocity of a local point of the body, in world coordinates. */
+        getLocalPointVelocity(x: number, y: number): Vec2;
+        /** Center of mass in world coordinates. */
+        getWorldCenter(): Vec2;
+        /** Center of mass in local coordinates. */
+        getLocalCenter(): Vec2;
+        /** About the center of mass, kg·m^2. */
+        getRotationalInertia(): number;
+        getMassData(): MassData;
+        /**
+         * Overrides the mass computed from the shapes (fields left out keep
+         * their value; mass and inertia >= 0) until the shapes change or
+         * `applyMassFromShapes()` is called.
+         */
+        setMassData(data: Partial<MassData>): void;
+        /** Recomputes mass after shape density or geometry changes. */
+        applyMassFromShapes(): void;
+        computeAABB(): AABB;
+        /** Drops the forces and torques applied since the last step. */
+        clearForces(): void;
+        /** Wakes the bodies touching this one. */
+        wakeTouching(): void;
+        /** When false the body never sleeps. Default true. */
+        enableSleep(flag: boolean): void;
+        isSleepEnabled(): boolean;
+        /** Speed (m/s) below which the body may sleep, >= 0. */
+        setSleepThreshold(threshold: number): void;
+        getSleepThreshold(): number;
+        /** See `BodyOptions.enableContactRecycling`. */
+        enableContactRecycling(flag: boolean): void;
+        isContactRecyclingEnabled(): boolean;
+        /** Sets the flag on every shape of the body (read it with `shape.areContactEventsEnabled()`). */
+        enableContactEvents(flag: boolean): void;
+        /** Sets the flag on every shape of the body. */
+        enableHitEvents(flag: boolean): void;
+        /** Debug name, cut to 10 bytes at a character boundary. */
+        setName(name: string): void;
+        getName(): string;
+
+        createCircleShape(options: CircleOptions): Shape;
+        createBoxShape(options: BoxOptions): Shape;
+        createPolygonShape(options: PolygonOptions): Shape;
+        createCapsuleShape(options: CapsuleOptions): Shape;
+        createSegmentShape(options: SegmentOptions): Shape;
+        /**
+         * Chain of segments from 4 or more local points, consecutive points
+         * more than 0.005 apart. Segments are one-sided: they collide on the
+         * right of the direction from one point to the next, so terrain
+         * walked on from above is listed right to left, and a loop listed
+         * counter-clockwise collides on the outside. An open chain uses its
+         * first and last points only to smooth the ends: n points make
+         * n - 3 segments (a loop makes n).
+         */
+        createChain(points: Vec2[], options?: ChainOptions): Chain;
+        /** Shapes of the body, chain segments included. */
+        getShapes(): Shape[];
+        getJoints(): Joint[];
+        /** Touching contacts of the body's shapes (e.g. "is the player grounded?"). */
+        getContacts(): Contact[];
+        getMotionLocks(): { linearX: boolean; linearY: boolean; angularZ: boolean };
+        /** Fields left out keep their value; `angularZ` is `fixedRotation`. */
+        setMotionLocks(locks: { linearX?: boolean; linearY?: boolean; angularZ?: boolean }): void;
+
+        getUserData(): any;
+        setUserData(value: any): void;
+        /** Frees the body with its shapes, chains and joints. Returns false if already destroyed. */
+        destroy(): boolean;
+        isValid(): boolean;
+    }
+
+    interface Shape {
+        readonly world: World;
+
+        getType(): ShapeType;
+        getBody(): Body;
+        getFriction(): number;
+        setFriction(friction: number): void;
+        getRestitution(): number;
+        setRestitution(restitution: number): void;
+        getDensity(): number;
+        /** `updateBodyMass` defaults to true. */
+        setDensity(density: number, updateBodyMass?: boolean): void;
+        isSensor(): boolean;
+        enableSensorEvents(flag: boolean): void;
+        areSensorEventsEnabled(): boolean;
+        enableContactEvents(flag: boolean): void;
+        areContactEventsEnabled(): boolean;
+        enableHitEvents(flag: boolean): void;
+        areHitEventsEnabled(): boolean;
+        getFilter(): { categoryBits: Bits; maskBits: Bits; groupIndex: number };
+        /** Fields left out keep their value. */
+        setFilter(filter: Filter): void;
+        getUserData(): any;
+        setUserData(value: any): void;
+
+        /** World point inside the shape. */
+        testPoint(x: number, y: number): boolean;
+        getClosestPoint(x: number, y: number): Vec2;
+        /** World bounds, slightly padded. */
+        getAABB(): AABB;
+        /** Local geometry; each throws a TypeError for another shape type. */
+        getCircle(): { center: Vec2; radius: number };
+        getCapsule(): { center1: Vec2; center2: Vec2; radius: number };
+        getPolygon(): { vertices: Vec2[]; normals: Vec2[]; centroid: Vec2; radius: number; count: number };
+        getSegment(): { point1: Vec2; point2: Vec2 };
+        getChainSegment(): { ghost1: Vec2; segment: { point1: Vec2; point2: Vec2 }; ghost2: Vec2; chain: Chain };
+        /** Touching contacts of this shape. */
+        getContacts(): Contact[];
+        /** Sensors only: the shapes inside, as of the last step. */
+        getSensorOverlaps(): Shape[];
+
+        /**
+         * Replace the geometry (the type may change), with the options of the
+         * matching `create*Shape`. The body mass is kept: call
+         * `body.applyMassFromShapes()`. Chain segments throw a TypeError.
+         */
+        setCircle(circle: { radius: number; center?: Vec2 }): void;
+        setBox(box: { halfWidth: number; halfHeight: number; center?: Vec2; angle?: number }): void;
+        setPolygon(polygon: { vertices: Vec2[]; radius?: number }): void;
+        setCapsule(capsule: { point1: Vec2; point2: Vec2; radius: number }): void;
+        setSegment(segment: { point1: Vec2; point2: Vec2 }): void;
+        getSurfaceMaterial(): Required<SurfaceMaterial>;
+        /** Fields left out keep their value. */
+        setSurfaceMaterial(material: SurfaceMaterial): void;
+        /** Mass of this shape alone, from its density. */
+        computeMassData(): MassData;
+        /** Ray against this shape only (world coordinates); null when missed. */
+        rayCast(originX: number, originY: number, translationX: number, translationY: number): CastHit | null;
+        /**
+         * Air force on a circle, capsule or polygon of a dynamic body (other
+         * shapes are ignored). `drag` (>= 0) scales the shape's own velocity
+         * against the wind, `lift` the force across it. `wake` defaults to true.
+         */
+        applyWind(windX: number, windY: number, drag: number, lift: number, wake?: boolean): void;
+
+        /**
+         * `updateBodyMass` defaults to true. Returns false if already
+         * destroyed. Chain segments go away with their chain: destroying one
+         * throws a TypeError.
+         */
+        destroy(updateBodyMass?: boolean): boolean;
+        isValid(): boolean;
+    }
+
+    interface Chain {
+        readonly world: World;
+
+        getBody(): Body;
+        /** The chain segments (shapes of type 'chainSegment'). */
+        getShapes(): Shape[];
+        getUserData(): any;
+        setUserData(value: any): void;
+        destroy(): boolean;
+        isValid(): boolean;
+    }
+
+    /**
+     * Methods specific to a joint type throw a TypeError on other types.
+     * Types noted per method.
+     */
+    interface Joint {
+        readonly world: World;
+
+        getType(): JointType;
+        getBodyA(): Body;
+        getBodyB(): Body;
+        getUserData(): any;
+        setUserData(value: any): void;
+        setCollideConnected(flag: boolean): void;
+        getCollideConnected(): boolean;
+        wakeBodies(): void;
+        /** See `JointOptions.forceThreshold` and `World.getJointEvents()`. */
+        setForceThreshold(force: number): void;
+        getForceThreshold(): number;
+        setTorqueThreshold(torque: number): void;
+        getTorqueThreshold(): number;
+        getConstraintForce(): Vec2;
+        getConstraintTorque(): number;
+        /** Constraint error: meters apart the anchors are (ignoring allowed motion). */
+        getLinearSeparation(): number;
+        /** Constraint error in radians. */
+        getAngularSeparation(): number;
+        /** See `JointOptions.constraintHertz`; both >= 0. */
+        setConstraintTuning(hertz: number, dampingRatio: number): void;
+        getConstraintTuning(): { hertz: number; dampingRatio: number };
+        /** Joint frame in body A's (or B's) local space: anchor and axis angle. */
+        getLocalFrameA(): { x: number; y: number; angle: number };
+        getLocalFrameB(): { x: number; y: number; angle: number };
+        setLocalFrameA(x: number, y: number, angle: number): void;
+        setLocalFrameB(x: number, y: number, angle: number): void;
+
+        /** distance, revolute, prismatic, wheel. */
+        enableSpring(flag: boolean): void;
+        isSpringEnabled(): boolean;
+        setSpringHertz(hertz: number): void;
+        getSpringHertz(): number;
+        setSpringDampingRatio(ratio: number): void;
+        getSpringDampingRatio(): number;
+        enableLimit(flag: boolean): void;
+        isLimitEnabled(): boolean;
+        /** Length range (distance), angle (revolute, within +-0.99 * PI) or translation (prismatic, wheel). */
+        setLimits(lower: number, upper: number): void;
+        getLimits(): { lower: number; upper: number };
+        enableMotor(flag: boolean): void;
+        isMotorEnabled(): boolean;
+        setMotorSpeed(speed: number): void;
+        getMotorSpeed(): number;
+
+        /** distance, prismatic. */
+        setMaxMotorForce(force: number): void;
+        getMaxMotorForce(): number;
+        getMotorForce(): number;
+        /** revolute, wheel. */
+        setMaxMotorTorque(torque: number): void;
+        getMaxMotorTorque(): number;
+        getMotorTorque(): number;
+
+        /** revolute: current angle in radians. */
+        getAngle(): number;
+        /**
+         * revolute: angle the spring pulls towards. Like the other setters,
+         * this does not wake sleeping bodies: call `wakeBodies()`.
+         */
+        setTargetAngle(angle: number): void;
+        getTargetAngle(): number;
+        /** prismatic: translation along the axis and its speed. */
+        getTranslation(): number;
+        getSpeed(): number;
+        /** prismatic: translation the spring pulls towards (does not wake the bodies). */
+        setTargetTranslation(translation: number): void;
+        getTargetTranslation(): number;
+        /** distance: rest length (> 0) and current length. */
+        getLength(): number;
+        setLength(length: number): void;
+        getCurrentLength(): number;
+        /** distance: see `DistanceJointOptions.lowerSpringForce`; lower <= upper. */
+        setSpringForceRange(lower: number, upper: number): void;
+        getSpringForceRange(): { lower: number; upper: number };
+
+        /** weld, motor. */
+        setLinearHertz(hertz: number): void;
+        getLinearHertz(): number;
+        setLinearDampingRatio(ratio: number): void;
+        getLinearDampingRatio(): number;
+        setAngularHertz(hertz: number): void;
+        getAngularHertz(): number;
+        setAngularDampingRatio(ratio: number): void;
+        getAngularDampingRatio(): number;
+
+        /** motor. */
+        setLinearVelocity(x: number, y: number): void;
+        getLinearVelocity(): Vec2;
+        setAngularVelocity(velocity: number): void;
+        getAngularVelocity(): number;
+        setMaxVelocityForce(force: number): void;
+        getMaxVelocityForce(): number;
+        setMaxVelocityTorque(torque: number): void;
+        getMaxVelocityTorque(): number;
+        setMaxSpringForce(force: number): void;
+        getMaxSpringForce(): number;
+        setMaxSpringTorque(torque: number): void;
+        getMaxSpringTorque(): number;
+
+        /** `wakeBodies` defaults to true. Returns false if already destroyed. */
+        destroy(wakeBodies?: boolean): boolean;
+        isValid(): boolean;
+    }
+
+    /**
+     * Creates a world. At most `MAX_WORLDS` exist at a time: destroy() the
+     * ones you no longer need (unreachable ones are collected first).
+     */
+    function createWorld(options?: WorldOptions): World;
+}
+
+
+/* === Module: Box2DDraw (box2ddraw) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=box2ddraw,... */
+/**
+ * Debug drawing of a Box2D world: shape outlines, joints, bounds, contacts
+ * and centers of mass, in Box2D's colors (static bodies green, awake
+ * dynamic bodies pink, sleeping ones gray). Lines are batched into one GS
+ * packet stream per call and what lies outside the screen is skipped.
+ *
+ * Example:
+ * ```js
+ * while (true) {
+ *     world.step(1 / 60, 4);
+ *     Screen.clear(BLACK);
+ *     Box2DDraw.draw(world, { scale: 32, offsetX: 320, offsetY: 400 });
+ *     Screen.flip();
+ * }
+ * ```
+ */
+declare namespace Box2DDraw {
+    interface Options {
+        /** Pixels per meter, 0.001 to 1e6. Default 32. */
+        scale?: number;
+        /** Screen position of the world origin. Default: the screen center. */
+        offsetX?: number;
+        offsetY?: number;
+        /** World y up, screen y down. Default true. */
+        flipY?: boolean;
+        /** Translucent shape interiors (needs alpha blending). Default false. */
+        fill?: boolean;
+        /** Default true. */
+        shapes?: boolean;
+        /** Default true. */
+        joints?: boolean;
+        /** Joint limits, springs and frames. Default false. */
+        jointExtras?: boolean;
+        /** Shape bounding boxes. Default false. */
+        bounds?: boolean;
+        /** Contact points and normals. Default false. */
+        contacts?: boolean;
+        /** Centers of mass. Default false. */
+        mass?: boolean;
+    }
+
+    /** Draws the world. Call between Screen.clear() and Screen.flip(). */
+    function draw(world: Box2D.World, options?: Options): void;
+}
+
+
+/* === Module: Camera2D (camera2d) === */
+/**
+ * 2D cameras, applied in C by every 2D draw: `Draw`, `Image`, `Font` and
+ * `TileMap` go through the camera's transform before reaching the GS, so the
+ * game draws in world coordinates and never subtracts the camera by hand.
+ *
+ * `Camera2D.main` is the current camera from the start. It shows the world
+ * from (0, 0) at zoom 1, exactly like the screen, so nothing changes until
+ * it moves. While `Loop.run()` runs, the current camera is updated after the
+ * game's `update` and applied around its `draw`; `Camera2D.screenSpace()`
+ * draws the HUD without it. Cameras use the scaled time of the Loop.
+ *
+ * A camera's position is the world point shown at its anchor (the center of
+ * its viewport by default). Zoom is screen pixels per world unit, rotation is
+ * in radians (clockwise on screen) and smoothing speeds are rates per second
+ * (frame-rate independent: `1 - exp(-rate * dt)` of the distance each frame;
+ * 0 means rigid).
+ *
+ * Example:
+ * ```js
+ * const cam = Camera2D.main;
+ * cam.follow(player, { lerp: 8, deadzone: { w: 64, h: 32 }, lookahead: 40 });
+ * cam.setBounds(0, 0, mapWidth, mapHeight);   // centered if the map is smaller
+ * cam.zoom = 1.5;
+ *
+ * Loop.run({
+ *     update(dt) { player.update(dt); if (hit) cam.shake(6, 0.3); },
+ *     draw() {
+ *         cam.draw(() => sky.draw(0, 0), { parallax: 0.3 });   // slower layer
+ *         level.render(0, 0);                    // TileMap, in world space
+ *         heroImage.draw(player.x, player.y);    // Image, in world space
+ *         Camera2D.screenSpace(() => font.print(10, 10, `HP ${hp}`));
+ *     },
+ * });
+ *
+ * // Split screen: one camera per viewport, no current camera.
+ * const left = new Camera2D.Camera({ viewport: { x: 0, y: 0, w: 320, h: 448 } });
+ * const right = new Camera2D.Camera({ viewport: { x: 320, y: 0, w: 320, h: 448 } });
+ * left.follow(p1); right.follow(p2);
+ * Camera2D.setCurrent(null);
+ * // in draw(): left.draw(drawWorld); right.draw(drawWorld);
+ * ```
+ *
+ * Under a rotation, rectangles (images, glyphs, TileMap sprites) are drawn as
+ * two triangles (TileMap sprites, on VU1, as triangle strips). While a camera
+ * is applied, what lies entirely outside its viewport is skipped in C before
+ * reaching the GS: images, rectangles, circles, each sprite of
+ * `Image.drawList()`, whole texts, and the cells of `TileMap` grids.
+ */
+declare namespace Camera2D {
+    interface Point {
+        x: number;
+        y: number;
+    }
+
+    interface Rect {
+        x: number;
+        y: number;
+        w: number;
+        h: number;
+    }
+
+    /** A number for both axes, `[x, y]`, `{ x, y }` or `{ w, h }`. */
+    type Pair = number | [number, number] | { x: number; y: number } | { w: number; h: number };
+
+    /** Anything with a position in world space: a player, an enemy, a point. */
+    interface Target {
+        x: number;
+        y: number;
+    }
+
+    interface CameraOptions {
+        /** World point at the anchor; defaults to half the viewport (the identity view). */
+        x?: number;
+        y?: number;
+        /** Both axes; `zoomX`/`zoomY` override one. Default 1. */
+        zoom?: number;
+        zoomX?: number;
+        zoomY?: number;
+        /** Radians, clockwise on screen. */
+        rotation?: number;
+        /** Screen rectangle the camera draws into; null (default) is the whole screen. */
+        viewport?: Rect | null;
+        /** Point of the viewport the position is shown at, 0..1. Default [0.5, 0.5]. */
+        anchor?: Pair;
+        /** Round the translation to whole pixels (no shimmer on pixel art). Default true. */
+        pixelSnap?: boolean;
+        /** World bounds the camera never shows past. */
+        bounds?: Rect | null;
+        /** See `Camera.boundsIgnoreRotation`. Default false. */
+        boundsIgnoreRotation?: boolean;
+        /** Make it the current camera. */
+        current?: boolean;
+        /** See `Camera.realTime`. Default false. */
+        realTime?: boolean;
+        /** See `Camera.debug`. Default false. */
+        debug?: boolean;
+    }
+
+    interface FollowOptions {
+        /** Smoothing rate per axis, per second; 0 (default) follows rigidly. Try 5-10. */
+        lerp?: Pair;
+        /**
+         * Screen pixels around the anchor where the target moves without
+         * moving the camera: a box of the screen, whatever the zoom and
+         * rotation. The target may rest anywhere in it, off the center.
+         */
+        deadzone?: Pair;
+        /**
+         * Screen pixels to look ahead of the target's motion, kept once it
+         * stops (so the target rests that far off the center, less the dead
+         * zone). Same distance on screen at any zoom.
+         */
+        lookahead?: Pair;
+        /** How fast the lookahead turns around, per second. Default 4. */
+        lookaheadLerp?: number;
+        /** World offset added to the target (e.g. to look a bit above the player). */
+        offset?: Pair;
+        /**
+         * With several targets: zoom to keep them all in view. `margin` is in
+         * screen pixels (default 32), `min`/`max` limit the zoom (0.5 and 2),
+         * `lerp` smooths it (4 per second).
+         */
+        autoZoom?: boolean | { min?: number; max?: number; margin?: number; lerp?: number };
+        /** Jump to the target now instead of easing from the current position. Default true. */
+        snap?: boolean;
+        /**
+         * For `Loop.run()` with `fixedStep`, when the game draws positions
+         * blended by `alpha`: the camera follows the target blended the
+         * same way (sampled before each step and after the last), so the
+         * target does not jitter against the scenery. Default false.
+         */
+        interpolate?: boolean;
+        /**
+         * Zooms out as the target speeds up: `max` (default 1) at rest,
+         * `min` (0.8) at `speed` world units per second (300) or faster.
+         * In a zone with a zoom, that zoom takes the place of `max`.
+         * `lerp` smooths the zoom (4 per second). `autoZoom` wins over it.
+         */
+        zoomBySpeed?: boolean | { min?: number; max?: number; speed?: number; lerp?: number };
+    }
+
+    interface Zone extends Rect {
+        /** Zoom while the target is in this zone. */
+        zoom?: number;
+        /** Follow smoothing while the target is in this zone. */
+        lerp?: Pair;
+        /** Target offset (world units) while the target is in this zone. */
+        offset?: Pair;
+    }
+
+    interface ZoneOptions {
+        /** Seconds to glide from one zone to the next (0: cut). */
+        transition?: number;
+        /** Called when the target enters a zone: its index and the previous one (-1 for none). */
+        onChange?: (this: Camera, zone: number, previous: number) => void;
+    }
+
+    interface TraumaOptions {
+        /** Pixels at full trauma. Default 16. */
+        intensity?: number;
+        /** Radians at full trauma. Default 0. */
+        rotation?: number;
+        /** Trauma lost per second. Default 1. */
+        decay?: number;
+        /** Oscillations per second. Default 25. */
+        frequency?: number;
+    }
+
+    interface RepeatOptions extends DrawOptions {
+        /** Where one copy sits in the layer. Default (0, 0). */
+        x?: number;
+        y?: number;
+        /** Repeat along each axis. Default true. */
+        repeatX?: boolean;
+        repeatY?: boolean;
+    }
+
+    /** What `state()` returns and `setState()` takes: JSON-friendly. */
+    interface State {
+        x: number;
+        y: number;
+        zoomX: number;
+        zoomY: number;
+        rotation: number;
+        anchor: Point;
+        /** null: the whole screen. */
+        viewport: Rect | null;
+        bounds: Rect | null;
+        boundsIgnoreRotation: boolean;
+        pixelSnap: boolean;
+        realTime: boolean;
+    }
+
+    interface TransitionOptions {
+        /** Maps 0..1 to the blend. Default smoothstep; e.g. `Ease.inOutCubic`. */
+        ease?: (t: number) => number;
+        /** Runs on real time, also while the game is paused. */
+        realTime?: boolean;
+    }
+
+    interface StackOptions extends TransitionOptions {
+        /** Seconds of the transition; 0 (default) cuts. */
+        duration?: number;
+    }
+
+    interface ShakeOptions {
+        /** Oscillations per second. Default 25. */
+        frequency?: number;
+        /** Largest rotation, in radians. Default 0. */
+        rotation?: number;
+    }
+
+    interface DrawOptions {
+        /**
+         * 1 (default) draws the world; 0 draws in the viewport at zoom 1 like
+         * the screen; between them, a background layer that scrolls (and
+         * zooms) slower than the world. Per axis with `[x, y]`.
+         */
+        parallax?: Pair;
+    }
+
+    /** The world-to-screen transform: screen = (xx*x + xy*y + tx, yx*x + yy*y + ty). */
+    interface Matrix {
+        xx: number;
+        xy: number;
+        yx: number;
+        yy: number;
+        tx: number;
+        ty: number;
+    }
+
+    class Camera {
+        constructor(options?: CameraOptions);
+
+        /** World point shown at the anchor. Setting it stops a pan. */
+        x: number;
+        y: number;
+        /** Uniform zoom (reads `zoomX`). Setting it stops a `zoomTo()`. */
+        zoom: number;
+        zoomX: number;
+        zoomY: number;
+        /** Radians, clockwise on screen. */
+        rotation: number;
+        pixelSnap: boolean;
+        /** Reads as `{ x, y }`; set with any `Pair`. */
+        anchor: Point;
+        /** The viewport in screen pixels (the whole screen when none was set); null resets it. */
+        viewport: Rect | null;
+        /** World bounds, or null. */
+        bounds: Rect | null;
+        /**
+         * Bounds and zones clamp the view as if it were not turned: the
+         * camera stays on its target near the edges, and the corners of a
+         * turned view may show past the bounds. Default false: nothing past
+         * the bounds ever shows, so a turned camera is pushed inward.
+         */
+        boundsIgnoreRotation: boolean;
+        /** Index of the zone in force, or -1. */
+        readonly zone: number;
+        readonly following: boolean;
+        readonly shaking: boolean;
+        /** Letterbox bar height, as a fraction of the viewport. */
+        readonly letterboxAmount: number;
+        /** Opacity of the fade overlay, 0..128. */
+        readonly fadeAlpha: number;
+        /** Whether this is `Camera2D.getCurrent()`. */
+        readonly isCurrent: boolean;
+        /**
+         * Runs on the real (unscaled) time of the Loop: follows, shakes and
+         * fades keep going while `Loop.setTimeScale(0)` pauses the game
+         * (pause menus that fade the screen).
+         */
+        realTime: boolean;
+        /**
+         * Draws what drives the camera over its viewport: dead zone (cyan),
+         * anchor (white), target (green), goal (blue), lookahead (orange),
+         * bounds (red) and zones (magenta, the active one brighter).
+         */
+        debug: boolean;
+        /** Current trauma, 0..1 (`addTrauma()`). */
+        readonly trauma: number;
+
+        setPosition(x: number, y: number): this;
+        /** Moves by (dx, dy), within the bounds. */
+        move(dx: number, dy: number): this;
+        setZoom(zoomX: number, zoomY?: number): this;
+        setViewport(x: number, y: number, w: number, h: number): this;
+        setViewport(rect: Rect | null): this;
+        /**
+         * The camera never shows past these bounds; a smaller area is
+         * centered. Turned, the view covers more of the world (its bounding
+         * box), so near an edge a rotation pushes the camera inward and a
+         * followed target rests off the center (see `boundsIgnoreRotation`).
+         */
+        setBounds(x: number, y: number, w: number, h: number): this;
+        setBounds(rect: Rect | null): this;
+
+        /**
+         * Follows a target (read every frame, so moving the object is
+         * enough), or several: their center, with `autoZoom` to fit them all.
+         * A single target needs numeric x and y now (TypeError otherwise); later
+         * frames keep the last position if one goes missing. In an array,
+         * targets whose x or y is not a number are skipped that frame.
+         */
+        follow(target: Target | Target[], options?: FollowOptions): this;
+        unfollow(): this;
+        /** Jumps to the follow target now: no smoothing. */
+        snap(): this;
+
+        /**
+         * Rooms: while the target is inside a zone, that zone is the camera's
+         * bounds (and zoom). The last zone stays in force between zones.
+         * `null` removes them. At most 32.
+         */
+        setZones(zones: Zone[] | null, options?: ZoneOptions): this;
+
+        /** Shakes by up to `intensity` pixels, fading out over `duration` seconds. */
+        shake(intensity: number, duration: number, options?: ShakeOptions): this;
+        /**
+         * Adds trauma (clamped to 0..1): impacts add up, the view shakes by
+         * its square and it decays over time. The options are kept for
+         * later calls.
+         */
+        addTrauma(amount: number, options?: TraumaOptions): this;
+        /** Pushes the view by (dx, dy) screen pixels, springing back (default 0.15 s). */
+        kick(dx: number, dy: number, duration?: number): this;
+        /** Stops the shake, the trauma and the kick. */
+        stopShake(): this;
+
+        /*
+         * Timed changes. Each promise resolves with true when the change ends
+         * and false if another one of the same kind replaced it.
+         */
+        /** Eases the zoom (geometrically: 1 to 4 looks as steady as 4 to 1). */
+        zoomTo(zoom: number, duration: number): Promise<boolean>;
+        /** Eases to a point; suspends the follow until it arrives. */
+        panTo(x: number, y: number, duration: number): Promise<boolean>;
+        /**
+         * Fades the viewport overlay to `color` (its alpha, 0..128, is the
+         * final opacity): `Color.new(0, 0, 0, 128)` fades out to black,
+         * `Color.new(0, 0, 0, 0)` fades back in.
+         */
+        fade(color: number, duration: number): Promise<boolean>;
+        /** Shows `color` over the viewport and fades it out (default 0.2 s). */
+        flash(color: number, duration?: number): Promise<boolean>;
+        /** Black bars, each `amount` (0..0.5) of the viewport's height. */
+        letterbox(amount: number, duration?: number): Promise<boolean>;
+
+        worldToScreen(x: number, y: number): Point;
+        screenToWorld(x: number, y: number): Point;
+        /** World box the viewport shows (its bounding box when rotated), for culling. */
+        visibleRect(): Rect;
+        isVisible(x: number, y: number, w?: number, h?: number): boolean;
+        /**
+         * Culls many boxes in one call: `rects` holds (x, y, w, h) per box;
+         * `out` gets 1 for each visible box and 0 otherwise. Returns how many
+         * are visible.
+         */
+        cull(rects: Float32Array, out?: Uint8Array): number;
+
+        /** Draws in this camera's world space and viewport until `end()`. Pairs nest (8 deep). */
+        begin(options?: DrawOptions): void;
+        /** Draws the camera's fade, flash and letterbox, and restores the previous view. */
+        end(): void;
+        /**
+         * `begin()`, `fn()`, `end()`, even if `fn` throws or leaves pairs of
+         * its own open (they are closed too). Returns what `fn` returns.
+         */
+        draw<T>(fn: () => T, options?: DrawOptions): T;
+        /** Draws with (0, 0) at the viewport's corner, clipped to it: per-player HUDs. */
+        viewportSpace<T>(fn: () => T): T;
+
+        makeCurrent(): this;
+        /** Advances this camera alone (without `Loop.run()`, use `Camera2D.update()`). */
+        update(dt: number): this;
+        getMatrix(options?: DrawOptions): Matrix;
+        /**
+         * Draws `image` repeated to cover what the camera shows of a layer
+         * (`parallax`, as `draw()`): skies, far hills. Returns how many
+         * copies were drawn (at most 1024).
+         */
+        drawRepeat(image: Image, options?: RepeatOptions): number;
+        /** The pose and settings (not targets, zones or running effects), for saves. */
+        state(): State;
+        /** Applies what `state()` returned; missing keys are left as they are. */
+        setState(state: Partial<State>): this;
+    }
+
+    /** The default camera: current from the start, showing the screen as before. */
+    const main: Camera;
+
+    /** The camera applied around `Loop.run()`'s draw, or null for none. */
+    function getCurrent(): Camera | null;
+    /** Changes it at once (null: draw without a camera, e.g. in split screen). */
+    function setCurrent(camera: Camera | null): void;
+    /**
+     * Makes `camera` current, gliding from the current one's position, zoom,
+     * rotation and viewport over `duration` seconds. `ease` maps 0..1 to the
+     * blend (default smoothstep; e.g. `Ease.inOutCubic`).
+     */
+    function transition(camera: Camera, duration: number,
+        options?: TransitionOptions): Promise<boolean>;
+    /**
+     * Makes `camera` current and remembers the one it replaces (or none),
+     * so `pop()` goes back to it: cutscenes, map screens. 8 deep.
+     */
+    function push(camera: Camera, options?: StackOptions): Promise<boolean>;
+    /** Goes back to the camera the last `push()` replaced. */
+    function pop(options?: StackOptions): Promise<boolean>;
+    /**
+     * `culled`: draws skipped by culling in the last frame drawn under
+     * `Loop.run()` (images, rectangles, circles, drawList sprites, texts,
+     * TileMap grid cells); `pushed`: depth of `push()`.
+     */
+    function getStats(): { culled: number; pushed: number };
+
+    /** Draws with no camera and the whole screen: HUD, menus. */
+    function screenSpace<T>(fn: () => T): T;
+    /** Updates every camera: for games that do not use `Loop.run()`. */
+    function update(dt: number): void;
+    /** Drops any open camera: the identity view and the whole screen. */
+    function reset(): void;
+}
+
+
+/* === Module: CameraRig3D (camerarig3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=camerarig3d,... */
+/** Native Camera3D controllers. The script configures a rig and feeds input
+ * (rotate/zoom); following, orbiting and smoothing run in C every frame in one
+ * Loop system (attachLoop()) after Scene3D updates world transforms, or
+ * manually with update(dt). A rig keeps its camera alive, also after the
+ * camera handle is disposed, and skips frames whose target node is stale.
+ * Rigs stay active until dispose(), even when no variable holds them. */
+declare namespace CameraRig3D {
+    /** Default attachLoop() priority: after Scene3D.attachLoop() (0). */
+    const LOOP_PRIORITY: number;
+    interface Rig {
+        /** null: Orbit uses its fixed centre; Follow stops moving. */
+        setTarget(target: Scene3D.Node | null): this;
+        /** Exponential smoothing in 1/s for the eye and the look point; 0 is
+         * rigid (default). Frame-rate independent. */
+        setSharpness(eye: number, look: number): this;
+        /** The next update jumps to the goal without smoothing. */
+        snap(): this;
+        enabled: boolean;
+        /** True when it moved the camera. */
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    class Follow implements Rig {
+        constructor(camera: Camera3D.Camera, target: Scene3D.Node);
+        /** Eye offset; local (default) turns and scales with the target,
+         * otherwise it is added to the target's world position. Default 0, 2, 6. */
+        setOffset(x: number, y: number, z: number, local?: boolean): this;
+        /** Look point in the target's local space. Default 0, 0, 0. */
+        setLookOffset(x: number, y: number, z: number): this;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    class Orbit implements Rig {
+        /** Without a target, the centre is the fixed point of setCenter(). */
+        constructor(camera: Camera3D.Camera, target?: Scene3D.Node | null);
+        /** Offset from the target's world position, or the fixed centre. */
+        setCenter(x: number, y: number, z: number): this;
+        /** Radians: yaw about +Y (0 sits on +Z looking down -Z), pitch up. */
+        setAngles(yaw: number, pitch: number): this;
+        /** Input deltas, clamped to the limits. */
+        rotate(yaw: number, pitch: number): this;
+        zoom(delta: number): this;
+        /** Pitch within -1.56..1.56 rad; 0 < distanceMin <= distanceMax.
+         * Defaults -1.5, 1.5, 0.1, 1e6. */
+        setLimits(pitchMin: number, pitchMax: number, distanceMin: number, distanceMax: number): this;
+        readonly yaw: number;
+        readonly pitch: number;
+        /** Default 6. */
+        distance: number;
+        /** Yaw speed in rad/s. */
+        autoRotate: number;
+        setTarget(target: Scene3D.Node | null): this;
+        setSharpness(eye: number, look: number): this;
+        snap(): this;
+        enabled: boolean;
+        update(dt: number): boolean;
+        dispose(): void;
+    }
+    /** Updates every enabled rig; returns how many moved their camera. */
+    function update(dt: number): number;
+    /** One native POST_UPDATE system for every rig; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Collision (collision) === */
+/**
+ * Light 2D collision and simple physics, in C. For platformers, top-down
+ * games and shooters that want predictable, tile-friendly movement; Box2D
+ * remains the choice for rigid bodies, joints and polygons.
+ *
+ * A `World` holds bodies (axis-aligned rectangles and circles) in a spatial
+ * hash, and optionally a grid of tiles: solid tiles, one-way platforms and
+ * floor slopes. Bodies move with a sweep along x, then along y: they slide
+ * along walls, land on floors, walk up and down slopes and never tunnel
+ * through thin walls, whatever their speed.
+ *
+ * Body types:
+ * - `"static"` (default): moved only by you; blocks others.
+ * - `"kinematic"`: moves through everything, by its velocity or when you
+ *   set `x`/`y` (a tween, a path): moving platforms, elevators, doors. It
+ *   carries the dynamic bodies standing on it and pushes those in its way;
+ *   one caught against something solid is `crushed`.
+ * - `"dynamic"`: gravity, damping, speed limits and velocity, blocked by
+ *   what it collides with; bounces with `bounce`.
+ *
+ * A world steps itself with the Loop's scaled time before the game's
+ * `update` (so `Loop.setTimeScale(0)` pauses it); pass `autoStep: false`
+ * and call `world.step(dt)` to step it yourself. Any body can also be moved
+ * with collisions by `world.move(body, dx, dy)`, like a character
+ * controller.
+ *
+ * Positions are in world units with y pointing down: a rectangle is placed
+ * by its top-left corner, a circle by its center. Velocities are in units
+ * per second, gravity in units per second squared.
+ *
+ * Layers and masks are 32-bit flags: two bodies collide when each one's
+ * `mask` has a bit of the other's `layer`. Read back, they are signed
+ * integers, like the results of `|` and `<<`.
+ *
+ * Example:
+ * ```js
+ * const SOLID = 1, PLAYER = 2, ENEMY = 4, COIN = 8;
+ * const world = new Collision.World({ gravity: { x: 0, y: 900 } });
+ * world.setGrid({
+ *     columns: 40, rows: 15, tileWidth: 16, tileHeight: 16,
+ *     tiles: levelIds,                        // the ids given to TileMap.setTiles()
+ *     solid: [1, 2, 3], oneWay: [4], slopes: { 5: "45r", 6: "45l" },
+ * });
+ * const player = world.add({ type: "dynamic", x: 32, y: 32, w: 12, h: 24,
+ *     layer: PLAYER, mask: SOLID | ENEMY | COIN });
+ * const lift = world.add({ type: "kinematic", x: 200, y: 160, w: 48, h: 8 });
+ * Tween.to(lift, { x: 320 }, 2, { yoyo: true, repeat: Infinity });   // carries the player
+ * world.add({ x: 300, y: 100, r: 6, sensor: true, layer: COIN });
+ * world.onEnter = (sensor, body) => { if (body === player) sensor.remove(); };
+ *
+ * Loop.run({
+ *     update() {
+ *         player.vx = pad.pressed(Gamepad.RIGHT) ? 120 : pad.pressed(Gamepad.LEFT) ? -120 : 0;
+ *         if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = -330;
+ *         player.dropThrough = pad.pressed(Gamepad.DOWN);   // fall through one-way platforms
+ *     },
+ *     draw() {
+ *         hero.draw(player.centerX, player.bottom);        // a sprite with origin [0.5, 1]
+ *         world.drawDebug();
+ *     },
+ * });
+ * ```
+ */
+declare namespace Collision {
+    type BodyType = "static" | "kinematic" | "dynamic";
+
+    /** -1: blocked moving left, 1: moving right, 0: not blocked. */
+    type WallSide = -1 | 0 | 1;
+
+    /** A shape outside a world, or a body. */
+    type Shape = Body | { x: number; y: number; w: number; h: number } |
+        { x: number; y: number; r: number };
+
+    /**
+     * A floor slope: heights of its surface at the tile's left and right
+     * sides, as fractions of the tile height (0 = the tile's bottom, 1 = its
+     * top). Presets: `"45r"` rises to the right ([0, 1]), `"45l"` falls
+     * ([1, 0]); gentle slopes over two tiles: `"22r1"` then `"22r2"` rise
+     * ([0, 0.5], [0.5, 1]), `"22l1"` then `"22l2"` fall.
+     */
+    type Slope = [number, number] | "45r" | "45l" | "22r1" | "22r2" | "22l1" | "22l2";
+
+    interface WorldOptions {
+        /** Side of the spatial hash cells: about the size of a typical body. Default 64. */
+        cellSize?: number;
+        /** Default { x: 0, y: 0 }. */
+        gravity?: { x: number; y: number } | [number, number];
+        /**
+         * Stepped by the Loop's scaled time before the game's update (default
+         * true on the main script; workers step with `step()`).
+         */
+        autoStep?: boolean;
+    }
+
+    interface BodyOptions {
+        /** Rectangle: top-left corner. Circle: center. Default 0. */
+        x?: number;
+        y?: number;
+        /** A rectangle: its size. */
+        w?: number;
+        h?: number;
+        /** A circle: its radius (instead of w and h). */
+        r?: number;
+        /** Default "static". */
+        type?: BodyType;
+        vx?: number;
+        vy?: number;
+        /** Default 1. */
+        layer?: number;
+        /** Default -1: every layer. */
+        mask?: number;
+        /** Found by queries, pairs and onEnter/onExit, but never blocks nor is blocked. */
+        sensor?: boolean;
+        /** Blocks only bodies coming from above (jump-through platforms). */
+        oneWay?: boolean;
+        /** Dynamic bodies: gravity multiplier (default 1). */
+        gravityScale?: number;
+        /** Dynamic bodies: velocity decay rate in 1/s (default 0). */
+        damping?: number;
+        /** Dynamic bodies: velocity kept after hitting something, 0 to 1 (default 0). */
+        bounce?: number;
+        /** Dynamic bodies: speed limits per axis (0, the default, is none). */
+        maxSpeedX?: number;
+        maxSpeedY?: number;
+    }
+
+    interface GridOptions {
+        /** At most 4096 each, and 1048576 tiles in all (1024 x 1024, 4096 x 256...). */
+        columns: number;
+        rows: number;
+        tileWidth: number;
+        tileHeight: number;
+        /** Top-left corner of the grid. Default 0. */
+        x?: number;
+        y?: number;
+        /**
+         * Row-major tile ids, `columns * rows` long (copied); default all 0.
+         * The same ids as `TileMap.Instance.setTiles()`: a grid instance's
+         * `grid` gives columns, rows and the tile size.
+         */
+        tiles?: Uint16Array | number[];
+        /** Ids of solid tiles. */
+        solid?: number[];
+        /** Ids of one-way platforms (solid from above only). */
+        oneWay?: number[];
+        /** Floor slopes by id. Below the surface the tile is solid; its high side is a wall. */
+        slopes?: { [id: number]: Slope };
+        /** Layer of the tiles, for masks. Default 1. */
+        layer?: number;
+    }
+
+    /**
+     * A blocking contact: another body (`tile` is -1) or a tile (`body` is
+     * null), and the normal of the surface hit, pointing away from it:
+     * { normalX: 0, normalY: -1 } for a floor.
+     */
+    interface Contact {
+        body: Body | null;
+        tile: number;
+        column: number;
+        row: number;
+        normalX: number;
+        normalY: number;
+    }
+
+    interface MoveResult {
+        /** Distance actually moved. */
+        dx: number;
+        dy: number;
+        onGround: boolean;
+        hitCeiling: boolean;
+        hitWall: WallSide;
+        /** What stopped the x sweep and the y sweep. */
+        contacts: Contact[];
+    }
+
+    interface RayHit {
+        x: number;
+        y: number;
+        normalX: number;
+        normalY: number;
+        /** Of the segment, 0 to 1. */
+        fraction: number;
+        distance: number;
+        /** The body hit, or null for a tile. */
+        body: Body | null;
+        /** The tile id hit, or -1 for a body. */
+        tile: number;
+        column: number;
+        row: number;
+    }
+
+    interface RaycastOptions {
+        /** Layers hit (bodies, and the grid when its layer is in it). Default -1. */
+        mask?: number;
+        /** A body to skip, such as the one casting the ray. */
+        ignore?: Body | null;
+        /** Also hit sensors. Default false. */
+        sensors?: boolean;
+    }
+
+    class World {
+        constructor(options?: WorldOptions);
+        gravityX: number;
+        gravityY: number;
+        readonly cellSize: number;
+        readonly bodyCount: number;
+        autoStep: boolean;
+        /**
+         * Called after each step when a dynamic body begins a contact: it
+         * lands or steps onto another body, or starts pushing a wall or a
+         * ceiling. Resting contacts (standing, walking along a floor,
+         * pushing the same wall) are not repeated every step. `this` is the
+         * world, which may be changed from it.
+         */
+        onContact: ((this: World, body: Body, contact: Contact) => void) | null;
+        /**
+         * Called after each step when a sensor starts overlapping a body it
+         * collides with (layers and masks): pickups, damage zones, triggers.
+         * Two static bodies are never a pair; two sensors are one pair. The
+         * world may be changed from it (removing the coin, for instance).
+         * Overlaps are only tracked while `onEnter` or `onExit` is set.
+         */
+        onEnter: ((this: World, sensor: Body, other: Body) => void) | null;
+        /** As `onEnter`, when the overlap ends. A removed body gets no exit. */
+        onExit: ((this: World, sensor: Body, other: Body) => void) | null;
+        /** The grid's geometry, or undefined without one. */
+        readonly grid: { columns: number; rows: number; tileWidth: number; tileHeight: number;
+            x: number; y: number; layer: number } | undefined;
+
+        /** Adds a body: `w` and `h` make a rectangle, `r` a circle. */
+        add(options: BodyOptions): Body;
+        /** Removes a body of this world; false when it is not in it. */
+        remove(body: Body): boolean;
+        /** Removes every body. */
+        clear(): void;
+        bodies(): Body[];
+
+        /**
+         * Moves a body by (dx, dy) with collisions: along x, then along y,
+         * each time stopping at the first thing in the way. Walking into a
+         * slope follows its floor; a body that stood on the ground steps up
+         * small ledges and sticks to floors going down, as far as the
+         * steepest slope of the grid needs. Fast bodies move in several
+         * sweeps of at most half a tile, so they never take a wall for a
+         * step. Sensors move freely; kinematic bodies move through
+         * everything, carrying and pushing (as setting `x`/`y` does).
+         * Updates `onGround`, `onCeiling`, `onWall` and `ground`.
+         *
+         * `out`, when given, receives the result instead of a new object
+         * (its `contacts` array is emptied and reused): moving many bodies
+         * every frame then allocates nothing.
+         */
+        move<T extends object = MoveResult>(body: Body, dx: number, dy: number, out?: T): T & MoveResult;
+        /**
+         * Advances the world: kinematic bodies move by their velocity,
+         * carrying their riders and pushing what is in their way, then
+         * dynamic bodies get gravity, damping and speed limits and move; a
+         * blocked axis loses its velocity or bounces. Then `onContact`,
+         * `onEnter` and `onExit` run. With `autoStep` the Loop calls it.
+         */
+        step(dt: number): void;
+
+        /** Uses a grid of tiles, replacing the previous one. */
+        setGrid(options: GridOptions): void;
+        clearGrid(): void;
+        /** Tile id at a cell, or -1 outside the grid. */
+        getTile(column: number, row: number): number;
+        /** Changes a cell (a door opens, a block breaks); false outside the grid. */
+        setTile(column: number, row: number, id: number): boolean;
+        /** The cell holding a point, or null outside the grid. */
+        cellAt(x: number, y: number): { column: number; row: number; tile: number } | null;
+        /**
+         * Whether a point is inside something solid: a solid tile, a slope
+         * below its surface or a body that is not a sensor, on a layer of
+         * `mask` (default -1). One-way platforms are not solid. For ledge
+         * checks and AI ("is there floor ahead?").
+         */
+        solidAt(x: number, y: number, mask?: number): boolean;
+
+        /** Bodies overlapping a rectangle whose layer is in `mask` (default -1). Sensors included. */
+        query(x: number, y: number, w: number, h: number, mask?: number): Body[];
+        queryCircle(x: number, y: number, r: number, mask?: number): Body[];
+        queryPoint(x: number, y: number, mask?: number): Body[];
+        /** Bodies overlapping `body` that it collides with (layers and masks), sensors too. */
+        overlapping(body: Body): Body[];
+        /**
+         * Overlapping pairs [a, b] with `a` on a layer of `layerA` and `b` on
+         * a layer of `layerB`, found in C: bullets against enemies without a
+         * loop over every pair in JavaScript. Masks are not used; each pair
+         * is reported once. More than 65536 pairs throw a RangeError.
+         */
+        pairs(layerA: number, layerB: number): Array<[Body, Body]>;
+        /**
+         * The same pairs, passed to `callback` instead of built into arrays;
+         * returns how many there were. Pairs of a body removed by an earlier
+         * call are skipped.
+         */
+        pairs(layerA: number, layerB: number, callback: (a: Body, b: Body) => void): number;
+        /**
+         * First body or tile hit by the segment from (x1, y1) to (x2, y2).
+         * Shapes and solid tiles holding the start are ignored; one-way tiles
+         * and bodies are only hit from above.
+         */
+        raycast(x1: number, y1: number, x2: number, y2: number,
+            options?: RaycastOptions): RayHit | null;
+
+        /**
+         * Outlines the bodies and tiles in view, through the current camera:
+         * static bodies white, kinematic blue, dynamic green, sensors yellow,
+         * tiles red, one-way platforms orange. Call it in `draw`.
+         */
+        drawDebug(options?: { bodies?: boolean; tiles?: boolean }): void;
+    }
+
+    /**
+     * A body of a world, made by `world.add()`. After `remove()` it is
+     * detached: `valid` is false and other properties throw.
+     */
+    class Body {
+        private constructor();
+        /** The world, or null once removed. */
+        readonly world: World | null;
+        readonly valid: boolean;
+        readonly shape: "rect" | "circle";
+        type: BodyType;
+        /**
+         * Setting them teleports the body, without collisions, and clears its
+         * contact state. A kinematic body moves instead, carrying its riders
+         * and pushing what is in its way: animate platforms with Tween.
+         */
+        x: number;
+        y: number;
+        /** Size: a circle's is 2 r and read-only. */
+        w: number;
+        h: number;
+        /** Radius of a circle; undefined for a rectangle. */
+        r: number | undefined;
+        /** Center of the body. */
+        readonly centerX: number;
+        readonly centerY: number;
+        /** Right and bottom edges of its bounds: `bottom` is where the feet are. */
+        readonly right: number;
+        readonly bottom: number;
+        vx: number;
+        vy: number;
+        layer: number;
+        mask: number;
+        sensor: boolean;
+        oneWay: boolean;
+        /** Falls through one-way platforms while set. */
+        dropThrough: boolean;
+        gravityScale: number;
+        damping: number;
+        bounce: number;
+        maxSpeedX: number;
+        maxSpeedY: number;
+        /** Contact state after the last move or step of this body. */
+        readonly onGround: boolean;
+        readonly onCeiling: boolean;
+        readonly onWall: WallSide;
+        /** The body stood on, or null (in the air or on a tile). */
+        readonly ground: Body | null;
+        /**
+         * A kinematic body pushed it into something solid during the last
+         * step (or since, by setting its `x`/`y`): it is caught between them.
+         * The game decides what that means; the kinematic body keeps moving.
+         */
+        readonly crushed: boolean;
+
+        /** `world.move(this, dx, dy, out)`. */
+        move<T extends object = MoveResult>(dx: number, dy: number, out?: T): T & MoveResult;
+        /** Teleports the body, without collisions, and clears its contact state. */
+        setPosition(x: number, y: number): void;
+        /** Axis-aligned bounds (a circle's box). */
+        getBounds(): { x: number; y: number; w: number; h: number };
+        /** Removes the body from its world; false if it was already removed. */
+        remove(): boolean;
+    }
+
+    /** Whether two shapes overlap (touching is not overlapping). */
+    function overlaps(a: Shape, b: Shape): boolean;
+    /** The shortest move that takes `a` out of `b`, or null when they do not overlap. */
+    function resolve(a: Shape, b: Shape): { x: number; y: number } | null;
+    /** Where the segment enters the shape, or null when it misses or starts inside. */
+    function segment(x1: number, y1: number, x2: number, y2: number, shape: Shape):
+        { fraction: number; x: number; y: number; normalX: number; normalY: number } | null;
+}
+
+
+/* === Module: Collision3D (collision3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=collision3d,... */
+/** Light 3D collision in C, for levels and characters; not a rigid body
+ * solver. A `World` holds static triangles (level meshes, whole Scene3D or
+ * glTF subtrees, boxes) in a bounding volume hierarchy, answers raycasts,
+ * sphere casts and overlaps, and is what `Character`s walk on.
+ *
+ * Characters are upright ellipsoids placed by their feet, moved with
+ * collide-and-slide (swept, so they never tunnel through thin walls). Up is
+ * +Y. Faces up to `maxSlope` are ground (standing on them does not slide),
+ * steeper faces are walls, edges up to `stepHeight` above the feet are
+ * climbed, and walking down slopes and steps keeps them on the ground. They
+ * move by themselves in one Loop system (`attachLoop()`), after the game's
+ * update and before Scene3D, and stay active until `dispose()`.
+ *
+ * Triangles face their counter-clockwise side: characters and sphere casts
+ * collide with front faces only, rays hit both sides. Layers and masks are
+ * 32-bit flags (-1: all).
+ *
+ * ```js
+ * const level = GLTF3D.load("models/level.glb");
+ * scene.root.add(level.root);
+ * const world = new Collision3D.World();
+ * world.addNode(level.root);
+ * const player = new Collision3D.Character(world, { radius: .4, height: 1.8, position: [0, 1, 0] });
+ * player.bind(heroNode);                      // the node follows the feet
+ * Collision3D.attachLoop(); scene.attachLoop();
+ * Loop.run({ update() {
+ *     player.vx = stick.x * 4; player.vz = stick.y * 4;
+ *     if (pad.justPressed(Gamepad.CROSS) && player.onGround) player.vy = 5;
+ * } });
+ * ```
+ */
+declare namespace Collision3D {
+    /** Default attachLoop() priority: after Animation3D (-100), before Scene3D (0). */
+    const LOOP_PRIORITY: number;
+    const MAX_TRIANGLES: number;
+    type Vec3 = [number, number, number] | Float32Array;
+    interface ShapeOptions {
+        /** Default 1. */
+        layer?: number;
+    }
+    interface QueryOptions {
+        /** Layers hit. Default -1 (all). */
+        mask?: number;
+    }
+    /** A hit along a ray or sweep; the normal points toward the query. */
+    interface Hit {
+        distance: number;
+        x: number; y: number; z: number;
+        nx: number; ny: number; nz: number;
+        /** The shape id returned by add*(). */
+        shape: number;
+        /** Triangle index within the shape. */
+        triangle: number;
+    }
+    class World {
+        constructor();
+        /** A mesh's triangles under transform (base pose for skinned or
+         * morphed meshes). Returns the shape id. */
+        addMesh(mesh: Model3D.Mesh, transform?: Matrix4 | null, options?: ShapeOptions): number;
+        /** Every visible mesh of the subtree, with the node's ancestors'
+         * transforms composed (no scene update needed). One shape. */
+        addNode(node: Scene3D.Node, options?: ShapeOptions): number;
+        /** An axis-aligned box, 12 triangles facing out. */
+        addBox(min: Vec3, max: Vec3, options?: ShapeOptions): number;
+        /** World-space triangles, 9 floats each (copied). */
+        addTriangles(positions: Float32Array, options?: ShapeOptions): number;
+        /** False for an unknown id. The tree is rebuilt by the next query. */
+        remove(shape: number): boolean;
+        setLayer(shape: number, layer: number): boolean;
+        /** Nearest hit within maxDistance (world units), or null. out is
+         * filled and returned instead of a new object. */
+        raycast(origin: Vec3, direction: Vec3, maxDistance: number, options?: QueryOptions, out?: Hit): Hit | null;
+        /** Many rays in one call: origins 3n floats, directions 3 (shared)
+         * or 3n, out 4n floats filled with [distance, nx, ny, nz] per ray
+         * (distance -1 on a miss). Returns the number of hits. */
+        raycastMany(origins: Float32Array, directions: Float32Array, maxDistance: number,
+            out: Float32Array, options?: QueryOptions): number;
+        /** A sphere swept along direction: the first front face it touches. */
+        sphereCast(center: Vec3, radius: number, direction: Vec3, maxDistance: number,
+            options?: QueryOptions, out?: Hit): Hit | null;
+        /** Ids of the shapes within radius (both sides; at most 64). */
+        overlapSphere(center: Vec3, radius: number, options?: QueryOptions): number[];
+        readonly triangleCount: number;
+        /** Characters keep their world alive after this. */
+        dispose(): void;
+    }
+    interface CharacterOptions {
+        /** Default 0.4. */
+        radius?: number;
+        /** Default 1.8. */
+        height?: number;
+        /** Ledges up to this are climbed. Default 0.3. */
+        stepHeight?: number;
+        /** Degrees; steeper faces are walls. Default 45. */
+        maxSlope?: number;
+        /** Default [0, -9.81, 0]. */
+        gravity?: Vec3;
+        /** Default -1. */
+        mask?: number;
+        /** Feet. Default [0, 0, 0]. */
+        position?: Vec3;
+    }
+    class Character {
+        constructor(world: World, options?: CharacterOptions);
+        /** Feet position. */
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+        /** Velocity in units/s; vy is reset on landing and on ceilings. */
+        vx: number;
+        vy: number;
+        vz: number;
+        readonly onGround: boolean;
+        readonly hitWall: boolean;
+        readonly hitCeiling: boolean;
+        /** [x, y, z] of the ground under the feet ([0, 1, 0] in the air). */
+        readonly groundNormal: number[];
+        /** Teleports, without collisions. */
+        setPosition(x: number, y: number, z: number): this;
+        setVelocity(x: number, y: number, z: number): this;
+        /** Moves by a displacement with collisions, without gravity. */
+        move(dx: number, dy: number, dz: number): this;
+        /** Gravity, then velocity * dt with collisions. */
+        step(dt: number): this;
+        /** A node whose position follows the feet; null unbinds. */
+        bind(node: Scene3D.Node | null): this;
+        /** Disabled characters are skipped by the Loop system and step(). */
+        enabled: boolean;
+        dispose(): void;
+    }
+    /** Steps every enabled character. */
+    function step(dt: number): void;
+    /** One native POST_UPDATE system stepping every character; idempotent. */
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Debug3D (debug3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=debug3d,... */
+/**
+ * World-space debug lines for 3D games: AABBs, rays, hitboxes, AI paths, a
+ * second camera's frustum, mesh normals, chunk borders.
+ *
+ * Shapes become line segments queued in C; each frame they are projected
+ * with a Camera3D and clipped (near plane and screen edges) on the EE, then
+ * drawn as GS lines over the frame, without depth test (always on top).
+ * Far-plane clipping is disabled for distant diagnostics; transformed
+ * non-finite endpoints are discarded. A
+ * segment lasts one frame (`seconds` omitted or 0) or `seconds` of real
+ * time. At most MAX_LINES segments are queued; more are dropped and counted
+ * by dropped(). Colors are Color.new() values (default green).
+ *
+ * With Loop.run(), setCamera() draws the queue after every draw (before
+ * the Debug overlay). Games with their own loop call draw(camera, dt) after
+ * drawing the scene.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=debug3d,...`
+ *
+ * Example:
+ * ```js
+ * Debug3D.setCamera(camera);
+ * Debug3D.grid(0, 0, 0, 10, 1, Color.new(60, 60, 60));
+ * const b = node.getWorldBounds();
+ * if (b) Debug3D.box(b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]);
+ * Debug3D.line(ray.x, ray.y, ray.z, ray.x + ray.dx * 20, ray.y + ray.dy * 20, ray.z + ray.dz * 20,
+ *     Color.new(255, 0, 0), 1);         // stays one second
+ * ```
+ */
+declare namespace Debug3D {
+    const MAX_LINES: number;
+    /** Queues a segment; returns false when the queue is full. */
+    function line(x1: number, y1: number, z1: number, x2: number, y2: number, z2: number,
+        color?: Color.Value, seconds?: number): boolean;
+    /** Many segments from a Float32Array of x1, y1, z1, x2, y2, z2 groups; returns how many were queued. */
+    function lines(values: Float32Array, color?: Color.Value, seconds?: number): number;
+    /** Box edges (12 segments), in world space or under `matrix` (an oriented box). Returns segments queued. */
+    function box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+        color?: Color.Value, seconds?: number, matrix?: Matrix4): number;
+    /** Three great circles of `segments` (3 to 64, default 16) segments each. */
+    function sphere(x: number, y: number, z: number, radius: number, color?: Color.Value, seconds?: number,
+        segments?: number): number;
+    /** X (red), Y (green) and Z (blue) axes of a transform, `size` units long (default 1). */
+    function axes(matrix: Matrix4, size?: number, seconds?: number): number;
+    /** Grid on the XZ plane around (x, y, z): halfExtent units each way, a line every step (128 per side at most). */
+    function grid(x: number, y: number, z: number, halfExtent: number, step: number, color?: Color.Value,
+        seconds?: number): number;
+    /** The view volume of another camera. */
+    function frustum(camera: Camera3D.Camera, color?: Color.Value, seconds?: number): number;
+    /**
+     * Normals of a mesh, `length` units long (default 0.25), from each
+     * vertex: an Instance uses its transform unless `matrix` is given.
+     * Uses inverse transpose under non-uniform scale. Singular/ill-conditioned
+     * linear matrices (scaled determinant <=1e-7) throw before queueing.
+     * Meshes without normals queue nothing.
+     */
+    function normals(target: Model3D.Instance | Model3D.Mesh, length?: number, color?: Color.Value,
+        seconds?: number, matrix?: Matrix4): number;
+    /** Draws the queue with `camera` after every Loop draw; null stops. The camera is retained. */
+    function setCamera(camera: Camera3D.Camera | null): void;
+    /** Draws the queue now (games without Loop.run()), then ages it by dt seconds; returns segments drawn. */
+    function draw(camera: Camera3D.Camera, dt?: number): number;
+    /** Ages the queue by dt seconds, removing expired segments already drawn (setCamera() does it each frame). */
+    function age(dt: number): void;
+    function clear(): void;
+    /** Segments queued. */
+    function count(): number;
+    /** Segments dropped because the queue was full, since the last clear(). */
+    function dropped(): number;
+    /** Turns the module on or off (off: queueing does nothing and the queue is emptied). Returns whether on. */
+    function show(on?: boolean): boolean;
+    /** Enables native phase timers (default off, no clock reads). */
+    function profile(enabled: boolean): void;
+    /** Latest projection/draw. Transform includes packing and VU0 perspective/
+     * viewport mapping; clip includes C clipping/mapping of adjusted endpoints.
+     * Emit includes callbacks and GS packet construction
+     * without a GS wait. Total excludes 2D-view save/restore and age().
+     * Reading creates a JS object outside native phase timers.
+     * Clock spans must finish before the EE wrap (~14.5 seconds). */
+    function stats(): {
+        input: number; emitted: number; rejected: number; batches: number;
+        transformTicks: number; clipTicks: number; emitTicks: number; totalTicks: number;
+        /** EE batches using C for extreme operands (VU0 overflow/denormal behavior differs). */
+        fallbackBatches: number;
+        ticksPerMs: number; profiling: boolean; backend: "c" | "vu0";
+    };
+}
+
+
 /* === Module: Ease (ease) === */
 /* Optional module, not in the default build: node tools/modules.js configure --modules=ease,... */
 /**
@@ -3626,176 +5926,100 @@ declare namespace Ease {
 }
 
 
-/* === Module: Image (image) === */
-/**
- * Image loading, CPU pixel access and textured 2D drawing.
- *
- * `Image` accepts paths understood by the active PS2 filesystem driver,
- * including paths relative to the boot directory. A newly loaded image is
- * CPU-resident; call `lock()` when it must remain resident in VRAM.
- *
- * Pixel buffers use the image's current `bpp` and dimensions. For 32-bit
- * images, `pixels` contains four bytes per pixel. Palette data is used only
- * by indexed 4-bit and 8-bit formats.
- *
- * Some Images borrow a texture owned by another object, such as
- * `Video.frame`. Their storage cannot be replaced: setting `pixels`,
- * `palette`, `bpp`, `texWidth` or `texHeight` throws a TypeError and
- * `optimize()` returns false.
- *
- * @example
+/* === Module: GLTF3D (gltf3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=gltf3d,... */
+/** glTF 2.0 / GLB scenes with their node hierarchy and animations.
+ * Model3D.load() keeps reading single meshes; GLTF3D.load() reads whole
+ * scenes: nodes become Scene3D nodes (TRS, or a matrix decomposed into TRS),
+ * every triangle primitive a Model3D mesh (extra primitives of a mesh become
+ * child nodes), and every animation an Animation3D clip whose targets are
+ * node indices. Skins deform their meshes every draw (in C) from the joint
+ * nodes, which the clips animate. Morph targets and CUBICSPLINE tracks are
+ * supported within the limits of Model3D/Animation3D.
  * ```js
- * const logo = new Image('my_image.png');
- * if (!logo.ready()) throw new Error('image load failed');
- * logo.color = Color.new(255, 255, 255, 255);
- * logo.lock();
- * logo.draw(100, 80);
- * Screen.flip();
- * ```
- */
+ * const hero = GLTF3D.load("models/hero.glb");
+ * scene.root.add(hero.root);
+ * const walk = new Animation3D.Player(hero.clips.walk, hero.nodes);
+ * walk.loop = true; walk.play();
+ * ``` */
+declare namespace GLTF3D {
+    interface Asset {
+        /** Group holding the default scene's root nodes. */
+        root: Scene3D.Node;
+        /** Every node in file order: the clips' target indices. */
+        nodes: Scene3D.Node[];
+        /** Node names, "" when unnamed. */
+        names: string[];
+        /** Clips by animation name (the index for unnamed ones). */
+        clips: { [name: string]: Animation3D.Clip };
+    }
+    /** material, as in Model3D.load(), replaces every primitive's material. */
+    function load(path: string, material?: Model3D.Material): Asset;
+    /** Self-contained GLB, at most 16 MiB. Borrows ArrayBuffer/Uint8Array
+     * bytes only for this synchronous main-thread call; all scene data and
+     * decoded pixels are copied. Subarrays may be unaligned (temporary copy).
+     * origin is a nonempty diagnostic name. URI buffers/external images are
+     * rejected before construction; no file I/O or GS upload. */
+    function loadMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Model3D.Material): Asset;
 
-/** Optional destination, source-rectangle and tint overrides for `draw()`. */
-type ImageDrawOptions = {
-    /** Destination width in pixels; defaults to `width`. */
-    width?: number;
-    /** Destination height in pixels; defaults to `height`. */
-    height?: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx?: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty?: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx?: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy?: number;
-    /** Rotation angle in radians. */
-    angle?: number;
-    /** Packed RGBA tint, normally created with `Color.new()`. */
-    color?: number;
-};
-
-/** Options of `drawList()`. */
-type ImageDrawListOptions = {
-    /** Offset added to every sprite; defaults to 0. */
-    x?: number;
-    y?: number;
-    /** First record to draw; defaults to 0. */
-    first?: number;
-    /** Records to draw; defaults to the rest of the buffer. */
-    count?: number;
-};
-
-/** Options controlling image creation and texture upload behavior. */
-type ImageOptions = {
-    /** Whether texture uploads use the deferred VIF1 path; defaults to true. */
-    delayed?: boolean;
-};
-
-declare class Image {
-    /** Loads an image from `path`, or creates an empty image when omitted. */
-    constructor(options?: ImageOptions);
-    constructor(path: string, options?: ImageOptions);
-    /** Linear size in bytes of the current pixel buffer. */
-    readonly size: number;
-    /** Whether texture uploads use the deferred VIF1 path. */
-    readonly delayed: boolean;
-    /** CPU pixel buffer; assigning it copies the supplied `ArrayBuffer`. */
-    pixels: ArrayBuffer;
-    /** CPU palette buffer for indexed images; required for indexed images. */
-    palette: ArrayBuffer;
-    /** Texture width in pixels (1..1024); changing it discards pixels and VRAM. */
-    texWidth: number;
-    /** Texture height in pixels (1..1024); changing it discards pixels and VRAM. */
-    texHeight: number;
-    /** Pixel storage format: 4, 8, 16, 24 or 32 bits per pixel; changing it discards storage. */
-    bpp: number;
-    /** Texture filter mode; must be GS_FILTER_NEAREST or GS_FILTER_LINEAR. */
-    filter: number;
-    /** Whether dimensions and a valid pixel buffer are available for drawing. */
-    renderable: boolean;
-    /** Destination draw width in pixels. */
-    width: number;
-    /** Destination draw height in pixels. */
-    height: number;
-    /** Source rectangle's left coordinate in texture pixels. */
-    startx: number;
-    /** Source rectangle's top coordinate in texture pixels. */
-    starty: number;
-    /** Source rectangle's right coordinate in texture pixels. */
-    endx: number;
-    /** Source rectangle's bottom coordinate in texture pixels. */
-    endy: number;
-    /** Rotation angle in radians used by `draw()`. */
-    angle: number;
-    /** Packed RGBA tint multiplied with sampled texture color. */
-    color: number;
-
-    /** True when dimensions, pixel data and indexed palette data are valid. */
-    ready(): boolean;
-    /** True while an ImageList request is waiting or being processed. */
-    loading(): boolean;
-    /** True when the most recent ImageList request failed. */
-    failed(): boolean;
-    /**
-     * Returns the loading state. `decoded` has CPU pixels; `upload_pending`
-     * has a queued VRAM upload; `ready` is resident in VRAM.
-     */
-    status(): "queued" | "loading" | "decoded" | "upload_pending" | "ready" | "failed" | "cancelled";
-    /** Returns structured load diagnostics, or undefined when no load failed. */
-    error(): ImageLoadError | undefined;
-    /** Queues a textured sprite at `(x, y)` for the current frame. */
-    draw(x: number, y: number, options?: ImageDrawOptions): void;
-    /**
-     * Queues many sprites of this image at once: the texture state is sent
-     * once per 128 sprites instead of once per sprite, which makes it several
-     * times cheaper than as many `draw()` calls. `sprites` uses the record
-     * layout of `TileMap.SpriteBuffer` (`TileMap.layout`: x, y, w, h, u1, v1,
-     * u2, v2 in pixels and texels, r, g, b, a with 128 as neutral), so one
-     * buffer serves both; the TileMap module is not required. Records with a
-     * zero width or height are skipped, and so are, under a Camera2D camera,
-     * records outside its viewport.
-     *
-     * @example
-     * ```js
-     * const sprites = new Float32Array(16 * count);        // 64-byte records
-     * const colors = new Uint32Array(sprites.buffer);
-     * // record i: sprites[16*i + 0..7] = x, y, w, h, u1, v1, u2, v2;
-     * //           colors[16*i + 8..11] = r, g, b, a
-     * image.drawList(sprites, { x: cameraX, y: cameraY });
-     * ```
-     */
-    drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
-    /** Uploads the image synchronously and pins its VRAM allocation. */
-    lock(): boolean;
-    /** Allows the texture manager to evict the image from VRAM. */
-    unlock(): boolean;
-    /** Returns whether the image is currently pinned in VRAM. */
-    locked(): boolean;
-    /** Converts an unlocked CT24 texture to CT16S and invalidates its VRAM copy. */
-    optimize(): boolean;
-    /** Releases the native image and its CPU/VRAM resources. */
-    free(): void;
-
-    /** Copies a rectangular VRAM region between two resident images. */
-    static copyVRAMBlock(
-        source: Image,
-        sourceX: number,
-        sourceY: number,
-        destination: Image,
-        destinationX: number,
-        destinationY: number
-    ): void;
-}
-
-/** Structured diagnostics for a failed image load. */
-interface ImageLoadError {
-    /** Path as it was requested. */
-    path: string;
-    code: "open_failed" | "unsupported_format" | "decode_failed" | "surface_failed" | "upload_failed";
-    /** `upload` is reported only for ImageList requests with an `upload` option. */
-    stage: "open" | "decode" | "surface" | "upload";
-    /** Human-readable description. */
-    message: string;
+    type LoaderPhase = 'copy' | 'parse' | 'dependencies' | 'validate' | 'nodes' | 'links' | 'skins' | 'clips' | 'done';
+    /** Resumable GLB load: each step() runs one bounded unit on the main
+     * thread. The first steps ('copy', 256 KiB each) snapshot the bytes into
+     * memory the loader owns; the source is pinned until the phase leaves
+     * 'copy', so do not modify it before that. Later units are atomic: the
+     * parse, the validation, one primitive (including decoding its embedded
+     * textures) or meshless node, the hierarchy links, one skin or one
+     * animation. Dispose it to abandon the load; unreferenced loaders are
+     * freed by GC. */
+    class Loader {
+        private constructor();
+        /** Phase names by native phase index (the order of phaseStatsInto). */
+        static readonly PHASES: readonly string[];
+        /** Runs up to `units` (1..64, default 1) consecutive units of the same
+         * phase. false while work remains, true once finished. Throws the load
+         * error, and keeps throwing it; then dispose(). */
+        step(units?: number): boolean;
+        /** Runs at least one unit, then more until `budgetMs` (0..1000, default 0 =
+         * one unit) has elapsed: a single call for a time slice, timed by the
+         * native loader. Same results as step(); false while work remains, true
+         * once finished; lastUnits is the number of units that ran. */
+        run(budgetMs?: number): boolean;
+        /** Units, total time and largest single unit per phase so far. */
+        /** Same numbers as `phaseStats`, written into a Float64Array (units, totalMs,
+         * maxMs at index 3 * phase index; at least 3 * PHASES.length elements): no allocation. */
+        phaseStatsInto(out: Float64Array): void;
+        readonly phaseStats: { [phase: string]: { units: number; totalMs: number; maxMs: number } };
+        /** The Asset, after step() returned true. Spends the loader. */
+        finish(): Asset;
+        /** Frees whatever was not delivered; idempotent. */
+        dispose(): void;
+        /** The next unit's phase ('disposed' once finished or disposed). */
+        readonly phase: LoaderPhase | 'disposed';
+        /** The phase the last step() ran. */
+        readonly lastPhase: LoaderPhase | 'disposed';
+        /** Native steps the last step() call ran (at most `units`). */
+        readonly lastUnits: number;
+        /** Files named by relative URI (external buffers and images), listed after
+         * the parse step when started with `{ dependencies: true }`; else empty.
+         * Read each one yourself (the loader does no I/O) and give it to provide(). */
+        readonly dependencies: { uri: string; image: boolean; provided: boolean }[];
+        /** Hands over the bytes of dependencies[index] (ArrayBuffer/Uint8Array,
+         * 1 byte to 16 MiB, once). They are used, not copied: do not modify the
+         * buffer until finish() or dispose(). While files are missing step()
+         * returns false and does nothing (phase 'dependencies'). Absolute, scheme,
+         * drive and ".." URIs are rejected, at most 64 files. */
+        provide(index: number, bytes: ArrayBuffer | Uint8Array): void;
+        readonly unitsDone: number;
+        /** 0 until validation has counted the units. */
+        readonly unitsTotal: number;
+    }
+    /** Starts a resumable load of a self-contained GLB (see loadMemory for the
+     * input rules, checked while stepping). Snapshots bytes <= 16 MiB while
+     * the loader is in its 'copy' phase. *
+     * `options.borrow: true` uses the bytes in place (no 'copy' phase and no snapshot
+     * RAM) when they are 4-byte aligned, otherwise the snapshot is made as usual; the
+     * buffer is pinned and must not be modified until finish() or dispose(). */
+    function beginMemory(bytes: ArrayBuffer | Uint8Array, origin: string, material?: Model3D.Material, options?: { dependencies?: boolean; borrow?: boolean }): Loader;
 }
 
 
@@ -3989,6 +6213,121 @@ declare class ImageList {
 }
 
 
+/* === Module: Input (input) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=input,... */
+/**
+ * Named actions and axes over controller snapshots.
+ *
+ * A Map turns the snapshot of a source (Gamepad player 0 by default, or any
+ * object with `buttons`, `leftX`, `leftY`, `rightX`, `rightY` such as a
+ * Replay source) into actions. Edges (justPressed/justReleased) are tracked
+ * by the map on each `update()`, so they work with any source. Sticks get
+ * their own radial dead zone, so a Map sets its Gamepad player's
+ * `deadzone` to 0 and reads raw values.
+ *
+ * `Input.pressure(Gamepad.R2, { threshold: 0.3 })` binds the analog pressure of a button (DualShock 2/3
+ * face, shoulder and d-pad buttons, DualShock 4 L2/R2); `value()` gives 0..1 and sources without pressure
+ * fall back to the digital bit.
+ *
+ * Bindings are plain data: save `map.bindings()` with the settings and
+ * restore them with `map.load()`.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=input,...`
+ *
+ * Example:
+ * ```js
+ * const controls = new Input.Map({
+ *     move: Input.stick("left", { dpad: true }),
+ *     look: Input.stick("right", { curve: "quadratic", sensitivity: 2.5 }),
+ *     jump: Input.button(Gamepad.CROSS),
+ *     dash: Input.button(Gamepad.L1 | Gamepad.R1),   // both together
+ * });
+ * Loop.run({ update(dt) {
+ *     Gamepad.update(); controls.update();
+ *     const m = controls.axis("move");             // same object every frame
+ *     player.x += m.x * speed * dt;
+ *     if (controls.justPressed("jump")) player.jump();
+ * } });
+ * controls.rebind("jump", Gamepad.CIRCLE);
+ * ```
+ */
+declare namespace Input {
+    interface ButtonBinding { button: number[] }
+    interface AxisBinding { axis: [number, number] }
+    interface StickBinding {
+        stick: "left" | "right";
+        /** Radial, 0 to 0.95 (default 0.15); the rest is rescaled to 0..1. */
+        deadZone?: number;
+        curve?: "linear" | "quadratic" | "cubic";
+        sensitivity?: number;
+        invertX?: boolean;
+        invertY?: boolean;
+        /** Use the d-pad while the stick rests in its dead zone. */
+        dpad?: boolean;
+    }
+    interface PressureBinding {
+        /** One Gamepad button bit. */
+        pressure: number;
+        /** Held from this pressure, in (0, 1] (default 0.5). */
+        threshold: number;
+        /** Stays held until the pressure falls below this, in (0, threshold] (default threshold). */
+        release: number;
+    }
+    type Binding = ButtonBinding | AxisBinding | StickBinding | PressureBinding;
+    /** What a Map reads; Gamepad.Player fits. */
+    interface Source {
+        buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** Optional: how hard one button bit is pressed, 0..1. Without it pressure actions read the digital bit (1 while held). */
+        pressure?(button: number): number;
+    }
+
+    /** Held while every bit of any mask is held (`L1 | R1` is a combination; several masks are alternatives). */
+    function button(...masks: number[]): ButtonBinding;
+    /** -1 while `negative` is held, +1 while `positive` is held. */
+    function axis(negative: number, positive: number): AxisBinding;
+    /**
+     * Pressure of one button (value() is 0..1), held from `threshold` until it falls below `release`.
+     * Sources or buttons without pressure give 1 while held, so the action works digitally.
+     */
+    function pressure(button: number, options?: { threshold?: number; release?: number }): PressureBinding;
+    function stick(side: "left" | "right", options?: Omit<StickBinding, "stick">): StickBinding;
+    /** New bindings of a common layout. */
+    function preset(name: "platformer" | "shooter" | "menu"): Record<string, Binding>;
+
+    class Map {
+        constructor(bindings: Record<string, Binding>, options?: { player?: number; source?: Source });
+        /** The last snapshot read by update(). */
+        readonly raw: Source;
+        /** The source read by update() (the Gamepad player unless setSource() was used). */
+        readonly source: Source;
+        /** Reads another source; null goes back to the Gamepad player. */
+        setSource(source: Source | null): this;
+        /** Takes the snapshot and updates every action; once per frame, after Gamepad.update(). */
+        update(): this;
+        pressed(action: string): boolean;
+        justPressed(action: string): boolean;
+        justReleased(action: string): boolean;
+        /** Consecutive updates held (0 when released). */
+        heldFrames(action: string): number;
+        /** 0/1 for buttons, -1/0/1 for axes, 0..1 for pressure, the processed magnitude for sticks. */
+        value(action: string): number;
+        /** A stick's processed vector (y negative upwards, like Gamepad); the same object every call. */
+        axis(action: string): { readonly x: number; readonly y: number };
+        x(action: string): number;
+        y(action: string): number;
+        has(action: string): boolean;
+        actions(): string[];
+        /** Replaces one binding: a binding object or button masks. */
+        rebind(action: string, binding: Binding): this;
+        rebind(action: string, ...masks: number[]): this;
+        /** Plain copy of every binding, for saving. */
+        bindings(): Record<string, Binding>;
+        /** Replaces every binding (validated first). */
+        load(bindings: Record<string, Binding>): this;
+    }
+}
+
+
 /* === Module: IOP (iop) === */
 /**
  * IOP module and module-manager bindings.
@@ -4037,166 +6376,85 @@ declare namespace IOP {
 }
 
 
-/* === Module: Vector (vector) === */
+/* === Module: LOD (lod) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=lod,... */
 /**
- * PS2-aligned vector types.
+ * Distance-based level of detail for Scene3D nodes: forests, cities, crowds.
  *
- * `Vector2`, `Vector3` and `Vector4` are separate JavaScript classes exposed
- * by the `Vector` module. Arithmetic methods return new vectors and do not
- * mutate their operands. `div()` rejects zero components.
+ * A Group gives a node meshes by distance from the camera; beyond the last
+ * level, or beyond the global draw distance, the node is hidden. Selection
+ * runs in C, uses the node's world position of the last scene update (one
+ * frame of latency) and touches the node only when its level changes, so it
+ * must run before Scene3D's update: `setCamera()` adds a Loop POST_UPDATE
+ * system at priority -100 (Scene3D's attachLoop() defaults to 0); games
+ * without it call `LOD.update(camera)` before `scene.update()`. A
+ * hysteresis band (default 10% of each threshold) stops flicker. While a
+ * group is enabled it owns its node's `visible` flag. Keep Group handles
+ * alive for as long as they are needed; disposing/collecting one removes it.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=lod,...`
  *
  * Example:
  * ```js
- * import * as Vector from 'Vector';
- * const direction = new Vector.Vector3(3, 4, 0);
- * console.log(direction.norm());
- * const right = direction.cross(new Vector.Vector3(0, 0, 1));
+ * const groups = trees.map(tree => new LOD.Group(tree,
+ *     [{ mesh: treeHigh, until: 15 }, { mesh: treeLow, until: 45 }, { mesh: billboard, until: 90 }]));
+ * LOD.setCamera(camera);
+ * LOD.setDrawDistance(90, { lights, color: [0.6, 0.7, 0.85] });   // fog hides the cut
  * ```
  */
-declare class Vector2 {
-    /** Creates a two-component vector. */
-    constructor(x: number, y: number);
-    /** Horizontal component. */
-    x: number;
-    /** Vertical component. */
-    y: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector2): number;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector2): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector2): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector2): Vector2;
-    /** Returns the component-wise difference. */
-    sub(value: Vector2): Vector2;
-    /** Returns the component-wise product. */
-    mul(value: Vector2): Vector2;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector2): Vector2;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector3 {
-    /** Creates a three-component vector. */
-    constructor(x: number, y: number, z: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Returns Euclidean length. */
-    norm(): number;
-    /** Returns the dot product. */
-    dot(value: Vector3): number;
-    /** Returns the 3D cross product. */
-    cross(value: Vector3): Vector3;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector3): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector3): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector3): Vector3;
-    /** Returns the component-wise difference. */
-    sub(value: Vector3): Vector3;
-    /** Returns the component-wise product. */
-    mul(value: Vector3): Vector3;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector3): Vector3;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-declare class Vector4 {
-    /** Creates a homogeneous four-component vector. */
-    constructor(x: number, y: number, z: number, w: number);
-    /** X component. */
-    x: number;
-    /** Y component. */
-    y: number;
-    /** Z component. */
-    z: number;
-    /** Homogeneous component: commonly 1 for points and 0 for directions. */
-    w: number;
-    /** Returns four-dimensional Euclidean length. */
-    norm(): number;
-    /** Returns the four-component dot product. */
-    dot(value: Vector4): number;
-    /** Returns the cross product with homogeneous component cleared. */
-    cross(value: Vector4): Vector4;
-    /** Returns Euclidean distance to another vector. */
-    distance(value: Vector4): number;
-    /** Returns squared distance without taking a square root. */
-    distance2(value: Vector4): number;
-    /** Returns the component-wise sum. */
-    add(value: Vector4): Vector4;
-    /** Returns the component-wise difference. */
-    sub(value: Vector4): Vector4;
-    /** Returns the component-wise product. */
-    mul(value: Vector4): Vector4;
-    /** Returns the component-wise quotient; zero divisors throw. */
-    div(value: Vector4): Vector4;
-    /** Returns a readable component representation. */
-    toString(): string;
-}
-
-
-/* === Module: Matrix4 (matrix4) === */
-/**
- * Four-by-four transformation matrix using the PS2/AthenaEnv layout.
- *
- * Values are stored in column-major order. Translation components are at
- * indices 12, 13 and 14; index 15 is the homogeneous component.
- *
- * Example:
- * ```js
- * const transform = new Matrix4();
- * transform.set(12, 10).set(13, 20).set(14, 30);
- * const inverse = transform.clone().invert();
- * console.log(inverse.get(12), inverse.get(13), inverse.get(14));
- * ```
- */
-declare class Matrix4 {
-    /** Creates identity matrix, or initializes all 16 values when supplied. */
-    constructor();
-    constructor(
-        m00: number, m01: number, m02: number, m03: number,
-        m10: number, m11: number, m12: number, m13: number,
-        m20: number, m21: number, m22: number, m23: number,
-        m30: number, m31: number, m32: number, m33: number
-    );
-    /** Number of scalar components in the matrix. */
-    readonly length: 16;
-    /** Reads a scalar component at index 0..15. */
-    get(index: number): number;
-    /** Writes a scalar component at index 0..15 and returns this matrix. */
-    set(index: number, value: number): this;
-    /** Compares all 16 components exactly. */
-    equals(value: Matrix4): boolean;
-    /** Compares all components using an absolute epsilon tolerance. */
-    equalsEpsilon(value: Matrix4, epsilon: number): boolean;
-    /** Returns the 16 components as a new array. */
-    toArray(): number[];
-    /** Copies 16 values from an array-like object into this matrix. */
-    fromArray(values: ArrayLike<number>): this;
-    /** Returns an independent copy of this matrix. */
-    clone(): Matrix4;
-    /** Copies another matrix into this matrix. */
-    copy(value: Matrix4): this;
-    /** Returns the product of this matrix and `value`. */
-    multiply(value: Matrix4): Matrix4;
-    /** Replaces this matrix with identity. */
-    identity(): this;
-    /** Transposes this matrix in place. */
-    transpose(): this;
-    /** Inverts this matrix in place; throws for a singular matrix. */
-    invert(): this;
-    /** Returns a readable 16-value representation. */
-    toString(): string;
+declare namespace LOD {
+    const MAX_LEVELS: 8;
+    /** Group.level of a hidden node. */
+    const HIDDEN: -1;
+    interface Level {
+        /** null hides the node in this band. */
+        mesh: Model3D.Mesh | null;
+        /** Used while the distance is below this (increasing, > 0). */
+        until: number;
+    }
+    interface Stats {
+        groups: number; hidden: number; changes: number; perLevel: number[];
+        /** Groups whose level was computed this update (groups - the ones inside skipped cells). */
+        evaluated: number;
+        /** Grid cells visited / skipped whole (0 without setGrid). */
+        cells: number; cellsSkipped: number;
+    }
+    class Group {
+        /** Retains the node and meshes. hysteresis: 0 to 0.5 of each threshold (default 0.1). */
+        constructor(node: Scene3D.Node, levels: Level[], options?: { hysteresis?: number });
+        /** Current level, HIDDEN, or -2 before the first selection. */
+        readonly level: number;
+        /** Distance at the last evaluation (not refreshed while the grid skips the group's cell). */
+        readonly distance: number;
+        /** Disabled groups leave the node alone. */
+        enabled: boolean;
+        dispose(): void;
+    }
+    /** Selects levels every frame with this camera (retained); null stops. */
+    function setCamera(camera: Camera3D.Camera | null): void;
+    /** Selects every level now; returns the number of changes, or fills stats. */
+    function update(camera: Camera3D.Camera): number;
+    function update<T extends object>(camera: Camera3D.Camera, stats: T): T & Stats;
+    /** Of the last selection. */
+    function stats<T extends object = Stats>(out?: T): T & Stats;
+    /**
+     * Optional spatial index for many groups (0 turns it off, the default). Groups are binned by the
+     * world position of their node into cells of `cellSize`; static groups cost nothing per update, and
+     * a cell is skipped whole when all its groups are already hidden by distance and the cell lies
+     * beyond their farthest threshold. The selection (levels, hysteresis, visibility) is identical to
+     * the full traversal; `capacity` (default 1024) bounds the cells, extra groups are still evaluated
+     * every update. Pick `cellSize` near the largest `until`. Moved nodes are noticed through Scene3D
+     * updates, so nodes moved after the last `scene.update()` are seen one frame late, as without the grid.
+     */
+    function setGrid(cellSize: number, options?: { capacity?: number }): void;
+    /** Multiplies every threshold (quality setting, default 1). */
+    function setBias(bias: number): void;
+    /**
+     * Hides nodes beyond distance (0: no limit). With `lights`, sets their
+     * fog from fogStart (default 60%) to distance in `color`, so the cut
+     * fades instead of popping.
+     */
+    function setDrawDistance(distance: number, options?: { lights?: Lights.Set; fogStart?: number; color?: [number, number, number] }): void;
 }
 
 
@@ -4534,6 +6792,266 @@ declare namespace MemoryCard {
 }
 
 
+/* === Module: MeshBuilder (meshbuilder) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=meshbuilder,... */
+/**
+ * Geometry built in C and turned into Model3D meshes: procedural scenery,
+ * terrain from heightmaps, prototypes without model files, and static
+ * batching (many props merged into few meshes, so fewer draws).
+ *
+ * A Builder is a pen: `color()`, `transform()` and `uvRect()`/`uvTile()`
+ * apply to what is added next. Triangles are counter-clockwise seen from
+ * the front (the side `Render3D.CULL_BACK` keeps); every shape has normals
+ * and 0..1 UVs mapped into the UV rectangle. `build()` returns as many
+ * meshes as the Model3D limits need (65532 indices and vertices each).
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=meshbuilder,...`
+ *
+ * Example:
+ * ```js
+ * const b = new MeshBuilder.Builder();
+ * b.color(0.4, 0.3, 0.2).box(-5, -0.1, -5, 5, 0, 5);                  // floor
+ * for (const rock of rocks) b.transform(rock.matrix).merge(rockMesh);   // static batching
+ * b.transform(null).color(1, 1, 1).uvTile(3, 4, 4, 0.02).cylinder(0, 0, 0, 0.3, 2);
+ * const meshes = b.build({ shading: Model3D.DIFFUSE, texture: atlas });
+ * b.dispose();
+ * ```
+ */
+declare namespace MeshBuilder {
+    class Builder {
+        constructor();
+        readonly vertexCount: number;
+        readonly triangleCount: number;
+        /** Meshes build() will make. */
+        readonly partCount: number;
+        /** Linear color in [0, 1] of the next vertices (default white). */
+        color(r: number, g: number, b: number, a?: number): this;
+        /** Transform of the next positions and normals; null for none. */
+        transform(matrix: Matrix4 | null): this;
+        /** Rectangle the next shapes' 0..1 UVs map into. */
+        uvRect(u0: number, v0: number, u1: number, v1: number): this;
+        /** uvRect() of tile `index` of an atlas of columns x rows (row by row from the top-left), shrunk by inset (tile fraction, against bleeding). */
+        uvTile(index: number, columns: number, rows: number, inset?: number): this;
+        /** One vertex; returns its index for triangle(). Normal defaults to +Y. */
+        vertex(x: number, y: number, z: number, nx?: number, ny?: number, nz?: number, u?: number, v?: number): number;
+        /** Counter-clockwise from the front. */
+        triangle(a: number, b: number, c: number): this;
+        /** Four corners counter-clockwise from the front (two triangles, flat normal). */
+        quad(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number,
+            x2: number, y2: number, z2: number, x3: number, y3: number, z3: number): this;
+        box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): this;
+        /** segments 3-256 (default 16), rings 2-256 (default 8). */
+        sphere(x: number, y: number, z: number, radius: number, segments?: number, rings?: number): this;
+        /** Along +Y from the base centre; caps default true. */
+        cylinder(x: number, y: number, z: number, radius: number, height: number, segments?: number, caps?: boolean): this;
+        /** XZ plane facing +Y, centred, divided into divisionsX x divisionsZ cells. */
+        plane(x: number, y: number, z: number, width: number, depth: number, divisionsX?: number, divisionsZ?: number): this;
+        /**
+         * Terrain from width x depth heights (row-major: x, then z), 2 to
+         * 1024 each way: samples `cell` apart (default 1), heights times
+         * `scale` (default 1), first sample at (x, y, z). low/high
+         * ([r, g, b, a?]) color the vertices by height instead of the pen color.
+         */
+        heightmap(heights: Float32Array, width: number, depth: number, options?: {
+            cell?: number; scale?: number; x?: number; y?: number; z?: number;
+            low?: number[]; high?: number[];
+        }): this;
+        /**
+         * Prism from a flat contour: `contour` holds x, z pairs (3 to 512 points, a simple
+         * polygon, no holes, first point not repeated) in the plane y = `y` (default 0).
+         * Extrude by `height` (along +Y; negative goes down) or by a slanted `vector`
+         * [x, y, z] (y not 0) - exactly one of them. The input winding does not matter:
+         * faces are always counter-clockwise from outside.
+         *
+         * Walls: one quad per edge with a flat normal, or with `smooth` shared vertices with
+         * averaged normals (seam duplicated); u runs along the contour by length (0..1), v is 1
+         * at the contour plane and 0 at the far end. Caps (`capStart` at the contour plane,
+         * `capEnd` at the far end; both default true) are ear-clipped, so concave outlines
+         * work; cap UVs are the contour's bounding box. The pen state applies.
+         *
+         * Throws RangeError (nothing is added) for fewer than 3 or too many points, non-finite
+         * values, repeated points, spikes, crossing or touching edges, zero area or an
+         * extrusion parallel to the plane.
+         */
+        extrude(contour: Float32Array, options: {
+            y?: number; height?: number; vector?: [number, number, number];
+            capStart?: boolean; capEnd?: boolean; smooth?: boolean;
+        }): this;
+        /** Copies a mesh's triangles (colors, normals, UVs) under the transform; an Instance adds its own transform. */
+        merge(source: Model3D.Mesh | Model3D.Instance): this;
+        /** Drops the geometry, keeping color, transform and UV rectangle. */
+        clear(): this;
+        /** New meshes with material (normals for DIFFUSE, UVs with a texture). Empty geometry gives []. */
+        build(material?: Model3D.Material): Model3D.Mesh[];
+        dispose(): void;
+    }
+}
+
+
+/* === Module: Nav (nav) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=nav,... */
+/**
+ * Navigation for enemies, NPCs and mobs: A* on an XZ grid and crowds of
+ * agents, in C.
+ *
+ * A Grid covers width x depth cells of `cellSize` world units from (x, z);
+ * each cell has a cost: 0 is blocked, 1-255 multiplies the distance walked
+ * through it (mud, water...). Every cell starts at 1. `findPath` runs A*
+ * over fixed arrays (no allocation per search) with 8-way moves that never
+ * cut corners, and by default smooths the path by line of sight through
+ * cost-1 cells, retaining detours around more expensive terrain. Native
+ * searches reuse scratch storage; findPath() allocates its returned array.
+ *
+ * A Crowd moves agents along their paths every `update(dt)`, slowing down
+ * on arrival and pushing overlapping agents apart (staying on walkable
+ * cells); an agent bound to a Scene3D node sets its position (keeping the
+ * agent's y) and, with `face`, its yaw.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=nav,...`
+ *
+ * Example:
+ * ```js
+ * const grid = new Nav.Grid(64, 64, { cellSize: 1, x: -32, z: -32 });
+ * grid.fill(10, 0, 12, 40, 0);                         // a wall
+ * const crowd = new Nav.Crowd(grid);
+ * const orc = crowd.add({ x: 0, y: 0, z: 0, speed: 3, node: orcNode });
+ * orc.moveTo(player.x, player.z);
+ * // each frame:
+ * crowd.update(dt);
+ * ```
+ */
+declare namespace Nav {
+    /** Cells per grid (512 x 512). */
+    const MAX_CELLS: number;
+    /** Points per path. */
+    const MAX_PATH: number;
+    const MAX_AGENTS: number;
+    interface PathOptions {
+        /** 8-way moves (default true). */
+        diagonal?: boolean;
+        /** Shortcuts across visible cost-1 cells (default true); preserves weighted detours. */
+        smooth?: boolean;
+        /** Integer 0..MAX_CELLS; 0/default searches the whole grid.
+         * Exhaustion returns null in findPath, or iterationLimit in a Request. */
+        maxIterations?: number;
+    }
+    class Grid {
+        constructor(width: number, depth: number, options?: { cellSize?: number; x?: number; z?: number });
+        readonly width: number; readonly depth: number; readonly cellSize: number;
+        /** Cells expanded by the last findPath (its cost). */
+        readonly lastExpanded: number;
+        setCost(cellX: number, cellZ: number, cost: number): this;
+        /** 0 outside the grid. */
+        getCost(cellX: number, cellZ: number): number;
+        /** Inclusive cell rectangle; returns the cells set. */
+        fill(x0: number, z0: number, x1: number, z1: number, cost: number): number;
+        /** width * depth costs, x fastest. */
+        setCosts(costs: Uint8Array): this;
+        /** True when every cell the segment crosses is walkable. */
+        lineOfSight(x0: number, z0: number, x1: number, z1: number): boolean;
+        /** World x, z pairs from the start to the exact target, or null when unreachable. */
+        findPath(x0: number, z0: number, x1: number, z1: number, options?: PathOptions): Float32Array | null;
+        /** FIFO incremental query; allocates request/output at creation.
+         * At most MAX_PENDING pending queries. Throws on full queue/invalid input.
+         * findPath and Crowd Agent.moveTo throw while this queue is nonempty;
+         * moveTo preserves the agent's previous path on that conflict. */
+        requestPath(x0: number, z0: number, x1: number, z1: number, options?: RequestOptions): Request;
+        /** Advances the FIFO, including initialization, A*, reconstruction and smoothing.
+         * maxWork defaults to 256 (integer 1..MAX_CELLS); budgetMs defaults to 0
+         * (no clock limit), otherwise finite, positive and <=1000. One work unit
+         * is an expansion, trace/output point or smoothing cell, not just A*.
+         * Stops at either limit; at most one unit plus call overhead may exceed
+         * the CPU budget. Returns work units, with no native allocation. */
+        stepRequests(maxWork?: number, budgetMs?: number): number;
+        /** Cancels all pending requests; completed results stay valid. */
+        cancelRequests(): void;
+        readonly pendingRequests: number;
+        /** Changes only when costs change; mutations invalidate pending requests. */
+        readonly revision: number;
+        /** Centre of the nearest walkable cell within radius cells (default 8), or null. */
+        nearestWalkable(x: number, z: number, radius?: number): { x: number; z: number } | null;
+        /** Cancels pending requests; retained Crowds and completed results remain safe. */
+        dispose(): void;
+    }
+    const MAX_PENDING: number;
+    interface RequestOptions extends PathOptions {
+        /** Owned result capacity in points (2..MAX_CELLS+1), default MAX_PATH.
+         * Native output uses 8 bytes per point; the six grid arrays are shared.
+         * Exceeding this capacity produces error pathTooLong, with no partial result. */
+        maxPoints?: number;
+    }
+    class Request {
+        private constructor();
+        readonly state: "pending" | "found" | "noPath" | "cancelled" | "error";
+        readonly phase: "queued" | "initialize" | "clearStamps" | "search" | "countPath" | "tracePath" | "emitPath" | "smoothPath" | "finished";
+        readonly error: "gridChanged" | "pathTooLong" | "iterationLimit" | "invalid" | null;
+        readonly revision: number;
+        readonly expanded: number;
+        readonly workUnits: number;
+        readonly pointCount: number;
+        /** Native request state plus owned output, excluding allocator and JS overhead. */
+        readonly storageBytes: number;
+        /** Weighted A* cost in cell units; 0 unless found. */
+        readonly cost: number;
+        /** Allocates an owned JS result, or null unless found. Outside step's budget. */
+        getPath(): Float32Array | null;
+        /** Writes to reusable storage (honors subarray), returns valid float length
+         * pointCount * 2, or 0 unless found. Insufficient capacity throws before
+         * any write. Copying is outside step's budget. */
+        copyPath(out: Float32Array): number;
+        cancel(): void;
+        /** Cancels/unlinks if pending (including an agent's owned plan), then
+         * releases this observer's output/grid reference. Idempotent.
+         * GC only drops ownership: an agent's plan continues without an observer. */
+        dispose(): void;
+    }
+    class Agent {
+        private constructor();
+        readonly x: number; readonly y: number; readonly z: number;
+        readonly state: "idle" | "moving" | "arrived" | "planning";
+        /** Last incremental outcome; synchronous moveTo resets it to none.
+         * Movement/separation pause while pending to preserve the search start. */
+        readonly planningState: "none" | "pending" | "found" | "noPath" | "cancelled" | "error";
+        readonly planningError: Request["error"];
+        /** Facing angle about Y (radians), from the last movement. */
+        readonly yaw: number;
+        /** Distance per second of the last update. */
+        readonly velocity: number;
+        /** Points of the current path. */
+        readonly waypoints: number;
+        /** Units per second. */
+        speed: number;
+        /** Plans a path; false when unreachable (the agent stops). */
+        moveTo(x: number, z: number): boolean;
+        /** Plans incrementally using this Crowd's PathOptions. Advance once per
+         * frame with grid.stepRequests(); crowd.update(dt) only moves agents.
+         * Successful creation abandons the previous route and enters planning.
+         * Found paths are adopted during step (bounded copy <=MAX_PATH points);
+         * other outcomes leave the agent idle. Creation failure preserves motion.
+         * Replaces its previous plan at the FIFO tail, including at queue capacity.
+         * The agent owns planning even if the returned Request is garbage-collected.
+         * Request.cancel/dispose, stop/setPosition, Agent.dispose/GC, Crowd.dispose
+         * and grid changes cancel/invalidate pending plans. */
+        requestMoveTo(x: number, z: number): Request;
+        stop(): this;
+        setPosition(x: number, y: number, z: number): this;
+        /** Drives a node (retained); null stops. */
+        bind(node: Scene3D.Node | null): this;
+        /** Cancels planning and leaves the crowd. */
+        dispose(): void;
+    }
+    class Crowd {
+        /** options: the PathOptions used by moveTo() and snapshotted by requestMoveTo(). */
+        constructor(grid: Grid, options?: PathOptions);
+        add(options: { x?: number; y?: number; z?: number; speed?: number; radius?: number; face?: boolean; node?: Scene3D.Node }): Agent;
+        /** Moves every agent; returns how many arrived in this update. */
+        update(dt: number): number;
+        /** Cancels this crowd's pending plans; retained Agents remain usable. */
+        dispose(): void;
+    }
+}
+
+
 /* === Module: Random (random) === */
 /**
  * Seedable pseudo-random numbers (xoshiro128**, computed in C).
@@ -4845,664 +7363,472 @@ declare namespace Noise {
 }
 
 
-/* === Module: Scene (scene) === */
-/* Optional module, not in the default build: node tools/modules.js configure --modules=scene,... */
-/**
- * Scenes and their assets.
+/* === Module: Particles2D (particles2d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=particles2d,... */
+/** Native 2D particles: emission, integration and drawing in C. The script
+ * configures an emitter, moves it and calls draw() once per frame; nothing per
+ * particle runs in JavaScript. World units through the 2D view (Camera2D),
+ * +Y down. Emitters advance in one Loop system (attachLoop(), POST_UPDATE, so
+ * they spawn where the game left them) or with update(dt). */
+declare namespace Particles2D {
+    const MAX_PARTICLES: number;
+    const LOOP_PRIORITY: number;
+    /** A number, or [min, max] picked per particle ([start, end] for size). */
+    type Range = number | [number, number];
+    interface Options {
+        /** Pool size, 1..MAX_PARTICLES; default 256. */
+        capacity?: number;
+        /** Particles per second while active; default 0 (bursts only). */
+        rate?: number;
+        /** Seconds; default 1. */
+        life?: Range;
+        speed?: Range;
+        /** Direction in radians (0 = +X, PI/2 = down) and total spread. */
+        angle?: number;
+        spread?: number;
+        /** [x, y] in units per second squared. */
+        gravity?: [number, number];
+        /** velocity *= 1 / (1 + drag * dt). */
+        drag?: number;
+        /** [start, end] over life, square side in units; default 8. */
+        size?: Range;
+        /** Color.new() value or [start, end]; alpha 0..128. Default white. */
+        color?: number | [number, number];
+        /** Initial angle and angular speed, radians. Any non-zero value draws
+         * rotated quads (two triangles) instead of GS sprites. */
+        rotation?: Range;
+        spin?: Range;
+        /** [width, height] of the spawn rectangle around the position. */
+        area?: [number, number];
+        /** [u1, v1, u2, v2] in texels; default the whole image. */
+        rect?: [number, number, number, number];
+        /** Random seed; same seed, same particles. */
+        seed?: number;
+    }
+    class Emitter {
+        /** The image is held by the emitter; a freed image draws nothing. */
+        constructor(image: Image, options?: Options);
+        /** Partial changes; live particles keep their state. */
+        configure(options: Options): this;
+        setPosition(x: number, y: number): this;
+        /** Spawns up to count particles now; returns how many fit. */
+        emit(count: number): number;
+        clear(): this;
+        update(dt: number): this;
+        /** One batch per call, oldest particles first. */
+        draw(): this;
+        readonly count: number;
+        /** Rate emission on or off; live particles continue. */
+        active: boolean;
+        dispose(): void;
+    }
+    function update(dt: number): void;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Particles3D (particles3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=particles3d,... */
+/** Native 3D particles drawn as camera-facing quads (billboards) by VU1:
+ * emission and integration in C, depth tested against the 3D scene without
+ * writing depth, so transparent particles do not hide each other. Draw after
+ * the opaque scene. Screen zbuffering is required. Emitters advance in one
+ * Loop system (attachLoop(), POST_UPDATE) or with update(dt). */
+declare namespace Particles3D {
+    const MAX_PARTICLES: number;
+    const LOOP_PRIORITY: number;
+    /** A number, or [min, max] picked per particle ([start, end] for size). */
+    type Range = number | [number, number];
+    type Vector3 = [number, number, number];
+    interface Options {
+        /** Pool size, 1..MAX_PARTICLES; default 256. */
+        capacity?: number;
+        /** Particles per second while active; default 0 (bursts only). */
+        rate?: number;
+        /** Seconds; default 1. */
+        life?: Range;
+        speed?: Range;
+        /** Cone axis (normalized); default [0, 1, 0]. */
+        direction?: Vector3;
+        /** Cone half angle in radians, 0..PI; default 0. */
+        spread?: number;
+        gravity?: Vector3;
+        /** velocity *= 1 / (1 + drag * dt). */
+        drag?: number;
+        /** Quad side in world units, [start, end] over life; default 0.5. */
+        size?: Range;
+        /** Color.new() value or [start, end]; alpha 0..128. */
+        color?: number | [number, number];
+        /** Spawn box around the position. */
+        area?: Vector3;
+        /** [u1, v1, u2, v2] in texels; default the whole image. */
+        rect?: [number, number, number, number];
+        seed?: number;
+    }
+    class Emitter {
+        constructor(image: Image, options?: Options);
+        configure(options: Options): this;
+        setPosition(x: number, y: number, z: number): this;
+        emit(count: number): number;
+        clear(): this;
+        update(dt: number): this;
+        /** Draws what camera sees (near/far tested on the EE) and returns how
+         * many particles were sent. Throws without a z-buffer. */
+        draw(camera: Camera3D.Camera): number;
+        readonly count: number;
+        active: boolean;
+        dispose(): void;
+    }
+    function update(dt: number): void;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
+}
+
+
+/* === Module: Physics3D (physics3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=physics3d,... */
+/** Rigid bodies in C: spheres, boxes and capsules that fall, bounce, slide, roll and
+ * stack, against each other and against the static triangles of a
+ * Collision3D world (the level). Sequential impulses with friction,
+ * restitution and warm starting; bodies resting together fall asleep as one
+ * island and wake when something touches them. Fixed 1/60 s substeps (at
+ * most 4 per step; a slower frame rate drops the backlog). Up is wherever
+ * gravity points against.
  *
- * A scene is a screen of the game (title, level, pause menu): a class that
- * extends `Scene`, names the assets it needs in `static assets`, and gets
- * `enter`, `update`, `draw`, `pause`, `resume` and `exit` calls. The static
- * methods of `Scene` manage a stack of them:
- *
- * - `Scene.go(Level)` loads the level's assets in the background (while the
- *   current scene fades out, with `transition: "fade"`), exits the current
- *   scenes, releases what only they used, and enters the level;
- * - `Scene.push(Pause)` puts a scene over the current one, which pauses and
- *   keeps being drawn below; `Scene.pop({ result })` resumes it;
- * - a loading screen shows only when loading outlasts the transition.
- *
- * Assets are reference counted by kind and path: an asset two scenes use is
- * loaded once and survives going from one to the other (the next scene's
- * assets are acquired before the previous scene's are released). Images load
- * through an ImageList (decoded on a worker), sound effects, fonts and sprite
- * sheets through their background jobs, so frames keep coming while loading.
- *
- * Transitions and loading run on real time: a pause menu that sets
- * `Loop.setTimeScale(0)` can still go to another scene.
- *
- * @example
  * ```js
- * class Level1 extends Scene {
- *     static root = "assets/level1";
- *     static assets = {
- *         images: { tiles: { path: "tiles.png", upload: "lock" } },
- *         sheets: { hero: "hero.json" },                 // Aseprite / TexturePacker
- *         sfx:    { jump: "jump.adp" },
- *         music:  { theme: { path: "level1.ogg", loop: true } },
- *         fonts:  { hud: { path: "hud.ttf", size: 20, preload: true } },
- *         data:   { map: "map.json" },
- *     };
- *     enter(assets) {
- *         this.hero = new Sprite.Instance(assets.sheets.hero, { clip: "idle" });
- *         assets.music.theme.play();
- *     }
- *     update(dt) {
- *         if (pad.justPressed(Gamepad.START)) Scene.push(PauseMenu);
- *     }
- *     draw() { this.hero.draw(this.x, this.y); }
- *     exit() { this.assets.music.theme.stop(); }
- * }
- *
- * Scene.run(Title);                                        // starts the Loop
- * // later, from a scene:
- * Scene.go(Level1, { transition: "fade", duration: 0.5 });
+ * const level = new Collision3D.World(); level.addNode(levelNode);
+ * const physics = new Physics3D.World(level).attachLoop();
+ * const crate = physics.addBox({ halfExtents: [.5, .5, .5], mass: 2, position: [0, 5, 0] });
+ * crate.bind(crateNode);                       // position and rotation follow
+ * crate.applyImpulse(0, 4, 2);
  * ```
  */
-/**
- * `A` types the loaded assets and `P` the params, for editors:
- * `class Level extends Scene<{ images: { tiles: Image } }, { number: number }>`.
- */
-declare class Scene<A = any, P = any> {
-    /** What `go()`/`push()` passed as `options.params`. */
-    readonly params: P;
-    /** The loaded assets, as the manifest names them; set before `enter()`, null after `exit()`. */
-    assets: A;
-
-    constructor(params?: P);
-
-    /** The assets are loaded; the scene starts. May return a promise (the loading screen stays). */
-    enter(assets: A, params: P): void | Promise<void>;
-    update(dt: number): void;
-    draw(alpha: number): void;
-    /** A scene was pushed over this one. */
-    pause(): void;
-    /** The scene above was popped, with its `pop({ result })`. */
-    resume(result?: any): void;
-    /** The scene leaves; its `defer()` clean-ups run and its assets are released after this. */
-    exit(): void;
-
-    /**
-     * Runs `fn` when the scene leaves, after `exit()`, last registered
-     * first: for what the scene started and would outlive it (tweens,
-     * sprites, Loop systems, music). Returns `fn`.
-     */
-    defer<F extends () => void>(fn: F): F;
-    /**
-     * More assets while the scene runs (the next area of a level): a group,
-     * released when the scene leaves. Paths are relative to the class's root
-     * unless `options` gives another (a string is the root).
-     */
-    acquire(manifest: Scene.Manifest, options?: string | Scene.LoadOptions): Scene.AssetGroup;
-
-    /**
-     * The assets this scene needs: a manifest, or a function of the params
-     * that returns one. Paths are relative to `root`.
-     */
-    static assets?: Scene.Manifest | ((params: any) => Scene.Manifest);
-    /** Directory the manifest's paths are relative to. */
-    static root?: string;
-
-    /**
-     * Replaces every scene with a new one: loads its assets (during the
-     * fade-out), exits the old scenes and releases their assets, then enters
-     * the new one. Resolves with the new scene once it runs. Requests made
-     * meanwhile wait their turn.
-     */
-    static go<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions): Promise<T>;
-    /** A scene over the current one, which pauses: a pause menu, a dialog. */
-    static push<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /** Leaves the top scene; the one below resumes with `options.result`. Resolves with it. */
-    static pop(options?: Scene.PopOptions): Promise<Scene | null>;
-    /**
-     * Replaces only the top scene; the ones below stay (and are not resumed).
-     * `drawBelow`/`updateBelow` default to the replaced scene's. With an
-     * empty stack it is a `go()`.
-     */
-    static replace<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.PushOptions): Promise<T>;
-    /**
-     * Starts loading a scene's assets now (the level while the title runs),
-     * so `go()`/`push()` find them loaded. The group is released when that
-     * scene class enters, by `reset()`, or with `release()`.
-     */
-    static preload(SceneClass: new (params?: any) => Scene, params?: any): Scene.AssetGroup;
-    /**
-     * Starts `Loop.run()` with the manager's update and draw, and goes to the
-     * first scene. `loopOptions` go to `Loop.run()` (fixedStep, clearColor...).
-     * @throws TypeError when the Loop already runs: call `Scene.update()` and
-     * `Scene.draw()` from its handlers instead.
-     */
-    static run<T extends Scene>(SceneClass: new (params?: any) => T, options?: Scene.GoOptions,
-        loopOptions?: Loop.Options): Promise<T>;
-    /**
-     * For a custom loop: updates the running scenes (the top one, and those
-     * below it that asked for `updateBelow`). Throws the error of a scene
-     * that could not load when there is no `onError`. An exception of a
-     * scene's `enter()`, `exit()`, `pause()` or `resume()` during a switch
-     * is thrown too (inside `Loop.run()` it stops the Loop); the switch is
-     * cancelled, a scene whose `enter()` threw leaves without `exit()`, and
-     * the manager goes on with the next request.
-     */
-    static update(dt: number): void;
-    /** For a custom loop: draws the visible scenes, then the transition and loading screen. */
-    static draw(alpha?: number): void;
-    /** Leaves every scene at once and releases their assets and preloads. */
-    static reset(): void;
-    /**
-     * A named transition for go/push/pop/replace: `draw(amount, info)`
-     * covers `amount` (0..1) of the screen, in screen space.
-     */
-    static defineTransition(name: string, draw: Scene.TransitionDraw): void;
-
-    /** The top scene, or null. */
-    static readonly current: Scene | null;
-    /** Every scene, bottom first. */
-    static readonly stack: Scene[];
-    /** A go, push or pop is in progress. */
-    static readonly busy: boolean;
-    /** Loading progress of the scene being loaded, 0..1. */
-    static readonly progress: number;
-    /**
-     * Draws the loading screen in screen space while a scene loads: `null`
-     * shows nothing. The default is a progress bar.
-     */
-    static loadingScreen: ((progress: number, info: Scene.LoadingInfo) => void) | null;
-    /** Seconds of loading before the loading screen shows. Default 0.15. */
-    static loadingDelay: number;
-    /** Seconds a loading screen that showed stays at least. Default 0.3. */
-    static minLoadingTime: number;
-    /**
-     * Seconds of loading after which the scene's pending assets are logged
-     * once, each named: the file that hangs. Default 10; 0 never.
-     */
-    static slowLoadWarning: number;
-    /**
-     * Seconds after which a scene that has not loaded fails like a missing
-     * file (`onError`, or thrown from the next update) with a
-     * `Scene.TimeoutError` listing what was still loading. `timeout` in
-     * the request's options overrides it. Default 0: never.
-     */
-    static loadTimeout: number;
-    /**
-     * Called when a scene cannot load (a missing file): the current scene
-     * stays. The error names the request and scene (`"Scene.go(Level1):
-     * cannot load image 'x.png'"`), with the original as `cause`. Without
-     * it, the error is thrown from the next `update`, which stops the Loop.
-     */
-    static onError: ((error: Error, SceneClass: (new (params?: any) => Scene) | null) => void) | null;
-}
-
-declare namespace Scene {
-    /** A path, or the path with options. */
-    type Spec<T = {}> = string | ({ path: string } & T);
-
-    interface ImageSpec {
-        /** When the texture goes to VRAM: at first draw (default), now, or now and locked. */
-        upload?: "draw" | "bind" | "lock";
-        /** Same as `upload: "lock"`. */
-        lock?: boolean;
-        /** ImageList priority. */
-        priority?: number;
+declare namespace Physics3D {
+    /** Default attachLoop() priority: before Collision3D characters (-50) and Scene3D (0). */
+    const LOOP_PRIORITY: number;
+    const MAX_BODIES: number;
+    const MAX_JOINTS: number;
+    type Vec3 = [number, number, number] | Float32Array;
+    interface WorldOptions {
+        /** Default [0, -9.81, 0]. */
+        gravity?: Vec3;
+        /** Velocity iterations per substep, 1..64. Default 8. */
+        iterations?: number;
+        /** Layers of the level's triangles that bodies hit. Default -1. */
+        staticMask?: number;
     }
-
-    /**
-     * What a scene needs, by kind and name: `assets.images.hero` and so on.
-     * Built-in kinds:
-     * - `images`: `Image`, through an ImageList with a decoder thread;
-     * - `sheets`: `Sprite.Sheet`, from a `.json` (Aseprite, TexturePacker)
-     *   or an image with the options of `Sprite.Sheet.fromGrid()`;
-     * - `sfx`: `Sound.Sfx`; `music`: `Sound.Stream` (`{ path, loop }`);
-     * - `fonts`: `Font` (`{ path, size, preload }`);
-     * - `data`: a JSON file, parsed; `text`: a string; `binary`: an
-     *   ArrayBuffer. Read on the job pool with `Thread.readFileAsync()`
-     *   (`data` and `text` fall back to `std.loadFile()` without Thread).
-     *   JSON is parsed on the script thread (objects can only be built
-     *   there): keep data files small, or split a large level.
-     * `Scene.Assets.define()` adds kinds.
-     */
-    interface Manifest {
-        images?: Record<string, Spec<ImageSpec>>;
-        sheets?: Record<string, Spec<Record<string, any>>>;
-        sfx?: Record<string, Spec>;
-        music?: Record<string, Spec<{ loop?: boolean }>>;
-        fonts?: Record<string, Spec<{ size?: number; preload?: boolean | string }>>;
-        data?: Record<string, Spec>;
-        text?: Record<string, Spec>;
-        binary?: Record<string, Spec>;
-        [kind: string]: Record<string, Spec<any>> | undefined;
+    interface BodyOptions {
+        /** Default "dynamic". Kinematic bodies move by their velocity and
+         * push dynamic ones; static ones do not move. */
+        type?: "dynamic" | "kinematic" | "static";
+        /** Spheres and capsules. Default 0.5. */
+        radius?: number;
+        /** Capsules: half the length of the segment along the local y axis,
+         * caps excluded (total height 2 * (halfHeight + radius)). Default 0.5. */
+        halfHeight?: number;
+        /** Boxes. Default [0.5, 0.5, 0.5]. */
+        halfExtents?: Vec3;
+        /** Dynamic bodies. Default 1. */
+        mass?: number;
+        position?: Vec3;
+        /** Quaternion x, y, z, w. Default identity. */
+        rotation?: [number, number, number, number] | Float32Array;
+        velocity?: Vec3;
+        angularVelocity?: Vec3;
+        /** Default 0.5; pairs use the geometric mean. */
+        friction?: number;
+        /** 0..1, default 0; pairs use the larger. */
+        restitution?: number;
+        /** Spheres and capsules: rolling resistance (times the radius), so
+         * they stop rolling. Default 0.02. */
+        rollingFriction?: number;
+        /** In 1/s. Defaults 0.05 and 0.1. */
+        linearDamping?: number;
+        angularDamping?: number;
+        /** Bodies collide when each mask has the other's layer. Default 1 and -1. */
+        layer?: number;
+        mask?: number;
     }
-
-    /** What a transition's draw gets, besides the amount of screen to cover (0..1). */
-    interface TransitionInfo {
-        /** "out" while the amount rises, "hold" while loading, "in" while it falls. */
-        phase: "out" | "hold" | "in";
-        color: number;
-        width: number;
-        height: number;
-        direction: "left" | "right" | "up" | "down";
+    class World {
+        /** statics: the level, or null. */
+        constructor(statics?: Collision3D.World | null, options?: WorldOptions);
+        addSphere(options?: BodyOptions): Body;
+        addBox(options?: BodyOptions): Body;
+        /** An upright capsule (local y axis); rotate it with `rotation`. */
+        addCapsule(options?: BodyOptions): Body;
+        /** Advances by dt; returns the substeps run. */
+        step(dt: number): number;
+        setGravity(x: number, y: number, z: number): this;
+        readonly bodyCount: number;
+        /** Contacts solved in the last substep. */
+        readonly contactCount: number;
+        readonly jointCount: number;
+        /** Microseconds spent in the last step(), by phase. */
+        readonly profile: { collide: number; prepare: number; solve: number; integrate: number; substeps: number };
+        /** The anchor points of a and b stay together (b null: the world).
+         * Points and axes are in world space at creation. */
+        addBallJoint(a: Body, b: Body | null, anchor: Vec3): Joint;
+        /** A ball joint that only turns about axis; limits in radians from
+         * the creation pose, a motor driving the relative angular speed. */
+        addHingeJoint(a: Body, b: Body | null, anchor: Vec3, axis: Vec3, options?: {
+            lower?: number; upper?: number; motorSpeed?: number; maxMotorTorque?: number }): Joint;
+        /** Keeps anchorA (on a) and anchorB (on b) at length (default: the
+         * current distance); a rope only stops them from moving apart. */
+        addDistanceJoint(a: Body, b: Body | null, anchorA: Vec3, anchorB: Vec3, options?: {
+            length?: number; rope?: boolean }): Joint;
+        /** Keeps the relative position and rotation of the creation pose. */
+        addWeldJoint(a: Body, b: Body | null, anchor: Vec3): Joint;
+        /** One native POST_UPDATE system stepping this world; idempotent. */
+        attachLoop(priority?: number): this;
+        detachLoop(): boolean;
+        readonly attached: boolean;
+        /** Detaches it; its bodies are removed when no handle keeps the world. */
+        dispose(): void;
     }
-
-    type TransitionDraw = (amount: number, info: TransitionInfo) => void;
-
-    interface TransitionOptions {
-        /**
-         * Default "none". "fade" blends `color` over the switch; "wipe" slides
-         * a band of it across (see `direction`); a name from
-         * `Scene.defineTransition()`, or `{ draw(amount, info) }` drawn in
-         * screen space.
-         */
-        transition?: "none" | "fade" | "wipe" | string | { draw: TransitionDraw };
-        /** Seconds of the whole transition, out and in. Default 0.4. */
-        duration?: number;
-        /** Transition color (`Color.new()`); default black. */
-        color?: number;
-        /** The way a wipe's edge moves. Default "left". */
-        direction?: "left" | "right" | "up" | "down";
+    /** Removed with either of its bodies. At least one body is dynamic.
+     * Bodies joined by a joint do not collide with each other. */
+    class Joint {
+        private constructor();
+        readonly type: "ball" | "hinge" | "distance" | "weld";
+        readonly alive: boolean;
+        /** Hinges: the angle of a relative to b about the axis (last step). */
+        readonly angle: number;
+        /** Hinges: lower <= upper, radians. */
+        setLimits(lower: number, upper: number): this;
+        disableLimits(): this;
+        /** Hinges: target relative angular speed (rad/s) with at most
+         * maxTorque; maxTorque 0 turns the motor off. */
+        setMotor(speed: number, maxTorque: number): this;
+        remove(): void;
+        dispose(): void;
     }
-
-    interface RequestOptions {
-        /** Seconds the scene may take to load; see `Scene.loadTimeout`. */
-        timeout?: number;
-    }
-
-    interface GoOptions extends TransitionOptions, RequestOptions {
-        /** Given to the scene's constructor, `static assets(params)` and `enter()`. */
-        params?: any;
-        /**
-         * Exits and releases the old scenes before loading the new one: for
-         * scenes that do not fit in memory together (shared assets reload).
-         */
-        unloadFirst?: boolean;
-    }
-
-    interface PushOptions extends TransitionOptions, RequestOptions {
-        params?: any;
-        /** The scenes below keep being drawn. Default true. */
-        drawBelow?: boolean;
-        /** The scenes below keep being updated. Default false. */
-        updateBelow?: boolean;
-    }
-
-    interface PopOptions extends TransitionOptions {
-        /** Given to the `resume()` of the scene below. */
-        result?: any;
-    }
-
-    interface LoadingInfo {
-        scene: (new (params?: any) => Scene) | null;
-        loaded: number;
-        total: number;
-    }
-
-    interface LoadOptions {
-        /** Directory the paths are relative to. */
-        root?: string;
-        /**
-         * Seconds to wait: past it the group fails (or `load()` rejects) with
-         * a `TimeoutError`. The loads themselves go on, and are freed when
-         * they end if nobody holds them.
-         */
-        timeout?: number;
-    }
-
-    /** What a timeout rejects with: `name` "TimeoutError", `code` "TIMEOUT". */
-    interface TimeoutError extends Error {
-        code: "TIMEOUT";
-        /** What was still loading. */
-        pending: { kind: string; name: string; path: string; state: string }[];
-    }
-
-    /** Assets of a manifest acquired together (`Scene.Assets.acquire()`). */
-    interface AssetGroup {
-        /** What is still loading. */
-        pending(): { kind: string; name: string; path: string; state: string }[];
-        /** The manifest's names with the loaded values. */
-        readonly assets: any;
-        readonly loaded: number;
-        readonly total: number;
-        /** 0..1. */
-        readonly progress: number;
-        readonly done: boolean;
-        readonly failed: boolean;
-        readonly error: Error | null;
-        /** Resolves with `assets`, or rejects with the first error. */
-        readonly ready: Promise<any>;
-        /** Lets go of every asset; each is freed once nobody else holds it. */
-        release(): void;
-    }
-
-    interface Loader<T = any> {
-        /** Applies what a later holder of a cached asset asks for (images: a lock). */
-        reuse?(asset: T, spec: any): void;
-        /** Loads the asset: the value, or a promise (a Job) of it. */
-        load(path: string, spec: any): T | PromiseLike<T>;
-        /**
-         * Releases it once nobody holds it. Asked for while a frame is being
-         * drawn, it runs at the start of the next frame (the frame's GS
-         * packet may still use the asset).
-         */
-        free(asset: T, spec: any): void;
-        /** Tells apart loads of one path with different options (e.g. a font size). */
-        key?(path: string, spec: any): string;
-    }
-
-    namespace Assets {
-        /** Milliseconds of ImageList work per frame while images load. Default 4. */
-        let budgetMs: number;
-        /**
-         * Seconds without images to load before the ImageList's decoder
-         * thread (and its stack) closes; it opens again when needed. Default 5.
-         */
-        let imageListIdleTime: number;
-        /** Acquires every asset of a manifest; release the group when done. A string option is the root. */
-        function acquire(manifest: Manifest, options?: string | LoadOptions): AssetGroup;
-        /** One asset; release it with `release(asset)`. A string option is the root. */
-        function load<T = any>(kind: string, spec: Spec<any>, options?: string | LoadOptions): Promise<T>;
-        /**
-         * Releases one hold of an asset from `load()`; false if it is not
-         * held. A load released before it ends keeps running and is reused if
-         * the asset is asked for again (queued images are cancelled).
-         */
-        function release(asset: object): boolean;
-        /** The same, by the kind and spec it was loaded with: for strings (`text`). */
-        function release(kind: string, spec: Spec<any>, root?: string): boolean;
-        /** A new kind of asset for manifests. */
-        function define(kind: string, loader: Loader): void;
-        /**
-         * For `Debug.watch()`: held assets, still loading, holders, by kind,
-         * and frees waiting for the next frame.
-         */
-        function stats(): { entries: number; loading: number; refs: number; byKind: Record<string, number>;
-            pendingFrees: number; imageListOpen: boolean };
-        /** Every held asset, for finding leaks. */
-        function list(): { kind: string; path: string; refs: number; state: string }[];
-        /**
-         * The ImageList work, deferred frees and idle close of a frame `dt`
-         * seconds long, for games without `Loop.run()`.
-         */
-        function update(dt?: number): void;
+    class Body {
+        private constructor();
+        readonly x: number;
+        readonly y: number;
+        readonly z: number;
+        vx: number; vy: number; vz: number;
+        /** Angular velocity, rad/s. */
+        wx: number; wy: number; wz: number;
+        readonly type: "dynamic" | "kinematic" | "static";
+        readonly sleeping: boolean;
+        /** False once removed from its world. */
+        readonly alive: boolean;
+        /** Quaternion [x, y, z, w]; fills out when given. */
+        getRotation(out?: number[] | Float32Array): number[];
+        setPosition(x: number, y: number, z: number): this;
+        setRotation(x: number, y: number, z: number, w: number): this;
+        setVelocity(x: number, y: number, z: number): this;
+        setAngularVelocity(x: number, y: number, z: number): this;
+        /** Mass * velocity, at a world point (default the centre). */
+        applyImpulse(x: number, y: number, z: number, px?: number, py?: number, pz?: number): this;
+        /** For the next step only. */
+        applyForce(x: number, y: number, z: number): this;
+        wake(): this;
+        /** A node whose position and rotation follow the body; null unbinds. */
+        bind(node: Scene3D.Node | null): this;
+        /** Takes the body out of its world. */
+        remove(): void;
+        /** remove(), and drops this handle. */
+        dispose(): void;
     }
 }
 
 
-/* === Module: Sound (sound) === */
+/* === Module: Replay (replay) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=replay,... */
 /**
- * Audio through audsrv: short ADPCM sound effects on the 24 SPU2 voices and
- * one streamed music track (WAV or Ogg Vorbis).
+ * Frame-by-frame recording and playback of controller input.
  *
- * There is nothing to enable: the audsrv and libsd IOP drivers are loaded the
- * first time a sound is created or played. `audsrv = true` in athena.ini is
- * still accepted and loads them at boot instead.
+ * Record: capture the inputs once per update step and let the game read the
+ * recorder's sources, which hold the values exactly as stored (sticks
+ * quantized to 1/127, pressure to 1/255 when recorded with `pressure: true`). Play back: read a Playback's sources instead and
+ * call advance() once per step. Seed the game's generators with `seed` in
+ * both runs, use a fixed step, and the game repeats itself (PCSX2 runs are
+ * deterministic), which turns a bug or a benchmark path into a file.
  *
- * Streams:
- * - one plays at a time; `play()` on another stream replaces it (there is no
- *   crossfade: audsrv has a single stream voice);
- * - WAV (PCM 8/16/24/32-bit or 32-bit float) and Ogg Vorbis, mono or stereo,
- *   1 to 192 kHz. What audsrv cannot play as is (e.g. 16 kHz, 8-bit stereo,
- *   float) is converted on the EE while it plays; see `converted`;
- * - `pause()` keeps the position heard, so `play()` resumes exactly there;
- * - seeking, or switching to a stream of the same format, has no gap: the
- *   new audio follows the ~0.1 s audsrv already holds (other formats pause
- *   ~0.15 s while audsrv is reconfigured);
- * - `play`, `pause` and `stop` take `{ fade: ms }` for smooth fades;
- * - a reader thread decodes up to 0.5 s ahead, so slow storage (USB, disc)
- *   does not interrupt the music; the frame loop only has to keep calling
- *   `Screen.flip()` (or otherwise block) for audio to flow;
- * - `onEnd`/`onLoop` run inside `Sound.process()`; call it once per frame.
+ * Not in the default build: `node tools/modules.js configure --modules=replay,...`
  *
- * Sound effects:
- * - `.adp` files with an APCM header, made with `make adp ADP_DIR=...` or `node tools/wav2adp.js`
- *   (or `adpenc`; `-L` for a looping sample). Files that would make the
- *   SPU2 play past their end are refused (`CORRUPT`);
- * - uploaded to SPU2 RAM (~2 MiB shared by every sample, see
- *   `getMemoryStats()`) and freed with `free()` or by the garbage collector;
- * - `loadSfxAsync()` reads the file on a worker thread, so a big sample
- *   does not stall the frame;
- * - after `IOP.reset()` a sample is uploaded again from its file the next
- *   time it plays.
- *
- * Failures throw with a stable `error.code` (see `ErrorCode`): `TypeError`
- * for wrong argument types, `RangeError` for values out of range,
- * `InternalError` for I/O, format or IOP failures.
- *
- * @example
+ * Example:
  * ```js
- * const music = new Sound.Stream("music/theme.ogg");
- * music.loop = true;
- * music.onLoop = () => console.log("theme looped");
- * music.play({ fade: 1000 });
+ * const rec = new Replay.Recorder([Gamepad.player(0)], { seed: 1234 });
+ * Random.seed(rec.seed);
+ * controls.setSource(rec.source(0));
+ * // every step: Gamepad.update(); rec.capture(); controls.update(); ...
+ * rec.save("host:bug42.rpl");
  *
- * const jump = new Sound.Sfx("sfx/jump.adp");
- * jump.volume = 80;
- * jump.pan = -30;
+ * const play = Replay.load("host:bug42.rpl");
+ * Random.seed(play.seed);
+ * controls.setSource(play.source(0));
+ * // every step: if (!play.advance()) Loop.stop(); controls.update(); ...
+ * ```
+ */
+declare namespace Replay {
+    const MAX_PLAYERS: 8;
+    interface Source {
+        connected: boolean; buttons: number; leftX: number; leftY: number; rightX: number; rightY: number;
+        /** True when the recording stores pressure. */
+        readonly hasPressure: boolean;
+        /** 0..1 (quantized to 1/255 when stored); 1 while the button is held when pressure was not stored, 0 when released. */
+        pressure(button: number): number;
+    }
+    class Recorder {
+        /** inputs default to Gamepad player 0. seed: u32 stored in the file; maxFrames default 216000 (1 h at 60 Hz). */
+        constructor(inputs?: Input.Source[], options?: { seed?: number; maxFrames?: number; pressure?: boolean });
+        /** Whether button pressure is recorded (file version 2, 18 bytes per player per frame instead of 6). */
+        readonly pressure: boolean;
+        readonly seed: number;
+        readonly frames: number;
+        /** The stored (quantized) snapshot of input i, updated by capture(). */
+        source(index?: number): Source;
+        /** Records one frame; false once maxFrames is reached. */
+        capture(): boolean;
+        toArrayBuffer(): ArrayBuffer;
+        /** Writes the file; returns its size. */
+        save(path: string): number;
+    }
+    class Playback {
+        constructor(data: ArrayBuffer);
+        readonly seed: number;
+        readonly frames: number;
+        readonly players: number;
+        /** File version read: 1 (no pressure) or 2. */
+        readonly version: number;
+        readonly pressure: boolean;
+        /** Frames played so far. */
+        readonly frame: number;
+        readonly done: boolean;
+        source(index?: number): Source;
+        /** Loads the next frame into the sources; false when the recording ended (sources released). */
+        advance(): boolean;
+        restart(): this;
+    }
+    function load(path: string): Playback;
+}
+
+
+/* === Module: SaveGame (savegame) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=savegame,... */
+/**
+ * Versioned, checksummed save slots on the Memory Card.
  *
- * const pad = Gamepad.player(0);
- * Loop.run(() => {
- *     Gamepad.update();
- *     if (pad.justPressed(Gamepad.CROSS)) jump.play();
- *     if (pad.justPressed(Gamepad.START)) music.playing() ? music.pause({ fade: 300 }) : music.play();
- *     Sound.process();
+ * `define()` once, then `await save(slot, data)` and `await load(slot)`:
+ * data is any JSON-able value, written atomically on a worker thread (a
+ * failed or interrupted save keeps the previous one), with a CRC-32, the
+ * game's data version and, when the Archive module is in the build, gzip.
+ * Older saves go through `migrate()`; newer ones are refused.
+ *
+ * Errors are `SaveGame.Error` with a `code`: the Memory Card codes
+ * (NO_CARD, UNFORMATTED, FULL, ...) plus CORRUPT, NEWER_VERSION,
+ * OLD_VERSION (no migrate), NOT_DEFINED, NOT_AVAILABLE, INVALID_ARGUMENT.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=savegame,...`
+ *
+ * Example:
+ * ```js
+ * SaveGame.define({ directory: "MYGAME", title: "My Game", icon: "assets/icon.ico", version: 2,
+ *     migrate: (data, from) => (from === 1 ? { ...data, coins: 0 } : data) });
+ * await SaveGame.save(0, { level: 3, coins: 120, bindings: controls.bindings() });
+ * const data = await SaveGame.load(0);   // null when empty
+ * ```
+ */
+declare namespace SaveGame {
+    type Slot = number | string;
+    interface Error extends globalThis.Error {
+        code: MemoryCard.ErrorCode | "CORRUPT" | "NEWER_VERSION" | "OLD_VERSION" | "NOT_DEFINED" | "NOT_AVAILABLE";
+        cause?: unknown;
+    }
+    interface Options {
+        /** Card folder, 1-31 characters. */
+        directory: string;
+        /** Browser title, up to 33 characters; one "\n" splits two lines. */
+        title: string;
+        /** .ico path or bytes; without it no icon.sys is written (the PS2 browser will not list the save). */
+        icon?: string | ArrayBuffer;
+        /** Data version, default 1. */
+        version?: number;
+        /** Upgrades data saved by an older version. */
+        migrate?(data: any, fromVersion: number): any;
+        /** gzip when Archive is in the build (default true). */
+        compress?: boolean;
+        port?: 0 | 1;
+    }
+    function define(options: Options): void;
+    /** Slot 0-99 or a name (1-20 letters, digits, _ or -). Resolves with the bytes written. */
+    function save(slot: Slot, data: unknown, options?: { title?: string; compress?: boolean }): Promise<number>;
+    /** The (migrated) data, or null for an empty slot. */
+    function load<T = any>(slot: Slot): Promise<T | null>;
+    /** Resolves with whether the slot existed. */
+    function remove(slot: Slot): Promise<boolean>;
+    /** Blocks for one card access. */
+    function exists(slot: Slot): boolean;
+    /** Saved slots (blocks for one card listing). */
+    function list(): { slot: Slot; size: number; modified: number }[];
+    function status(): { port: 0 | 1; connected: boolean; formatted: boolean; freeBytes: number };
+    /** The bytes save() writes / the data from them (for tools and tests). */
+    function encode(data: unknown, options?: { compress?: boolean }): ArrayBuffer;
+    function decode(bytes: ArrayBuffer): any;
+    function crc32(bytes: Uint8Array): number;
+}
+
+
+/* === Module: Sky (sky) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=sky,... */
+/**
+ * Sky and time of day for outdoor scenes.
+ *
+ * `draw(camera)` paints the sky in screen space before the 3D scene: a
+ * vertical gradient from the ground colour through the horizon to the
+ * zenith, by the elevation of the camera ray through each band (camera
+ * roll is ignored), and the sun as a disc with a halo. There is no geometry
+ * around the camera, so nothing goes to the clipper. `setTime(hours)`
+ * blends built-in keyframes (night, dawn, day, dusk) into the colors and
+ * the sun, and `apply(lights)` writes the matching ambient, the sun (or
+ * moon) as directional slot 0 and the horizon as fog colour. Colors are
+ * linear [r, g, b] in [0, 1].
+ *
+ * `tint()` is the matching day/night RGB multiplier (white at noon, dark blue
+ * at night). Lights only darken DIFFUSE materials; for UNLIT meshes and Voxel
+ * baked light call `Render3D.setTint(...Sky.tint())` before drawing them (and
+ * restore white after): Sky does not touch Render3D itself. Not in the default build: `node tools/modules.js configure --modules=sky,...`
+ *
+ * Example:
+ * ```js
+ * let hours = 6;
+ * Loop.run({
+ *     update(dt) { hours += dt / 10; Sky.setTime(hours); Sky.apply(lights); },
+ *     draw() {
+ *         Screen.clear(Sky.clearColor());
+ *         Sky.draw(camera);
+ *         Render3D.setTint(...Sky.tint());
+ *         scene.draw(camera, Render3D.CULL_BACK, lights);
+ *         Render3D.setTint(1, 1, 1);
+ *     },
  * });
  * ```
  */
-declare namespace Sound {
-    type ErrorCode =
-        | 'INVALID_ARGUMENT'
-        /** The file could not be opened. */
-        | 'NOT_FOUND'
-        | 'IO'
-        /** Not a WAV/OGG/APCM file, or an encoding that cannot be played. */
-        | 'BAD_FORMAT'
-        /** ADPCM data the SPU2 would play past its end (truncated file). */
-        | 'CORRUPT'
-        | 'NO_MEMORY'
-        /** Not enough SPU2 memory (or IOP heap) for the sample; see getMemoryStats(). */
-        | 'SPU_MEMORY'
-        /** audsrv could not be loaded or started on the IOP. */
-        | 'IOP'
-        /** The streaming thread could not be started. */
-        | 'THREAD'
-        /** Sfx.pitch, or assigning Sfx.loop. */
-        | 'UNSUPPORTED'
-        /** The object was used after free(). */
-        | 'FREED'
-        /** The loadSfxAsync() job was cancelled. */
-        | 'CANCELLED';
-
-    interface Error {
-        code: ErrorCode;
-        message: string;
-    }
-
-    /** SPU2 sample memory in bytes. */
-    interface MemoryStats {
-        /** Sample memory in SPU2 RAM (~2 MiB). */
-        total: number;
-        /** From the start of sample memory to the end of the last sample. */
-        used: number;
-        /** After the last sample: the largest sample that still fits. */
-        free: number;
-        /**
-         * Freed but not reusable yet: audsrv only reclaims memory at the end,
-         * so a sample freed before later ones leaves a hole until those are
-         * freed too. Load long-lived samples first.
-         */
-        wasted: number;
-        /** Samples loaded. */
-        samples: number;
-    }
-
-    interface FadeOptions {
-        /** Milliseconds, 0 to 60000. Default 0 (immediate). */
-        fade?: number;
-    }
-
-    /** Number of SPU2 voices available to sound effects (24). */
-    const CHANNELS: number;
-
-    /** Sets the music stream volume, an integer from 0 to 100 (default 100). */
-    function setVolume(volume: number): void;
-    /** Music stream volume set with `setVolume()`. */
-    function getVolume(): number;
-    /**
-     * Scales every sound effect's volume, 0 to 100 (default 100). Voices
-     * still sounding follow at once.
-     */
-    function setSfxVolume(volume: number): void;
-    function getSfxVolume(): number;
-    /** A channel (0-23) no sound effect is playing on, or -1 if all are busy. */
-    function findChannel(): number;
-    /** SPU2 sample memory use. */
-    function getMemoryStats(): MemoryStats;
-    /**
-     * Runs the `onLoop`/`onEnd` callbacks of streams that looped or ended
-     * since the last call, each at most once per call, and returns how many
-     * ran. An exception thrown by a callback propagates.
-     */
-    function process(): number;
-
-    /**
-     * A `loadSfxAsync()` job (see `AthenaJob`): await it, or `poll()` it.
-     * Dropping it cancels the job (and frees the sample if nobody took it).
-     */
-    interface Job<T> extends AthenaJob<T, JobStatus<T>> {
-        readonly __brand: 'SoundJob';
-    }
-
-    type JobState = 'running' | 'done' | 'failed' | 'cancelled';
-
-    interface JobStatus<T> {
-        state: JobState;
-        /** When `state` is `'done'`. The same object on every later poll. */
-        result?: T;
-        /** When `state` is `'failed'` or `'cancelled'`. */
-        error?: Error;
-    }
-
-    /**
-     * Starts loading a sound effect: a worker thread reads and checks the
-     * file while the frame loop runs, then the `poll()` that sees it read
-     * uploads it to SPU2 memory (a short DMA, on the script thread).
-     *
-     * @example
-     * ```js
-     * const job = Sound.loadSfxAsync("sfx/explosion.adp");
-     * // each frame:
-     * const status = Sound.poll(job);
-     * if (status.state === "done") boom = status.result;
-     * ```
-     */
-    function loadSfxAsync(path: string): Job<Sfx>;
-    /** The job's state without blocking; uploads the sample once it was read. */
-    function poll<T>(job: Job<T>): JobStatus<T>;
-    /**
-     * Blocks until the job is no longer running or `timeoutMs` passes
-     * (default: no limit), letting other threads run meanwhile, then
-     * returns `poll(job)`.
-     */
-    function wait<T>(job: Job<T>, timeoutMs?: number): JobStatus<T>;
-    /** The job ends as `'cancelled'` unless it already finished. */
-    function cancel(job: Job<unknown>): void;
-
-    /** A WAV or Ogg Vorbis file streamed from storage while it plays. */
-    class Stream {
-        /** Opens `path`; also callable without `new`. Does not start playback. */
-        constructor(path: string);
-        /**
-         * Starts, or resumes from `position`. Stops the stream that was
-         * playing. With `fade` it starts silent and rises to full volume;
-         * during a fade-out it cancels the fade.
-         */
-        play(options?: FadeOptions): void;
-        /**
-         * Pauses at the position heard. With `fade` it keeps playing (and
-         * `playing()` stays true) until the fade-out ends.
-         */
-        pause(options?: FadeOptions): void;
-        /** Pauses and rewinds to the start, after the fade-out if any. */
-        stop(options?: FadeOptions): void;
-        /** True from `play()` until paused, stopped, or its last sample is heard. */
-        playing(): boolean;
-        /** Moves to the start; keeps playing if it was. */
-        rewind(): void;
-        /** Closes the file. Using the object afterwards throws `FREED`. */
-        free(): void;
-        /** Restart from the beginning at the end instead of stopping. */
-        loop: boolean;
-        /**
-         * Playback position heard, in milliseconds; assigning seeks (clamped
-         * to 0..length). Right after a seek it reads the target, and starts
-         * moving once the new audio is heard (~0.1 s later).
-         */
-        position: number;
-        /**
-         * Called by `Sound.process()` after the stream's last sample was
-         * heard (without `loop`); `this` is the stream.
-         */
-        onEnd: ((this: Stream) => void) | null;
-        /** Called by `Sound.process()` after a looping stream was heard wrapping around. */
-        onLoop: ((this: Stream) => void) | null;
-        /**
-         * The stream's last sample was heard (without `loop`); cleared by
-         * `play()`, a seek or `rewind()`.
-         */
-        readonly ended: boolean;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate of the file in Hz. */
-        readonly rate: number;
-        /** 1 (mono) or 2 (stereo). */
-        readonly channels: number;
-        readonly format: 'wav' | 'ogg';
-        /**
-         * audsrv cannot play the file's format, so it is converted to 16-bit
-         * at a supported rate on the EE (a little CPU while playing).
-         */
-        readonly converted: boolean;
-    }
-
-    /** An ADPCM sample resident in SPU2 memory. */
-    class Sfx {
-        /** Loads and uploads `path` (.adp); also callable without `new`. */
-        constructor(path: string);
-        /**
-         * Plays on `channel` (0-23), or on any free channel when omitted.
-         * Returns the channel used, or -1 when that channel (or every channel)
-         * is busy. The volume and pan are applied to the channel first.
-         */
-        play(channel?: number): number;
-        /**
-         * Whether this sample is still playing on `channel`. A looping
-         * sample plays until `stop()`, `free()` or `IOP.reset()`.
-         */
-        playing(channel: number): boolean;
-        /**
-         * Silences this sample on `channel`, or on every channel it plays on.
-         * audsrv cannot key a voice off, so it is muted: `playing()` turns
-         * false at once and the channel is free for the next `play()`.
-         */
-        stop(channel?: number): void;
-        /**
-         * Releases the SPU2 memory. Using the object afterwards throws.
-         * Voices still playing this sample are stopped as with `stop()`.
-         */
-        free(): void;
-        /** 0 to 100, applied on the next `play()`. Default 100. */
-        volume: number;
-        /** -100 (left) to 100 (right), applied on the next `play()`. Default 0. */
-        pan: number;
-        /** Whether the sample was encoded to loop (`wav2adp -L`); read-only. */
-        readonly loop: boolean;
-        /**
-         * Always 0. audsrv plays samples at the rate they were encoded with;
-         * assigning throws `UNSUPPORTED`.
-         */
-        readonly pitch: number;
-        /** Duration in milliseconds. */
-        readonly length: number;
-        /** Sample rate in Hz. */
-        readonly rate: number;
-    }
+declare namespace Sky {
+    type RGB = [number, number, number];
+    function setColors(colors: { zenith?: RGB; horizon?: RGB; ground?: RGB }): void;
+    /** Direction toward the sun (normalized); color black hides the disc; size: radius in pixels (default 18). */
+    function setSun(dx: number, dy: number, dz: number, options?: { color?: RGB; size?: number }): void;
+    /** Hours (wrapped to 0..24): colors, sun direction and color, light colors. */
+    function setTime(hours: number): void;
+    /** Ambient, directional slot 0 and (with fog on in lights, unless fog: false) the fog colour. */
+    function apply(lights: Lights.Set, options?: { fog?: boolean }): void;
+    /** Draws the gradient (1-64 bands, default 16) and the sun; returns the bands drawn. */
+    function draw(camera: Camera3D.Camera, bands?: number): number;
+    /** Sky color of a ray at an elevation in radians. */
+    function colorAt(elevation: number): RGB;
+    /** The horizon as a Color.new() value, for Screen.clear(). */
+    function clearColor(): number;
+    /** Day/night RGB multiplier in [0, 1] for Render3D.setTint(). */
+    function tint(): RGB;
+    function state(): { time: number; zenith: RGB; horizon: RGB; ground: RGB; sunDirection: RGB; sunColor: RGB;
+        ambient: RGB; light: RGB; lightDirection: RGB; tint: RGB };
 }
 
 
@@ -6278,8 +8604,17 @@ declare namespace Sprite {
      * `positions[2 * i + 1]` place instance i (and become its x and y);
      * without positions each draws at its own x and y. Rotated instances are
      * drawn one by one, keeping the order.
+     *
+     * With `{ stride: 3 }` the values are x, y and rotation per instance: the
+     * layout of Box2D's `world.readTransforms()`, so physics sprites need no
+     * loop in JavaScript:
+     * ```js
+     * world.readTransforms(bodies, transforms);
+     * Sprite.drawAll(crates, transforms, { stride: 3 });
+     * ```
      */
-    function drawAll(instances: Instance[], positions?: Float32Array | number[]): void;
+    function drawAll(instances: Instance[], positions?: Float32Array | number[],
+        options?: { stride?: 2 | 3 }): void;
 
     /**
      * Draws the outline, origin and slices of every instance drawn from
@@ -6347,6 +8682,118 @@ declare namespace Timer {
 
     /** Releases the native timer. Do not use `timer` afterwards. */
     function destroy(timer: Handle): void;
+}
+
+
+/* === Module: Triggers3D (triggers3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=triggers3d,... */
+/**
+ * Trigger volumes: checkpoints, doors, damage zones, music changes, area
+ * loading. Zones (boxes and spheres) report bodies (spheres; radius 0 is a
+ * point) that enter and leave them. `update()` tests every pair in C and
+ * runs JavaScript only for the changes. A zone reacts to the bodies whose
+ * `layers` share a bit with its `mask`. Zones and bodies can follow a
+ * Scene3D node: they use its world position of the last scene update, so
+ * call `update()` after `scene.update()` (or let the attached Loop update the
+ * scene first).
+ *
+ * Stay: `onStay(body, zone)` (opt-in per zone by passing or assigning a function, or world-wide with
+ * `world.onStay`) runs every update for each body that was already inside at the previous update and
+ * still is; a body that enters in an update gets ENTER only, STAY from the next one. Per update the
+ * callbacks run in this order: every ENTER/EXIT (by zone id, then body id), then every STAY (same order).
+ * Each STAY is one JavaScript call, so opt in only the zones that need it.
+ *
+ * Many zones and bodies: `world.setGrid(cellSize)` adds a broad phase (bodies binned by their bounds; each
+ * zone tests only the bodies of the cells it covers; still bodies cost nothing per update; a body that
+ * leaves a zone's neighbourhood still gets its EXIT). Events and their order are identical with and
+ * without it; `world.stats()` shows how many pairs were considered. Not in the default build: `node tools/modules.js configure --modules=triggers3d,...`
+ *
+ * Example:
+ * ```js
+ * const triggers = new Triggers3D.World();
+ * const PLAYER = 1, ENEMY = 2;
+ * const hero = triggers.body(0, 0, 0, { radius: 0.4, layers: PLAYER }).follow(heroNode);
+ * triggers.box(10, 0, -2, 12, 3, 2, { mask: PLAYER, onEnter: () => openDoor() });
+ * triggers.sphere(0, 0, 20, 3, { mask: PLAYER | ENEMY, onEnter: b => hurt(b.data), onExit: b => stopHurt(b.data) });
+ * // each frame, after the scene update:
+ * triggers.update();
+ * ```
+ */
+declare namespace Triggers3D {
+    /** Zones and bodies per world, each. */
+    const MAX: number;
+    interface ZoneOptions {
+        /** Body layers it reacts to (default all bits). */
+        mask?: number;
+        onEnter?(body: Body, zone: Zone): void;
+        onExit?(body: Body, zone: Zone): void;
+        /** Every update while a body stays inside (opt-in). */
+        onStay?(body: Body, zone: Zone): void;
+        data?: any;
+    }
+    class Zone {
+        private constructor();
+        readonly id: number;
+        enabled: boolean;
+        mask: number;
+        onEnter?: (body: Body, zone: Zone) => void;
+        onExit?: (body: Body, zone: Zone) => void;
+        /** Assigning a function turns STAY events on for this zone; undefined turns them off. */
+        onStay?: (body: Body, zone: Zone) => void;
+        data: any;
+        setBox(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): this;
+        setSphere(x: number, y: number, z: number, radius: number): this;
+        /** Moves with the node plus the offset (the shape's coordinates become relative); null stops. Retains the node. */
+        follow(node: Scene3D.Node | null, ox?: number, oy?: number, oz?: number): this;
+        /** As of the last update(). */
+        contains(body: Body): boolean;
+        occupants(): Body[];
+        /** Removes the zone; onExit runs for the bodies inside. */
+        dispose(): void;
+    }
+    class Body {
+        private constructor();
+        readonly id: number;
+        readonly radius: number;
+        layers: number;
+        data: any;
+        setPosition(x: number, y: number, z: number, radius?: number): this;
+        /** The position becomes the node's world position plus the offset; null stops. */
+        follow(node: Scene3D.Node | null, ox?: number, oy?: number, oz?: number): this;
+        /** Removes the body; onExit runs for the zones it was in. */
+        dispose(): void;
+    }
+    class World {
+        constructor();
+        /** Called for every event after the zone's own callbacks. */
+        onEnter?: (zone: Zone, body: Body) => void;
+        onExit?: (zone: Zone, body: Body) => void;
+        /** STAY for every zone, after the zone's own callbacks (opt-in: assigning a function turns it on). */
+        onStay?: (zone: Zone, body: Body) => void;
+        /**
+         * Broad phase: cellSize near the typical zone size; 0 turns it off (default). `capacity` (default 4096)
+         * bounds the body-cell entries: bodies that do not fit, or cover more than 64 cells, are tested against
+         * every zone; zones covering more than 256 cells test every body.
+         */
+        setGrid(cellSize: number, options?: { capacity?: number }): this;
+        /** Of the last update(): pairs considered and tested, events, occupied pairs and grid occupancy. */
+        stats(): { zones: number; bodies: number; candidates: number; tested: number; events: number; stayEvents: number;
+            occupiedPairs: number; dirtyBodies: number; cells: number; entries: number; largeBodies: number; largeZones: number };
+        box(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number, options?: ZoneOptions): Zone;
+        sphere(x: number, y: number, z: number, radius: number, options?: ZoneOptions): Zone;
+        body(x: number, y: number, z: number, options?: { radius?: number; layers?: number; data?: any }): Body;
+        /**
+         * Tests the pairs and runs callbacks; returns events generated (ENTER, EXIT and STAY).
+         * Callbacks may remove/create bodies or zones: pending events for
+         * removed objects are skipped, new objects are tested next update.
+         * Recursive update() throws; callback errors propagate.
+         */
+        update(): number;
+        zones(): Zone[];
+        bodies(): Body[];
+        /** Releases native state and invalidates all its zones/bodies; no exit callbacks. */
+        dispose(): void;
+    }
 }
 
 
@@ -6453,6 +8900,63 @@ declare namespace Tween {
      * advance them twice.
      */
     function update(dt: number, realDt?: number): void;
+}
+
+
+/* === Module: Tween3D (tween3d) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=tween3d,... */
+/** Tweens of native 3D objects advanced in C, with the semantics of Tween:
+ * start values are read when the tween starts (after its delay), the last
+ * frame sets the exact end values, repeat adds cycles and yoyo runs every
+ * other cycle backwards. No JavaScript runs per frame: tweens advance in one
+ * native Loop system (attachLoop(), PRE_UPDATE like Tween) or with advance(dt).
+ * For plain JavaScript objects keep using Tween. */
+declare namespace Tween3D {
+    const LOOP_PRIORITY: number;
+    type Vector3 = ArrayLike<number>;
+    interface Props {
+        /** Node / Instance local position, Camera eye. */
+        position?: Vector3;
+        /** Node / Instance only. */
+        scale?: Vector3;
+        /** Node / Instance only: Euler goal in radians (Rz·Ry·Rx), reached by
+         * slerp on the short arc; overshooting curves extrapolate the arc. */
+        rotation?: Vector3;
+        /** Camera only: look target. */
+        target?: Vector3;
+    }
+    interface Options {
+        /** Curve name, short or long (`"outBack"`, `"easeOutBack"`); default `"outQuad"`. */
+        ease?: string;
+        delay?: number;
+        /** Extra cycles: an integer or Infinity. */
+        repeat?: number;
+        yoyo?: boolean;
+        /** Kills the other tweens of the same target when this one starts. */
+        overwrite?: boolean;
+    }
+    /** Awaitable: resolves with true when the tween completes, false when killed. */
+    interface Handle extends PromiseLike<boolean> {
+        readonly active: boolean;
+        readonly paused: boolean;
+        /** Progress of the current cycle, 0..1. */
+        readonly progress: number;
+        readonly finished: Promise<boolean>;
+        pause(): this;
+        resume(): this;
+        /** Stops it; with complete, sets the end values first. */
+        kill(complete?: boolean): void;
+    }
+    type Target = Scene3D.Node | Model3D.Instance | Camera3D.Camera;
+    /** The tween retains its target (cameras too, after dispose). */
+    function to(target: Target, props: Props, duration: number, options?: Options): Handle;
+    function killTweensOf(target: Target, complete?: boolean): number;
+    function isTweening(target: Target): boolean;
+    /** Advances every tween; returns how many ended. */
+    function advance(dt: number): number;
+    function attachLoop(priority?: number): void;
+    function detachLoop(): boolean;
+    function isAttached(): boolean;
 }
 
 
@@ -6668,4 +9172,173 @@ declare class Video {
     draw(x: number, y: number, options: VideoDrawOptions): void;
     /** Releases the decoder and buffers. The Video cannot be used afterwards. */
     free(): void;
+}
+
+
+/* === Module: Voxel (voxel) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=voxel,... */
+/**
+ * Block worlds in C, for Minecraft-like games, destructible terrain and
+ * voxel-art levels; the game logic stays in JavaScript.
+ *
+ * One byte per block (0 is air, 1-255 are types described by
+ * `setMaterial`). Blocks live in native memory, not in the JavaScript heap.
+ * The world is split into chunks (`chunk` blocks per edge, 4 to 32): editing
+ * marks the chunk (and neighbours at its borders) dirty, and `rebuild()`
+ * meshes dirty chunks within a time budget, nearest to a focus point first.
+ * `draw()` culls chunks by distance and frustum and draws them through
+ * Render3D in one shared pass.
+ *
+ * Meshing "naive" (default) emits every visible face with per-vertex
+ * ambient occlusion and atlas tiles; "greedy" merges equal coplanar faces
+ * into rectangles (far fewer triangles, colors only, no AO). Faces are
+ * shaded by direction (`bakedLight`, UNLIT, cheapest) or lit by Render3D
+ * (`shading: Model3D.DIFFUSE`). Baked light does not follow the time of day:
+ * call `Render3D.setTint(...Sky.tint())` before `draw()` and restore
+ * `Render3D.setTint(1, 1, 1)` after, with no rebuild of the chunks.
+ *
+ * Coordinates are in blocks: block (x, y, z) fills [x, x+1) x [y, y+1) x
+ * [z, z+1). Chunks that surround the camera are clipped in C on the EE
+ * (Render3D `cpuClipObjects`): for first person, prefer `chunk: 8`.
+ *
+ * Not in the default build: `node tools/modules.js configure --modules=voxel,...`
+ *
+ * Example:
+ * ```js
+ * const world = new Voxel.World({ size: [128, 64, 128], chunk: 16 });
+ * world.setMaterial(1, { color: { top: [0.3, 0.7, 0.2], side: [0.45, 0.35, 0.2], bottom: [0.45, 0.35, 0.2] } });
+ * world.setMaterial(2, { color: [0.45, 0.33, 0.2] });     // dirt
+ * world.setMaterial(3, { color: [0.5, 0.5, 0.5] });       // stone
+ * world.generate({ seed: 7, caves: 0.4 });
+ * world.rebuild(0);                                      // everything, once, on a loading screen
+ *
+ * // Each frame:
+ * const hit = world.raycast(camera.screenToRay(320, 224), 6);
+ * if (hit && digPressed) world.set(hit.x, hit.y, hit.z, Voxel.AIR);
+ * world.rebuild(4, player.x, player.y, player.z);
+ * world.draw(camera, Render3D.CULL_BACK, undefined, null, 64);
+ * ```
+ */
+declare namespace Voxel {
+    const AIR: 0;
+    /** Blocks per world (size x * y * z), 16 Mi. */
+    const MAX_BLOCKS: number;
+    /** [r, g, b, a?], linear 0..1. */
+    type RGBA = [number, number, number] | [number, number, number, number];
+    interface Material {
+        /** Blocks movement and rays and hides neighbouring faces (default true). */
+        solid?: boolean;
+        /** Drawn (default true); a solid invisible type is a barrier. */
+        visible?: boolean;
+        /** One color, or per face group. */
+        color?: RGBA | { top?: RGBA; bottom?: RGBA; side?: RGBA };
+        /** Atlas tile index (row by row from the top-left), or per face group; -1 for none. */
+        tile?: number | { top?: number; bottom?: number; side?: number };
+    }
+    interface Style {
+        meshing?: "naive" | "greedy";
+        /** 0 off to 1 strong (default 0.5); naive meshing only. */
+        ambientOcclusion?: number;
+        /** Shade faces by direction (default true). */
+        bakedLight?: boolean;
+        /** Model3D.UNLIT (default) or Model3D.DIFFUSE (adds normals; lit by Render3D lights). */
+        shading?: 0 | 1;
+        /** Texture atlas of square tiles of tileSize pixels (naive meshing only). */
+        atlas?: Model3D.Texture | null;
+        tileSize?: number;
+    }
+    interface Terrain {
+        seed?: number;
+        /** Default 45% and 20% of the world height. */
+        baseHeight?: number;
+        amplitude?: number;
+        /** Cycles per block (default 1/48). */
+        frequency?: number;
+        /** fBm octaves, 1-8 (default 4). */
+        octaves?: number;
+        /** Block types of the surface, the layer under it and the rest (defaults 1, 2, 3). */
+        top?: number; filler?: number; stone?: number;
+        /** Filler layer depth (default 3). */
+        fillerDepth?: number;
+        /** Tunnel caves, 0 (none, default) to <1 (wider). */
+        caves?: number;
+        caveFrequency?: number;
+        /** A water type fills air below waterLevel above the ground. */
+        water?: number; waterLevel?: number;
+    }
+    interface Hit {
+        /** The block hit. */
+        x: number; y: number; z: number;
+        /** Face normal: a new block goes at (x + nx, y + ny, z + nz). Zero when the ray starts inside. */
+        nx: number; ny: number; nz: number;
+        type: number;
+        distance: number;
+        /** Hit point. */
+        px: number; py: number; pz: number;
+    }
+    interface Move {
+        /** Movement applied per axis. */
+        dx: number; dy: number; dz: number;
+        hitX: boolean; hitY: boolean; hitZ: boolean;
+        /** Stopped while moving down. */
+        onGround: boolean;
+    }
+    interface Stats {
+        chunks: number; meshedChunks: number; meshes: number;
+        /** Quads in the meshes. */
+        faces: number;
+        /** Estimated mesh memory. */
+        meshBytes: number;
+        /** Duration of the last rebuild() that did work, and its face generation and Model3D mesh creation parts. */
+        lastRebuildMs: number; lastMeshMs: number; lastBuildMs: number;
+    }
+    class World {
+        /** size: blocks per axis (1-4096, MAX_BLOCKS in total); chunk: 4-32 (default 16). */
+        constructor(options: { size: [number, number, number]; chunk?: number });
+        readonly sizeX: number; readonly sizeY: number; readonly sizeZ: number;
+        readonly chunkSize: number;
+        /** Chunks waiting for rebuild(). */
+        readonly dirtyCount: number;
+        setMaterial(type: number, material: Material): this;
+        setStyle(style: Style): this;
+        /** Air (0) outside the world. */
+        get(x: number, y: number, z: number): number;
+        /** Returns whether the block changed; throws outside the world. */
+        set(x: number, y: number, z: number, type: number): boolean;
+        /** Fills a box (inclusive corners, clamped); returns blocks changed. */
+        fill(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, type: number): number;
+        /** A region's blocks, x fastest, then z, then y (for saving). */
+        read(x: number, y: number, z: number, sizeX: number, sizeY: number, sizeZ: number): Uint8Array;
+        write(x: number, y: number, z: number, sizeX: number, sizeY: number, sizeZ: number, data: Uint8Array): this;
+        /** Replaces the blocks with generated terrain. */
+        generate(terrain?: Terrain): this;
+        /** y above the topmost solid block of a column (0 when empty). */
+        surface(x: number, z: number): number;
+        /**
+         * Meshes dirty chunks until budgetMs passes (default 4; at least
+         * one chunk; 0 rebuilds all), nearest to (x, y, z) first when given.
+         * Returns chunks rebuilt.
+         */
+        rebuild(budgetMs?: number, x?: number, y?: number, z?: number): number;
+        stats<T extends object = Stats>(out?: T): T & Stats;
+        /** DDA through solid blocks within maxDistance (default 8); a Camera3D.Ray works. */
+        raycast<T extends object = Hit>(ray: Camera3D.Ray, maxDistance?: number, out?: T): (T & Hit) | null;
+        /** Moves a box against solid blocks (Y, then X, then Z); returns what it could move. */
+        moveBox<T extends object = Move>(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number,
+            dx: number, dy: number, dz: number, out?: T): T & Move;
+        /** True when the box overlaps a solid block. */
+        boxSolid(minX: number, minY: number, minZ: number, maxX: number, maxY: number, maxZ: number): boolean;
+        /**
+         * Draws meshed chunks within `distance` (default 0: no limit) that
+         * the camera sees. `stats` as in Render3D.draw(): reused, or null
+         * (returns undefined); the totals feed Render3D.frameStats().
+         */
+        draw<T extends object = Render3D.Stats>(camera: Camera3D.Camera, cullMode?: Render3D.CullMode, lights?: Lights.Set,
+            stats?: T, distance?: number): T & Render3D.Stats;
+        draw(camera: Camera3D.Camera, cullMode: Render3D.CullMode | undefined, lights: Lights.Set | undefined,
+            stats: null, distance?: number): undefined;
+        /** Frees every chunk mesh (they rebuild on demand). */
+        clearMeshes(): this;
+        dispose(): void;
+    }
 }

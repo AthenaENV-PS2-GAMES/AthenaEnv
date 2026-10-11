@@ -68,6 +68,21 @@ typedef struct {
 
 void owl_init(void *ptr, size_t size);
 
+#ifndef ATHENA_OWL_DIAGNOSTICS
+#define ATHENA_OWL_DIAGNOSTICS 0
+#endif
+/* Optional transport diagnostics, enabled at build time. Pending waits count
+ * tickets awaiting software confirmation, not measured DMA stall time.
+ * Main-thread snapshots; reset preserves transport/tickets and initializes
+ * the peak from the currently authored packet. Disabled builds return zeros. */
+typedef struct {
+    uint64_t queries,flushes,capacity_flushes,channel_flushes;
+    uint64_t submit_waits,reuse_waits,fence_waits,submitted_qwords;
+    size_t peak_half_qwords;
+} owl_packet_stats;
+void owl_packet_stats_reset(void);
+void owl_packet_stats_read(owl_packet_stats *out);
+
 #define owl_packet_size(size) (sizeof(owl_packet) + size)
 
 owl_packet *owl_create_packet(owl_channel channel, size_t size, void* buf);
@@ -79,6 +94,14 @@ owl_packet *owl_query_packet(owl_channel channel, size_t size);
 
 // flush a requested packet
 void owl_flush_packet();
+
+/* Tickets cover the shared owl stream, not standalone owl_send_packet().
+ * A ticket identifies the currently authored chain. Wait flushes it if needed
+ * and drains every DMA channel that may still read referenced memory through
+ * that ticket. Main thread only. This is DMA-read completion, not GS finish. */
+uint64_t owl_flush_generation(void);
+int owl_generation_read(uint64_t generation);
+void owl_wait_generation(uint64_t generation);
 
 owl_controller *owl_get_controller();
 
