@@ -500,6 +500,7 @@ typedef struct {
     float x,y,z,vx,vz,yaw,speed,radius;
     float path[ATHENA_NAV_MAX_PATH*2]; uint32_t count,next;
     AthenaNode3D *node;
+    float sx,sy,sz,syaw; uint8_t pushed; /* last pose written to the node */
     AthenaNavRequest *request;
     AthenaNavRequestState planning_state; int planning_error;
 } Agent;
@@ -566,7 +567,7 @@ int athena_nav_agent_remove(AthenaNavCrowd *c,int id) {
 }
 int athena_nav_agent_bind(AthenaNavCrowd *c,int id,AthenaNode3D *node) {
     Agent *a=agent_at(c,id); if(!a) return -1;
-    athena_node3d_retain(node); athena_node3d_release(a->node); a->node=node;
+    athena_node3d_retain(node); athena_node3d_release(a->node); a->node=node; a->pushed=0;
     if(node) athena_node3d_set_position(node,a->x,a->y,a->z);
     return 0;
 }
@@ -598,6 +599,7 @@ int athena_nav_agent_set_position(AthenaNavCrowd *c,int id,float x,float y,float
     Agent *a=agent_at(c,id); if(!a||!athena_float_isfinite(x)||!athena_float_isfinite(y)||!athena_float_isfinite(z)) return -1;
     athena_nav_request_cancel(a->request);
     a->x=x; a->y=y; a->z=z;
+    a->pushed=0;
     if(a->node) athena_node3d_set_position(a->node,x,y,z);
     return 0;
 }
@@ -654,8 +656,10 @@ int athena_nav_crowd_update(AthenaNavCrowd *c,float dt) {
     for(uint32_t i=0;i<c->end;i++) {
         Agent *a=&c->agents[i];
         if(!a->used||!a->node) continue;
+        if(a->pushed&&a->x==a->sx&&a->y==a->sy&&a->z==a->sz&&(!a->face||a->yaw==a->syaw)) continue; /* idle agent */
         athena_node3d_set_position(a->node,a->x,a->y,a->z);
         if(a->face) athena_node3d_set_euler(a->node,0,a->yaw,0);
+        a->sx=a->x; a->sy=a->y; a->sz=a->z; a->syaw=a->yaw; a->pushed=1;
     }
     return arrived;
 }

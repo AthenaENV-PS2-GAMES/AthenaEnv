@@ -709,7 +709,7 @@ static void sleep_islands(AthenaPhysics3DWorld *w) {
     for(uint32_t i=0;i<w->body_count;i++) {
         AthenaBody3D *b=w->bodies[i];
         if(b->type!=ATHENA_BODY3D_DYNAMIC||b->sleeping) continue;
-        if(w->bodies[find(w,i)]->sleep_time>=SLEEP_TIME) { b->sleeping=1; memset(b->v,0,12); memset(b->w,0,12); }
+        if(w->bodies[find(w,i)]->sleep_time>=SLEEP_TIME) { b->sleeping=1; b->synced=0; memset(b->v,0,12); memset(b->w,0,12); }
     }
 }
 static float microseconds(clock_t ticks) { return (float)ticks*(1e6f/CLOCKS_PER_SEC); }
@@ -923,7 +923,12 @@ int athena_physics3d_step(AthenaPhysics3DWorld *w,float dt) {
     w->profile=w->running;
     /* Bodies that fell asleep in this step moved in it too: sync every
      * non-static body. */
-    if(steps) for(uint32_t i=0;i<w->body_count;i++) if(w->bodies[i]->type!=ATHENA_BODY3D_STATIC) sync_node(w->bodies[i]);
+    if(steps) for(uint32_t i=0;i<w->body_count;i++) {
+        AthenaBody3D *b=w->bodies[i];
+        if(b->type==ATHENA_BODY3D_STATIC||(b->sleeping&&b->synced)) continue;
+        sync_node(b);
+        if(b->sleeping) b->synced=1;
+    }
     return steps;
 }
 

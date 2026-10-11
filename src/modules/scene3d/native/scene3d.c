@@ -204,21 +204,25 @@ const AthenaMesh3D *athena_node3d_mesh(const AthenaNode3D *n) { return n?n->mesh
 static int finite3(float x,float y,float z) { return athena_float_isfinite(x)&&athena_float_isfinite(y)&&athena_float_isfinite(z); }
 int athena_node3d_set_position(AthenaNode3D *n,float x,float y,float z) {
     if(!n||!finite3(x,y,z)) return ATHENA_SCENE3D_EINVAL;
+    if(n->position.x==x&&n->position.y==y&&n->position.z==z) return 0; /* unchanged: stay clean */
     n->position=(AthenaVector4){x,y,z,1}; n->local_valid=0; mark(n,NODE_LOCAL); return 0;
 }
 int athena_node3d_set_scale(AthenaNode3D *n,float x,float y,float z) {
     if(!n||!finite3(x,y,z)) return ATHENA_SCENE3D_EINVAL;
+    if(n->scale.x==x&&n->scale.y==y&&n->scale.z==z) return 0;
     n->scale=(AthenaVector4){x,y,z,0}; n->local_valid=0; mark(n,NODE_LOCAL); return 0;
 }
 int athena_node3d_set_rotation(AthenaNode3D *n,float x,float y,float z,float w) {
     AthenaQuaternion q={x,y,z,w},normalized;
     if(!n||!athena_quaternion_normalize(&normalized,&q)) return ATHENA_SCENE3D_EINVAL;
+    if(n->rotation.x==normalized.x&&n->rotation.y==normalized.y&&n->rotation.z==normalized.z&&n->rotation.w==normalized.w) return 0;
     n->rotation=normalized; n->local_valid=0; mark(n,NODE_LOCAL); return 0;
 }
 int athena_node3d_set_euler(AthenaNode3D *n,float x,float y,float z) {
     if(!n||!finite3(x,y,z)) return ATHENA_SCENE3D_EINVAL;
     AthenaQuaternion q;
     if(!athena_quaternion_euler(&q,x,y,z)) return ATHENA_SCENE3D_EINVAL;
+    if(n->rotation.x==q.x&&n->rotation.y==q.y&&n->rotation.z==q.z&&n->rotation.w==q.w) return 0;
     n->rotation=q; n->local_valid=0; mark(n,NODE_LOCAL); return 0;
 }
 void athena_node3d_get_trs(const AthenaNode3D *n,float position[3],AthenaQuaternion *rotation,float scale[3]) {

@@ -40,6 +40,7 @@ struct AthenaBody3D {
     float friction,restitution,linear_damping,angular_damping,rolling_friction;
     uint32_t layer,mask;
     float sleep_time; int sleeping;
+    int synced; /* node already holds the pose of this sleep: step() skips it */
     uint32_t island;                       /* union-find parent (body index) */
     uint32_t slot;                         /* index in the world's bodies */
     uint32_t joints;                       /* joints attached: joined pairs do not collide */

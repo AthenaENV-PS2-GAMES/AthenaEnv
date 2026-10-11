@@ -144,6 +144,11 @@ int athena_emitter3d_draw(AthenaEmitter3D *e,AthenaCamera3D *camera,AthenaImage 
     const float *v=camera->view.value;
     float fx=-v[2],fy=-v[6],fz=-v[10],ex=camera->position.x,ey=camera->position.y,ez=camera->position.z;
     float near=camera->near_clip,far=camera->far_clip;
+    float color_a[4],color_d[4];
+    for(int k=0;k<4;k++) {
+        color_a[k]=(float)((d->color_start>>(k*8))&0xff);
+        color_d[k]=(float)((d->color_end>>(k*8))&0xff)-color_a[k];
+    }
     static AthenaParticle3DRecord records[CHUNK];
     uint32_t n=0,sent=0;
     for(uint32_t i=0;i<e->count;i++) {
@@ -154,10 +159,7 @@ int athena_emitter3d_draw(AthenaEmitter3D *e,AthenaCamera3D *camera,AthenaImage 
         AthenaParticle3DRecord *r=&records[n++];
         r->x=p->x; r->y=p->y; r->z=p->z; r->half=(d->size_start+(d->size_end-d->size_start)*t)*.5f;
         int32_t *channel=&r->r;
-        for(int k=0;k<4;k++) {
-            float a=(d->color_start>>(k*8))&0xff,b=(d->color_end>>(k*8))&0xff;
-            channel[k]=(int32_t)(a+(b-a)*t+.5f);
-        }
+        for(int k=0;k<4;k++) channel[k]=(int32_t)(color_a[k]+color_d[k]*t+.5f);
         if(n==CHUNK) {
             int code=athena_particles3d_submit(camera,image,rect,records,n); if(code<0) return code;
             sent+=n; n=0;
