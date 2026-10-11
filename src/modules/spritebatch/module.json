@@ -1,0 +1,31 @@
+{
+  "id": "spritebatch",
+  "name": "SpriteBatch",
+  "description": "Native 2D sprite queue with recorded layers, atlases (names, flips, tints, nine-patch boxes) and cached bitmap-font layouts: sprites cost microseconds instead of the ~100 us the same work takes in JavaScript on the EE.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "required": false,
+  "default": false,
+  "sources": [
+    "native/spritebatch.c",
+    "native/sb_atlas.c",
+    "native/sb_font.c"
+  ],
+  "dependencies": {
+    "modules": [
+      "graphics",
+      "image"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "quickjs": {
+    "sources": [
+      "quickjs/ath_spritebatch.c"
+    ],
+    "module_name": "SpriteBatch",
+    "global_alias": "SpriteBatch",
+    "init_func": "athena_spritebatch_init"
+  },
+  "types": "spritebatch.d.ts"
+}

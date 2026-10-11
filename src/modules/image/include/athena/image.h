@@ -93,6 +93,15 @@ void athena_image_draw(AthenaImage *image, float x, float y, float width,
 void athena_image_draw_list(AthenaImage *image, float x, float y,
 	prim_tex_sprite *list, int count);
 /*
+ * A box of w x h at (x, y) from the source rectangle (sx, sy)-(ex, ey) cut in
+ * 3x3 by margins in texels: corners keep their size times scale, edges and
+ * the center stretch. One packet; `center` false leaves the middle empty.
+ */
+void athena_image_draw_nine_patch(AthenaImage *image, float x, float y,
+	float w, float h, float sx, float sy, float ex, float ey,
+	float left, float top, float right, float bottom, float scale,
+	bool center, uint32_t color);
+/*
  * A textured quad from its corners (top-left, top-right, bottom-left,
  * bottom-right) with a texture coordinate each, as two triangles through
  * the 2D view: for texture rectangles a GS sprite cannot map (turned 90

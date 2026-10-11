@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "AthenaEnv Module Catalog",
   "version": "2.0.0",
-  "generatedAt": "2026-10-11T12:15:20.700Z",
+  "generatedAt": "2026-10-11T14:21:33.427Z",
   "modules": [
     {
       "id": "animation3d",
@@ -1270,6 +1270,28 @@
         "ee_libs": []
       },
       "global_alias": "Sprite",
+      "api": {
+        "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "spritebatch",
+      "name": "SpriteBatch",
+      "description": "Native 2D sprite queue with recorded layers, atlases (names, flips, tints, nine-patch boxes) and cached bitmap-font layouts: sprites cost microseconds instead of the ~100 us the same work takes in JavaScript on the EE.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "graphics",
+          "image"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "SpriteBatch",
       "api": {
         "native": true,
         "quickjs": true

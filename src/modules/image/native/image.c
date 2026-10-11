@@ -399,6 +399,57 @@ void athena_image_draw_list(AthenaImage *image, float x, float y,
 	draw_image_list(image->surface, x, y, list, count);
 }
 
+void athena_image_draw_nine_patch(AthenaImage *image, float x, float y,
+	float w, float h, float sx, float sy, float ex, float ey,
+	float left, float top, float right, float bottom, float scale,
+	bool center, uint32_t color)
+{
+	prim_tex_sprite list[9];
+	float dl = left * scale, dt = top * scale;
+	float dr = right * scale, db = bottom * scale;
+	float xs[4], ys[4], us[4], vs[4];
+	int count = 0;
+
+	if (!athena_image_is_loaded(image) || w <= 0.0f || h <= 0.0f)
+		return;
+	/* Margins larger than the box shrink together, so the corners never overlap. */
+	if (dl + dr > w) {
+		float k = w / (dl + dr);
+		dl *= k;
+		dr *= k;
+	}
+	if (dt + db > h) {
+		float k = h / (dt + db);
+		dt *= k;
+		db *= k;
+	}
+	xs[0] = x;          xs[1] = x + dl;         xs[2] = x + w - dr;     xs[3] = x + w;
+	ys[0] = y;          ys[1] = y + dt;         ys[2] = y + h - db;     ys[3] = y + h;
+	us[0] = sx;         us[1] = sx + left;      us[2] = ex - right;     us[3] = ex;
+	vs[0] = sy;         vs[1] = sy + top;       vs[2] = ey - bottom;    vs[3] = ey;
+
+	for (int row = 0; row < 3; row++) {
+		for (int col = 0; col < 3; col++) {
+			prim_tex_sprite *s;
+			float cw = xs[col + 1] - xs[col], ch = ys[row + 1] - ys[row];
+
+			if (cw <= 0.0f || ch <= 0.0f || (!center && row == 1 && col == 1))
+				continue;
+			s = &list[count++];
+			s->x = xs[col];
+			s->y = ys[row];
+			s->w = cw;
+			s->h = ch;
+			s->u1 = us[col];
+			s->v1 = vs[row];
+			s->u2 = us[col + 1];
+			s->v2 = vs[row + 1];
+			s->rgba = color;
+		}
+	}
+	athena_image_draw_list(image, 0.0f, 0.0f, list, count);
+}
+
 void athena_image_draw_quad(AthenaImage *image, const float x[4], const float y[4],
 	const float u[4], const float v[4], uint32_t color)
 {

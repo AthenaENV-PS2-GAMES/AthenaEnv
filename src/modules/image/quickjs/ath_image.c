@@ -347,11 +347,15 @@ static JSValue image_free(JSContext *ctx, JSValueConst this_val,
  */
 enum {
 	ATOM_WIDTH, ATOM_HEIGHT, ATOM_STARTX, ATOM_STARTY, ATOM_ENDX, ATOM_ENDY,
-	ATOM_ANGLE, ATOM_COLOR, ATOM_X, ATOM_Y, ATOM_FIRST, ATOM_COUNT, ATOM_TOTAL
+	ATOM_ANGLE, ATOM_COLOR, ATOM_X, ATOM_Y, ATOM_FIRST, ATOM_COUNT,
+	ATOM_FLIPX, ATOM_FLIPY, ATOM_CORNER, ATOM_LEFT, ATOM_TOP, ATOM_RIGHT,
+	ATOM_BOTTOM, ATOM_SCALE, ATOM_CENTER, ATOM_TOTAL
 };
 static const char *const image_atom_names[ATOM_TOTAL] = {
 	"width", "height", "startx", "starty", "endx", "endy",
 	"angle", "color", "x", "y", "first", "count",
+	"flipX", "flipY", "corner", "left", "top", "right", "bottom", "scale",
+	"center",
 };
 static JSAtom image_atoms[ATOM_TOTAL];
 /* Atoms belong to one runtime: other runtimes (os.Worker) look names up. */
@@ -379,6 +383,19 @@ static int image_option_float(JSContext *ctx, JSValueConst options, int atom,
 	return ok;
 }
 
+static int image_option_bool(JSContext *ctx, JSValueConst options, int atom,
+	int *target)
+{
+	JSValue value = image_get_option(ctx, options, atom);
+
+	if (JS_IsException(value))
+		return 0;
+	if (!JS_IsUndefined(value))
+		*target = JS_ToBool(ctx, value);
+	JS_FreeValue(ctx, value);
+	return 1;
+}
+
 static int image_option_uint(JSContext *ctx, JSValueConst options, int atom,
 	uint32_t *target)
 {
@@ -399,6 +416,7 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 	AthenaImage *image = image_this(ctx, this_val);
 	float x, y, width, height, startx, starty, endx, endy, angle;
 	uint32_t color;
+	int flip_x = 0, flip_y = 0;
 
 	if (!image_argc(ctx, argc, 2, 3, "Image.draw"))
 		return JS_EXCEPTION;
@@ -429,7 +447,9 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 			!image_option_float(ctx, options, ATOM_ENDX, &endx) ||
 			!image_option_float(ctx, options, ATOM_ENDY, &endy) ||
 			!image_option_float(ctx, options, ATOM_ANGLE, &angle) ||
-			!image_option_uint(ctx, options, ATOM_COLOR, &color))
+			!image_option_uint(ctx, options, ATOM_COLOR, &color) ||
+			!image_option_bool(ctx, options, ATOM_FLIPX, &flip_x) ||
+			!image_option_bool(ctx, options, ATOM_FLIPY, &flip_y))
 			return JS_EXCEPTION;
 	}
 
@@ -442,8 +462,86 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 		endx > image->surface->Width || endy > image->surface->Height)
 		return JS_ThrowRangeError(ctx, "Image.draw source rectangle is outside the image");
 
+	/* The GS maps a reversed texture range mirrored: swap the source edges. */
+	if (flip_x) {
+		float t = startx;
+		startx = endx;
+		endx = t;
+	}
+	if (flip_y) {
+		float t = starty;
+		starty = endy;
+		endy = t;
+	}
 	athena_image_draw(image, x, y, width, height, startx, starty, endx, endy,
 		angle, color);
+	return JS_UNDEFINED;
+}
+
+/* image.drawNinePatch(x, y, width, height, options?) */
+static JSValue image_draw_nine_patch(JSContext *ctx, JSValueConst this_val,
+	int argc, JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+	float v[4], startx, starty, endx, endy, corner = 0.0f, scale = 1.0f;
+	float left, top, right, bottom;
+	uint32_t color;
+	int center = 1;
+
+	if (!image_argc(ctx, argc, 4, 5, "Image.drawNinePatch"))
+		return JS_EXCEPTION;
+	if (!athena_image_is_loaded(image))
+		return JS_ThrowInternalError(ctx, "image is not loaded");
+	for (int i = 0; i < 4; i++)
+		if (JS_ToFloat32(ctx, &v[i], argv[i]))
+			return JS_EXCEPTION;
+	startx = image->startx;
+	starty = image->starty;
+	endx = image->endx;
+	endy = image->endy;
+	color = image->color;
+	left = top = right = bottom = -1.0f;
+
+	if (argc == 5 && !JS_IsUndefined(argv[4])) {
+		JSValueConst options = argv[4];
+		if (!JS_IsObject(options) || JS_IsArray(ctx, options))
+			return JS_ThrowTypeError(ctx, "Image.drawNinePatch options must be an object");
+		if (!image_option_float(ctx, options, ATOM_STARTX, &startx) ||
+			!image_option_float(ctx, options, ATOM_STARTY, &starty) ||
+			!image_option_float(ctx, options, ATOM_ENDX, &endx) ||
+			!image_option_float(ctx, options, ATOM_ENDY, &endy) ||
+			!image_option_float(ctx, options, ATOM_CORNER, &corner) ||
+			!image_option_float(ctx, options, ATOM_LEFT, &left) ||
+			!image_option_float(ctx, options, ATOM_TOP, &top) ||
+			!image_option_float(ctx, options, ATOM_RIGHT, &right) ||
+			!image_option_float(ctx, options, ATOM_BOTTOM, &bottom) ||
+			!image_option_float(ctx, options, ATOM_SCALE, &scale) ||
+			!image_option_uint(ctx, options, ATOM_COLOR, &color) ||
+			!image_option_bool(ctx, options, ATOM_CENTER, &center))
+			return JS_EXCEPTION;
+	}
+	if (left < 0.0f) left = corner;
+	if (top < 0.0f) top = corner;
+	if (right < 0.0f) right = corner;
+	if (bottom < 0.0f) bottom = corner;
+
+	if (!image_float_valid(v[0], 0) || !image_float_valid(v[1], 0) ||
+		!image_float_valid(v[2], 1) || !image_float_valid(v[3], 1) ||
+		!image_float_valid(scale, 1) || !image_float_valid(corner, 1) ||
+		!image_float_valid(startx, 1) || !image_float_valid(starty, 1) ||
+		!image_float_valid(endx, 1) || !image_float_valid(endy, 1) ||
+		!image_float_valid(left, 1) || !image_float_valid(top, 1) ||
+		!image_float_valid(right, 1) || !image_float_valid(bottom, 1))
+		return JS_ThrowRangeError(ctx,
+			"Image.drawNinePatch values must be finite and non-negative");
+	if (endx < startx || endy < starty ||
+		endx > image->surface->Width || endy > image->surface->Height ||
+		left + right > endx - startx || top + bottom > endy - starty)
+		return JS_ThrowRangeError(ctx,
+			"Image.drawNinePatch margins or source rectangle are outside the image");
+
+	athena_image_draw_nine_patch(image, v[0], v[1], v[2], v[3], startx, starty,
+		endx, endy, left, top, right, bottom, scale, center != 0, color);
 	return JS_UNDEFINED;
 }
 
@@ -705,35 +803,52 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 	AthenaViewCuller culler;
 	bool cull;
 
-	if (!image_argc(ctx, argc, 1, 2, "Image.drawList"))
+	if (!image_argc(ctx, argc, 1, 3, "Image.drawList"))
 		return JS_EXCEPTION;
 	if (!athena_image_is_loaded(image))
 		return JS_ThrowInternalError(ctx, "image is not loaded");
 
-	data = JS_GetArrayBuffer(ctx, &size, argv[0]);
-	if (!data) {
+	/*
+	 * A typed array is the normal case. JS_GetArrayBuffer() on it fails by
+	 * throwing, and building that exception (error object and stack) took
+	 * ~100 us a call on the EE, so typed arrays are told apart first.
+	 */
+	if (JS_GetTypedArrayType(argv[0]) >= 0) {
 		size_t offset, length, element;
-		JSValue buffer;
+		JSValue buffer = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &length, &element);
 
-		JS_FreeValue(ctx, JS_GetException(ctx));
-		buffer = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &length, &element);
 		if (JS_IsException(buffer))
-			return JS_ThrowTypeError(ctx,
-				"Image.drawList expects a sprite buffer (ArrayBuffer or typed array)");
+			return JS_EXCEPTION;
 		data = JS_GetArrayBuffer(ctx, &size, buffer);
 		JS_FreeValue(ctx, buffer);
 		if (!data)
 			return JS_EXCEPTION;
 		data += offset;
 		size = length;
+	} else {
+		data = JS_GetArrayBuffer(ctx, &size, argv[0]);
+		if (!data) {
+			JS_FreeValue(ctx, JS_GetException(ctx));
+			return JS_ThrowTypeError(ctx,
+				"Image.drawList expects a sprite buffer (ArrayBuffer or typed array)");
+		}
 	}
 	total = size / sizeof(ImageSpriteRecord);
 	count = (uint32_t)total;
 
-	if (argc == 2 && !JS_IsUndefined(argv[1])) {
+	if (argc >= 2 && JS_IsNumber(argv[1])) {
+		/* drawList(buffer, count[, first]): no options object to build and read. */
+		count = UINT32_MAX;
+		if (JS_ToUint32(ctx, &count, argv[1]))
+			return JS_EXCEPTION;
+		if (argc == 3 && !JS_IsUndefined(argv[2]) && JS_ToUint32(ctx, &first, argv[2]))
+			return JS_EXCEPTION;
+	} else if (argc >= 2 && !JS_IsUndefined(argv[1])) {
 		JSValueConst options = argv[1];
+		if (argc != 2)
+			return JS_ThrowTypeError(ctx, "Image.drawList expects (buffer, options) or (buffer, count, first)");
 		if (!JS_IsObject(options) || JS_IsArray(ctx, options))
-			return JS_ThrowTypeError(ctx, "Image.drawList options must be an object");
+			return JS_ThrowTypeError(ctx, "Image.drawList options must be an object or a count");
 		count = UINT32_MAX;
 		if (!image_option_float(ctx, options, ATOM_X, &x) ||
 			!image_option_float(ctx, options, ATOM_Y, &y) ||
@@ -794,6 +909,7 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 static const JSCFunctionListEntry image_proto_funcs[] = {
 	JS_CFUNC_DEF("draw", 2, image_draw),
 	JS_CFUNC_DEF("drawList", 2, image_draw_list),
+	JS_CFUNC_DEF("drawNinePatch", 4, image_draw_nine_patch),
 	JS_CFUNC_DEF("ready", 0, image_ready),
 	JS_CFUNC_DEF("loading", 0, image_loading),
 	JS_CFUNC_DEF("failed", 0, image_failed),

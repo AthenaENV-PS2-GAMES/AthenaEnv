@@ -43,6 +43,31 @@ type ImageDrawOptions = {
     angle?: number;
     /** Packed RGBA tint, normally created with `Color.new()`. */
     color?: number;
+    /** Mirrors the sprite horizontally, by swapping `startx` and `endx`. */
+    flipX?: boolean;
+    /** Mirrors the sprite vertically, by swapping `starty` and `endy`. */
+    flipY?: boolean;
+};
+
+/** Options of `drawNinePatch()`: margins are in source texels. */
+type ImageNinePatchOptions = {
+    /** Source rectangle; default to the image's `startx`..`endy`. */
+    startx?: number;
+    starty?: number;
+    endx?: number;
+    endy?: number;
+    /** Margin of all four sides; `left`, `top`, `right` and `bottom` override it. Defaults to 0. */
+    corner?: number;
+    left?: number;
+    top?: number;
+    right?: number;
+    bottom?: number;
+    /** Destination size of a margin texel (corners are margin * scale); defaults to 1. */
+    scale?: number;
+    /** Packed RGBA tint; defaults to the image's `color`. */
+    color?: number;
+    /** Draws the middle cell; defaults to true. */
+    center?: boolean;
 };
 
 /** Options of `drawList()`. */
@@ -117,6 +142,16 @@ declare class Image {
     /** Queues a textured sprite at `(x, y)` for the current frame. */
     draw(x: number, y: number, options?: ImageDrawOptions): void;
     /**
+     * Draws a box of `width` x `height` at `(x, y)` from a source rectangle cut
+     * in 3x3 by margins: corners keep their size (times `scale`), edges and
+     * the center stretch. One packet for the 9 cells. A box smaller than its
+     * margins shrinks them together.
+     */
+    drawNinePatch(x: number, y: number, width: number, height: number, options?: ImageNinePatchOptions): void;
+    /**
+     * Mirroring: a record with `u1 > u2` (or `v1 > v2`) is drawn mirrored;
+     * `draw()` has `flipX`/`flipY` for the same.
+     *
      * Queues many sprites of this image at once: the texture state is sent
      * once per 128 sprites instead of once per sprite, which makes it several
      * times cheaper than as many `draw()` calls. `sprites` uses the record
@@ -136,6 +171,11 @@ declare class Image {
      * ```
      */
     drawList(sprites: ArrayBuffer | ArrayBufferView, options?: ImageDrawListOptions): void;
+    /**
+     * `drawList(sprites, count, first?)`: the same without an options object. On the EE building and reading
+     * `{ count }` costs ~20 us a call, which is more than drawing a few dozen sprites.
+     */
+    drawList(sprites: ArrayBuffer | ArrayBufferView, count: number, first?: number): void;
     /** Uploads the image synchronously and pins its VRAM allocation. */
     lock(): boolean;
     /** Allows the texture manager to evict the image from VRAM. */
