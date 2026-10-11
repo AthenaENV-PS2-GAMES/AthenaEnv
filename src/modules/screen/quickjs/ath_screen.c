@@ -84,7 +84,7 @@ static JSValue screen_memory_stats(JSContext *ctx, JSValueConst this_val,
         return JS_EXCEPTION;
     if (argc == 1 && JS_ToUint32(ctx, &mode, argv[0]))
         return JS_EXCEPTION;
-    if (mode < VRAM_SIZE || mode > VRAM_USED_DYNAMIC)
+    if (mode < VRAM_SIZE || mode > VRAM_UPLOADED)
         return JS_ThrowRangeError(ctx, "Screen.getMemoryStats mode is invalid");
     return JS_NewUint32(ctx, (uint32_t)getFreeVRAM(mode));
 }
@@ -365,6 +365,7 @@ static const JSCFunctionListEntry screen_funcs[] = {
     JS_PROP_INT32_DEF("VRAM_USED_TOTAL", VRAM_USED_TOTAL, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF("VRAM_USED_STATIC", VRAM_USED_STATIC, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF("VRAM_USED_DYNAMIC", VRAM_USED_DYNAMIC, JS_PROP_CONFIGURABLE),
+    JS_PROP_INT32_DEF("VRAM_UPLOADED", VRAM_UPLOADED, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF("ALPHA_TEST_ENABLE", ALPHA_TEST_ENABLE, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF("ALPHA_TEST_METHOD", ALPHA_TEST_METHOD, JS_PROP_CONFIGURABLE),
     JS_PROP_INT32_DEF("ALPHA_TEST_REF", ALPHA_TEST_REF, JS_PROP_CONFIGURABLE),

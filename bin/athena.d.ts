@@ -1145,6 +1145,49 @@ declare namespace Color {
 }
 
 
+/* === Module: Color (color) === */
+/**
+ * Packs RGBA components into the 32-bit color format used by AthenaEnv.
+ *
+ * The component order in the returned value is `0xAABBGGRR`:
+ * red occupies the least-significant byte and alpha the most-significant.
+ * Component values are converted to unsigned 8-bit values.
+ *
+ * The default alpha used by `new()` is `0x80`, matching the PS2 GS default
+ * convention. Color helpers are pure and return a new packed value.
+ *
+ * @example
+ * ```js
+ * let tint = Color.new(255, 128, 0, 255);
+ * tint = Color.setA(tint, 192);
+ * console.log(Color.getR(tint), Color.getA(tint));
+ * ```
+ */
+declare namespace Color {
+    /** Packed `0xAABBGGRR` color value. */
+    type Value = number;
+
+    /** Creates a packed color from red, green, blue and optional alpha. */
+    function new(r: number, g: number, b: number, a?: number): Value;
+    /** Reads the red component in the range 0..255. */
+    function getR(color: Value): number;
+    /** Reads the green component in the range 0..255. */
+    function getG(color: Value): number;
+    /** Reads the blue component in the range 0..255. */
+    function getB(color: Value): number;
+    /** Reads the alpha component in the range 0..255. */
+    function getA(color: Value): number;
+    /** Returns `color` with its red component replaced. */
+    function setR(color: Value, value: number): Value;
+    /** Returns `color` with its green component replaced. */
+    function setG(color: Value, value: number): Value;
+    /** Returns `color` with its blue component replaced. */
+    function setB(color: Value, value: number): Value;
+    /** Returns `color` with its alpha component replaced. */
+    function setA(color: Value, value: number): Value;
+}
+
+
 /* === Module: Draw (draw) === */
 /**
  * Immediate-mode 2D primitives rendered by the PS2 GS.
@@ -2731,124 +2774,44 @@ declare namespace Particles3D {
 
 /* === Module: Random (random) === */
 /**
- * Seedable pseudo-random numbers (xoshiro128**, computed in C).
+ * Display, frame synchronization, VRAM statistics and GS state controls.
  *
- * Unlike `Math.random()`, a generator created with a seed always produces the
- * same sequence: a generated map, a roguelike run or a bug can be
- * reproduced. Integers, `float()`, `pick()`, `shuffle()` and `sample()` are
- * bit-exact on every platform; floats with bounds and gaussians may differ in
- * the last bits between the PS2 and a PC.
- *
- * The module functions (`Random.int()`, `Random.float()`...) use a generator
- * of the script (each script and worker has its own) seeded from the clock;
- * `Random.seed()` makes it reproducible too. Non-finite numeric arguments
- * (NaN, Infinity) throw a RangeError.
- *
- * Example:
- * ```js
- * const rng = new Random.Generator(1234);    // or a string: "level-3"
- * const die = rng.int(1, 6);
- * const loot = rng.pick(["sword", "shield", "potion"], [5, 3, 1]);
- * const team = rng.sample(players, 3);
- * rng.shuffle(deck);
- *
- * // Particles: one call instead of a loop of 500.
- * rng.fill(speeds, 40, 90);
- * rng.fillGaussian(spread, 0, 0.3);
- *
- * const saved = rng.state();                 // JSON-friendly: save it
- * rng.setState(saved);                       // and continue later
- * ```
+ * A typical frame is `Screen.clear()`, drawing commands, then `Screen.flip()`.
+ * Most numeric constants are raw PS2 GS values and are intended to be passed
+ * back to this module rather than interpreted as application-level units.
  */
-declare namespace Random {
-    /** Seed: a number (integers map one-to-one) or a string (hashed). */
-    type Seed = number | string;
-
-    /** The four 32-bit words of a generator state, as returned by `state()`. */
-    type State = [number, number, number, number];
-
-    /** Typed arrays of numbers. */
-    type NumberArray = Int8Array | Uint8Array | Uint8ClampedArray |
-        Int16Array | Uint16Array | Int32Array | Uint32Array |
-        Float32Array | Float64Array;
-
-    /** Array or typed array accepted by `pick()`, `shuffle()` and `sample()`. */
-    type List<T> = T[] | NumberArray;
-
-    interface Source {
-        /** Restarts the sequence from `seed`; without one, from the clock. */
-        seed(seed?: Seed): void;
-        /** Integer in [min, max], both inclusive, without modulo bias. Bounds are int32. */
-        int(min: number, max: number): number;
-        /** Float in [0, 1). */
-        float(): number;
-        /** Float in [0, max). */
-        float(max: number): number;
-        /** Float in [min, max). */
-        float(min: number, max: number): number;
-        /** True with probability `p` (default 0.5). */
-        bool(p?: number): boolean;
-        /** Normally distributed number (default mean 0, standard deviation 1). */
-        gaussian(mean?: number, stddev?: number): number;
-        /** Angle in radians, in [0, 2 pi). */
-        angle(): number;
-        /**
-         * Random element, or `undefined` for an empty array. With `weights`
-         * (one per item), drawn with probability proportional to its weight.
-         */
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        /** `count` different elements in random order, as a new array. */
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        /** Shuffles in place (Fisher-Yates) and returns the same array. */
-        shuffle<A extends List<any>>(items: A): A;
-        /**
-         * Index drawn with probability proportional to its weight. Weights
-         * must be finite and non-negative, with at least one above zero.
-         */
-        weighted(weights: number[] | Float32Array): number;
-        /**
-         * Fills a typed array in one call and returns it. Float arrays get
-         * floats in [min, max) (default [0, 1); one bound is the max); integer
-         * arrays get integers in [min, max], by default the whole range of
-         * the type (random bytes for a Uint8Array).
-         */
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        /** Fills a float array with normally distributed numbers and returns it. */
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        /** Copy of the current state, for saving. */
-        state(): State;
-        /** Restores a state returned by `state()`. */
-        setState(state: State): void;
+declare namespace Screen {
+    /** Current video configuration accepted by `getMode()` and `setMode()`. */
+    interface VideoMode {
+        /** Video mode identifier such as `NTSC` or `PAL`. */
+        mode: number;
+        /** Visible width in pixels. */
+        width: number;
+        /** Visible height in pixels. */
+        height: number;
+        /** Color pixel storage format such as `CT32` or `CT24`. */
+        psm: number;
+        /** Interlaced/progressive mode. */
+        interlace: number;
+        /** Field/frame timing mode. */
+        field: number;
+        /** Depth-buffer pixel storage format. */
+        psmz: number;
+        /** Enables depth buffering. */
+        zbuffering: boolean;
+        /** Enables double-buffered presentation. */
+        double_buffering: boolean;
+        /** Reserved for future multi-pass rendering; only zero is currently accepted. */
+        pass_count?: number;
     }
 
-    /** Independent generator. */
-    class Generator implements Source {
-        /** Seeded with `seed`, or from the clock without one. */
-        constructor(seed?: Seed);
-        seed(seed?: Seed): void;
-        int(min: number, max: number): number;
-        float(): number;
-        float(max: number): number;
-        float(min: number, max: number): number;
-        bool(p?: number): boolean;
-        gaussian(mean?: number, stddev?: number): number;
-        angle(): number;
-        pick<T>(items: T[], weights?: number[] | Float32Array): T | undefined;
-        pick(items: NumberArray, weights?: number[] | Float32Array): number | undefined;
-        sample<T>(items: T[], count: number): T[];
-        sample(items: NumberArray, count: number): number[];
-        shuffle<A extends List<any>>(items: A): A;
-        weighted(weights: number[] | Float32Array): number;
-        fill<A extends NumberArray>(array: A, min?: number, max?: number): A;
-        fillGaussian<A extends Float32Array | Float64Array>(array: A,
-            mean?: number, stddev?: number): A;
-        state(): State;
-        setState(state: State): void;
-        /** New generator at the same point of the sequence. */
-        clone(): Generator;
+    /** Arguments for the GS alpha blend equation. */
+    interface AlphaEquation {
+        a: number;
+        b: number;
+        c: number;
+        d: number;
+        fix: number;
     }
 
     /** The script's generator: see `Source`. */
