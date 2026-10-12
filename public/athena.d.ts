@@ -581,6 +581,13 @@ type ImageDrawOptions = {
     endy?: number;
     /** Rotation angle in radians. */
     angle?: number;
+    /**
+     * Pivot of `angle`, in destination pixels from the sprite's top-left corner
+     * (so `width / 2`, `height / 2` is the default center). An omitted axis
+     * keeps its center. Has no effect without an angle.
+     */
+    originX?: number;
+    originY?: number;
     /** Packed RGBA tint, normally created with `Color.new()`. */
     color?: number;
     /** Mirrors the sprite horizontally, by swapping `startx` and `endx`. */
@@ -716,6 +723,28 @@ declare class Image {
      * `{ count }` costs ~20 us a call, which is more than drawing a few dozen sprites.
      */
     drawList(sprites: ArrayBuffer | ArrayBufferView, count: number, first?: number): void;
+    /**
+     * Draws free quads (rotated, sheared, per-corner placement) as two
+     * triangles each, one GS packet per 64 quads. Each record is 20 floats
+     * (80 bytes): the corners top-left, top-right, bottom-left, bottom-right as
+     * `x, y` (floats 0-7), their texels `u, v` in the same order (8-15) and a
+     * color `r, g, b, a` with 128 as neutral (16-19). Under a Camera2D camera,
+     * quads whose bounding box is outside the viewport are skipped, as are
+     * quads with a non-finite corner. Positions are in world units: there is
+     * no `x`/`y` offset option.
+     *
+     * @example
+     * ```js
+     * // A blade of grass leaning by `lean` pixels at the top, base fixed.
+     * const q = new Float32Array(20 * count);
+     * q.set([x + lean, y, x + w + lean, y, x, y + h, x + w, y + h,
+     *        u1, v1, u2, v1, u1, v2, u2, v2, 128, 128, 128, 128], 20 * i);
+     * image.drawQuads(q, count);
+     * ```
+     */
+    drawQuads(quads: ArrayBuffer | ArrayBufferView, options?: { first?: number; count?: number }): void;
+    /** `drawQuads(quads, count, first?)`: the same without an options object. */
+    drawQuads(quads: ArrayBuffer | ArrayBufferView, count: number, first?: number): void;
     /** Uploads the image synchronously and pins its VRAM allocation. */
     lock(): boolean;
     /** Allows the texture manager to evict the image from VRAM. */
