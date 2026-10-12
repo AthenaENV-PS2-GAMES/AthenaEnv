@@ -349,13 +349,13 @@ enum {
 	ATOM_WIDTH, ATOM_HEIGHT, ATOM_STARTX, ATOM_STARTY, ATOM_ENDX, ATOM_ENDY,
 	ATOM_ANGLE, ATOM_COLOR, ATOM_X, ATOM_Y, ATOM_FIRST, ATOM_COUNT,
 	ATOM_FLIPX, ATOM_FLIPY, ATOM_CORNER, ATOM_LEFT, ATOM_TOP, ATOM_RIGHT,
-	ATOM_BOTTOM, ATOM_SCALE, ATOM_CENTER, ATOM_TOTAL
+	ATOM_BOTTOM, ATOM_SCALE, ATOM_CENTER, ATOM_ORIGINX, ATOM_ORIGINY, ATOM_TOTAL
 };
 static const char *const image_atom_names[ATOM_TOTAL] = {
 	"width", "height", "startx", "starty", "endx", "endy",
 	"angle", "color", "x", "y", "first", "count",
 	"flipX", "flipY", "corner", "left", "top", "right", "bottom", "scale",
-	"center",
+	"center", "originX", "originY",
 };
 static JSAtom image_atoms[ATOM_TOTAL];
 /* Atoms belong to one runtime: other runtimes (os.Worker) look names up. */
@@ -379,6 +379,26 @@ static int image_option_float(JSContext *ctx, JSValueConst options, int atom,
 		return 0;
 	if (!JS_IsUndefined(value) && JS_ToFloat32(ctx, target, value))
 		ok = 0;
+	JS_FreeValue(ctx, value);
+	return ok;
+}
+
+/*
+ * Like image_option_float(), telling whether the option was given. No NAN
+ * sentinel: the runtime builds with finite-math, where isnan() is always false.
+ */
+static int image_option_float_set(JSContext *ctx, JSValueConst options, int atom,
+	float *target, int *present)
+{
+	JSValue value = image_get_option(ctx, options, atom);
+	int ok = 1;
+
+	if (JS_IsException(value))
+		return 0;
+	if (!JS_IsUndefined(value)) {
+		ok = !JS_ToFloat32(ctx, target, value);
+		*present = ok;
+	}
 	JS_FreeValue(ctx, value);
 	return ok;
 }
@@ -417,6 +437,8 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 	float x, y, width, height, startx, starty, endx, endy, angle;
 	uint32_t color;
 	int flip_x = 0, flip_y = 0;
+	float origin_x = 0.0f, origin_y = 0.0f;
+	int has_origin_x = 0, has_origin_y = 0;
 
 	if (!image_argc(ctx, argc, 2, 3, "Image.draw"))
 		return JS_EXCEPTION;
@@ -449,7 +471,9 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 			!image_option_float(ctx, options, ATOM_ANGLE, &angle) ||
 			!image_option_uint(ctx, options, ATOM_COLOR, &color) ||
 			!image_option_bool(ctx, options, ATOM_FLIPX, &flip_x) ||
-			!image_option_bool(ctx, options, ATOM_FLIPY, &flip_y))
+			!image_option_bool(ctx, options, ATOM_FLIPY, &flip_y) ||
+			!image_option_float_set(ctx, options, ATOM_ORIGINX, &origin_x, &has_origin_x) ||
+			!image_option_float_set(ctx, options, ATOM_ORIGINY, &origin_y, &has_origin_y))
 			return JS_EXCEPTION;
 	}
 
@@ -472,6 +496,21 @@ static JSValue image_draw(JSContext *ctx, JSValueConst this_val, int argc,
 		float t = starty;
 		starty = endy;
 		endy = t;
+	}
+	if (angle != 0.0f && (has_origin_x || has_origin_y)) {
+		/*
+		 * Turning about a point other than the center is turning about the
+		 * center, with the center moved to where the pivot carries it.
+		 */
+		float ox = has_origin_x ? origin_x : width / 2;
+		float oy = has_origin_y ? origin_y : height / 2;
+		float dx = width / 2 - ox, dy = height / 2 - oy;
+		float c = cosf(angle), s = sinf(angle);
+
+		if (!isfinite(ox) || !isfinite(oy))
+			return JS_ThrowRangeError(ctx, "Image.draw origin must be finite");
+		x += ox + dx * c - dy * s - width / 2;
+		y += oy + dy * c + dx * s - height / 2;
 	}
 	athena_image_draw(image, x, y, width, height, startx, starty, endx, endy,
 		angle, color);
@@ -906,9 +945,128 @@ static JSValue image_draw_list(JSContext *ctx, JSValueConst this_val, int argc,
 	return JS_UNDEFINED;
 }
 
+/*
+ * One record of drawQuads(): 20 floats. Corners top-left, top-right,
+ * bottom-left, bottom-right (x, y each), their texels (u, v each) and a color
+ * r, g, b, a with 128 as neutral.
+ */
+#define IMAGE_QUAD_FLOATS 20
+#define IMAGE_QUAD_CHUNK 64
+static prim_tex_gouraud_triangle image_quad_chunk[IMAGE_QUAD_CHUNK * 2];
+
+/*
+ * image.drawQuads(quads, count[, first]) / (quads, { first, count }): draws
+ * free quads (rotated, sheared, scaled per corner) in one packet per 64.
+ */
+static JSValue image_draw_quads(JSContext *ctx, JSValueConst this_val, int argc,
+	JSValueConst *argv)
+{
+	AthenaImage *image = image_this(ctx, this_val);
+	uint8_t *data;
+	size_t size, total, offset = 0;
+	uint32_t first = 0, count;
+	int queued = 0;
+	AthenaViewCuller culler;
+	bool cull;
+
+	if (!image_argc(ctx, argc, 1, 3, "Image.drawQuads"))
+		return JS_EXCEPTION;
+	if (!athena_image_is_loaded(image))
+		return JS_ThrowInternalError(ctx, "image is not loaded");
+
+	if (JS_GetTypedArrayType(argv[0]) >= 0) {
+		size_t length, element;
+		JSValue buffer = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &length, &element);
+
+		if (JS_IsException(buffer))
+			return JS_EXCEPTION;
+		data = JS_GetArrayBuffer(ctx, &size, buffer);
+		JS_FreeValue(ctx, buffer);
+		if (!data)
+			return JS_EXCEPTION;
+		data += offset;
+		size = length;
+	} else {
+		data = JS_GetArrayBuffer(ctx, &size, argv[0]);
+		if (!data) {
+			JS_FreeValue(ctx, JS_GetException(ctx));
+			return JS_ThrowTypeError(ctx,
+				"Image.drawQuads expects a quad buffer (ArrayBuffer or typed array)");
+		}
+	}
+	total = size / (IMAGE_QUAD_FLOATS * sizeof(float));
+	count = (uint32_t)total;
+
+	if (argc >= 2 && JS_IsNumber(argv[1])) {
+		count = UINT32_MAX;
+		if (JS_ToUint32(ctx, &count, argv[1]))
+			return JS_EXCEPTION;
+		if (argc == 3 && !JS_IsUndefined(argv[2]) && JS_ToUint32(ctx, &first, argv[2]))
+			return JS_EXCEPTION;
+	} else if (argc >= 2 && !JS_IsUndefined(argv[1])) {
+		JSValueConst options = argv[1];
+		if (argc != 2)
+			return JS_ThrowTypeError(ctx, "Image.drawQuads expects (buffer, options) or (buffer, count, first)");
+		if (!JS_IsObject(options) || JS_IsArray(ctx, options))
+			return JS_ThrowTypeError(ctx, "Image.drawQuads options must be an object or a count");
+		count = UINT32_MAX;
+		if (!image_option_uint(ctx, options, ATOM_FIRST, &first) ||
+			!image_option_uint(ctx, options, ATOM_COUNT, &count))
+			return JS_EXCEPTION;
+		if (count == UINT32_MAX)
+			count = first <= total ? (uint32_t)(total - first) : 0;
+	}
+	if (first > total || count > total - first)
+		return JS_ThrowRangeError(ctx,
+			"Image.drawQuads: quads %u..%u are outside the buffer (%u quads)",
+			(unsigned)first, (unsigned)(first + count), (unsigned)total);
+
+	cull = athena_view_culler_init(&culler);
+
+	for (uint32_t i = first; i < first + count; i++) {
+		float q[IMAGE_QUAD_FLOATS];
+		float x0, x1, y0, y1;
+		uint32_t color;
+		prim_tex_gouraud_triangle *t;
+
+		/* Typed arrays may start anywhere: the EE faults on unaligned float loads. */
+		memcpy(q, data + (size_t)i * sizeof(q), sizeof(q));
+		x0 = fminf(fminf(q[0], q[2]), fminf(q[4], q[6]));
+		x1 = fmaxf(fmaxf(q[0], q[2]), fmaxf(q[4], q[6]));
+		y0 = fminf(fminf(q[1], q[3]), fminf(q[5], q[7]));
+		y1 = fmaxf(fmaxf(q[1], q[3]), fmaxf(q[5], q[7]));
+		/* Also drops NaN and infinite corners, which the GS cannot place. */
+		if (!isfinite(x0) || !isfinite(x1) || !isfinite(y0) || !isfinite(y1))
+			continue;
+		if (cull && !athena_view_culler_visible(&culler, x0, y0, x1 - x0, y1 - y0)) {
+			athena_view_count_culled(1);
+			continue;
+		}
+		color = image_channel((uint32_t)fmaxf(q[16], 0.0f)) |
+			(image_channel((uint32_t)fmaxf(q[17], 0.0f)) << 8) |
+			(image_channel((uint32_t)fmaxf(q[18], 0.0f)) << 16) |
+			(image_channel((uint32_t)fmaxf(q[19], 0.0f)) << 24);
+
+		/* Two triangles: TL-TR-BL and TR-BR-BL. */
+		t = &image_quad_chunk[queued * 2];
+		t[0] = (prim_tex_gouraud_triangle){ q[0], q[1], q[8], q[9], color,
+			q[2], q[3], q[10], q[11], color, q[4], q[5], q[12], q[13], color };
+		t[1] = (prim_tex_gouraud_triangle){ q[2], q[3], q[10], q[11], color,
+			q[6], q[7], q[14], q[15], color, q[4], q[5], q[12], q[13], color };
+		if (++queued == IMAGE_QUAD_CHUNK) {
+			athena_image_draw_triangles(image, image_quad_chunk, queued * 2);
+			queued = 0;
+		}
+	}
+	if (queued)
+		athena_image_draw_triangles(image, image_quad_chunk, queued * 2);
+	return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry image_proto_funcs[] = {
 	JS_CFUNC_DEF("draw", 2, image_draw),
 	JS_CFUNC_DEF("drawList", 2, image_draw_list),
+	JS_CFUNC_DEF("drawQuads", 2, image_draw_quads),
 	JS_CFUNC_DEF("drawNinePatch", 4, image_draw_nine_patch),
 	JS_CFUNC_DEF("ready", 0, image_ready),
 	JS_CFUNC_DEF("loading", 0, image_loading),
