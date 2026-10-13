@@ -1,0 +1,23 @@
+{
+  "id": "shadows",
+  "name": "Shadows",
+  "description": "Static and GPU-captured silhouette shadow projectors with darken, alpha and additive blending, configurable grids and Collision3D terrain raycasts.",
+  "category": "Graphics",
+  "version": "1.0.0",
+  "default": false,
+  "dependencies": {
+    "modules": [
+      "render3d",
+      "collision3d",
+      "matrix4"
+    ],
+    "iop": [],
+    "ee_libs": []
+  },
+  "js": {
+    "source": "js/shadows.js",
+    "module_name": "Shadows",
+    "global_alias": "Shadows"
+  },
+  "types": "shadows.d.ts"
+}

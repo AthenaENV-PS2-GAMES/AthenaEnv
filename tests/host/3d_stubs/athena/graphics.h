@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 typedef struct { int ZBuffering,Height,Width,Interlace,Field,PSMZ,PrimContext,Mode;
-    int OffsetX,OffsetY,PrimAlphaEnable,PrimFogEnable,PrimAAEnable; } GSCONTEXT;
+    int PSM,OffsetX,OffsetY,PrimAlphaEnable,PrimFogEnable,PrimAAEnable; } GSCONTEXT;
 #define GS_INTERLACED 1
 #define GS_FRAME 1
 #define GS_ZBUF_16 2
@@ -21,6 +21,20 @@ typedef union { struct { uint64_t PRIM:3,IIP:1,TME:1,FGE:1,ABE:1,AA1:1,FST:1,CTX
 typedef union { struct { uint64_t NLOOP:15,EOP:1,pad:30,PRE:1,PRIM:11,FLG:2,NREG:4; }; uint64_t data; } giftag_t;
 void graphics_service_init(void);
 GSCONTEXT *getGSGLOBAL(void);
+#define GS_CACHE_FRAME 30
+#define GS_CACHE_XYOFFSET 8
+#define GS_CACHE_SCISSOR 24
+#define GS_CACHE_FBA 28
+#define GS_TEST_1 0x47
+#define GS_XYOFFSET_1 0x18
+#define GS_XYZ2 0x05
+#define GS_PRIM 0
+#define GS_SETREG_FRAME_1(f,w,p,m) ((uint64_t)(f)|((uint64_t)(w)<<16)|((uint64_t)(p)<<24)|((uint64_t)(m)<<32))
+#define GS_SETREG_XYOFFSET(x,y) ((uint64_t)(x)|((uint64_t)(y)<<32))
+#define GS_SETREG_SCISSOR_1(x0,x1,y0,y1) ((uint64_t)(x0)|((uint64_t)(x1)<<16)|((uint64_t)(y0)<<32)|((uint64_t)(y1)<<48))
+#define GS_SETREG_XYZ(x,y,z) ((uint64_t)(x)|((uint64_t)(y)<<16)|((uint64_t)(z)<<32))
+void flush_gs_texcache(void);
+#define GS_CACHE_ALPHA 6
 #define GS_CACHE_TEST 26
 #define GS_CACHE_TEX0 0
 #define GS_CACHE_TEX1 2
@@ -32,7 +46,7 @@ GSCONTEXT *getGSGLOBAL(void);
 uint64_t get_register(int);
 void set_register(int,uint64_t);
 void set_register_force(int,uint64_t);
-typedef struct { uint32_t Width,Height,PSM,Filter,Vram,TBW,VramClut,ClutPSM; uint32_t *Mem,*Clut; bool locked; } GSSURFACE;
+typedef struct { uint32_t Width,Height,PSM,Filter,Vram,TBW,VramClut,ClutPSM; uint8_t PageAligned; uint32_t *Mem,*Clut; bool locked; } GSSURFACE;
 #define GS_PSM_CT32 0
 #define GS_PSM_CT24 1
 #define GS_PSM_CT16 2

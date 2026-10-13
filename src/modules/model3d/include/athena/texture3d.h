@@ -5,6 +5,9 @@
 #define ATHENA_TEXTURE3D_MAX_SIZE 512u
 typedef struct AthenaTexture3D AthenaTexture3D;
 typedef enum { ATHENA_TEXTURE3D_NEAREST=0, ATHENA_TEXTURE3D_LINEAR=1 } AthenaTexture3DFilter;
+/* GPU-owned CT32 silhouette target: power-of-two width/height in 64..512.
+ * No CPU pixel snapshot; capture before sampling (also after video mode changes). */
+int athena_texture3d_create_target(uint32_t width,uint32_t height,AthenaTexture3DFilter filter,AthenaTexture3D **out);
 /* Per-axis addressing flags: clamp to edge (0) or repeat (power-of-two
  * sizes make it native on the GS). */
 typedef enum { ATHENA_TEXTURE3D_CLAMP=0, ATHENA_TEXTURE3D_REPEAT_U=1, ATHENA_TEXTURE3D_REPEAT_V=2,
@@ -13,13 +16,13 @@ typedef struct {
     uint32_t width,height;
     AthenaTexture3DFilter filter;
     /* Copied little-endian 0xAABBGGRR pixels, alpha 0..255. The opaque pass
-     * ignores alpha; alpha-mask materials test it. The stored copy (view())
+     * ignores alpha; alpha-mask/blended materials read it. The stored copy (view())
      * holds GS alpha, 0..0x80. */
     const uint32_t *pixels;
     uint32_t pixel_count;
     AthenaTexture3DWrap wrap; /* zero (CLAMP) keeps the original behaviour */
 } AthenaTexture3DPixels;
-/* Main thread only. Immutable, independent of Image handles. Power-of-two
+/* Main thread only. Static textures are immutable, independent of Image handles. Power-of-two
  * dimensions 1..512; clamp-to-edge or repeat sampling, no mipmaps. CPU data retained
  * for re-upload after video-mode changes. Final release defers cleanup until GS idle. */
 int athena_texture3d_create(const AthenaTexture3DPixels *pixels,AthenaTexture3D **out);

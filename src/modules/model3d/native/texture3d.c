@@ -3,7 +3,7 @@
 #include <string.h>
 #include <athena/model3d.h>
 #include "texture3d_backend.h"
-struct AthenaTexture3D { uint64_t refs,stamp; AthenaTexture3DPixels view; void *backend; };
+struct AthenaTexture3D { uint64_t refs,stamp; AthenaTexture3DPixels view; void *backend; int target,writing; };
 static uint64_t texture_stamp;
 uint64_t athena_texture3d_stamp(const AthenaTexture3D *t) { return t?t->stamp:0; }
 static int dimension(uint32_t n) { return n&&n<=ATHENA_TEXTURE3D_MAX_SIZE&&!(n&(n-1)); }
@@ -52,6 +52,29 @@ int athena_texture3d_create(const AthenaTexture3DPixels *p,AthenaTexture3D **out
     if(!copy) { free(t); return ATHENA_MODEL3D_ENOMEM; }
     t->refs=1; t->stamp=++texture_stamp; t->view=*p; t->view.pixels=copy; *out=t; return ATHENA_MODEL3D_OK;
 }
+int athena_texture3d_create_target(uint32_t width,uint32_t height,AthenaTexture3DFilter filter,AthenaTexture3D **out) {
+    if(!out) return ATHENA_MODEL3D_EINVAL;
+    *out=NULL;
+    if(width<64||height<64||!dimension(width)||!dimension(height)||(filter!=0&&filter!=1)) return ATHENA_MODEL3D_EINVAL;
+    AthenaTexture3D *t=calloc(1,sizeof(*t)); if(!t) return ATHENA_MODEL3D_ENOMEM;
+    t->refs=1; t->stamp=++texture_stamp; t->target=1;
+    t->view=(AthenaTexture3DPixels){.width=width,.height=height,.filter=filter,.wrap=ATHENA_TEXTURE3D_CLAMP};
+    *out=t; return 0;
+}
+int athena_texture3d_target_begin(AthenaTexture3D *t,AthenaTexture3DTarget *out) {
+    if(!t||!out||!t->target||t->writing) return ATHENA_MODEL3D_EINVAL;
+    if(!t->backend) t->backend=athena_texture3d_backend_create_target(&t->view);
+    if(!t->backend) return ATHENA_MODEL3D_ENOMEM;
+    int code=athena_texture3d_backend_target_begin(t->backend,out);
+    if(code<0) return code;
+    t->writing=1; athena_texture3d_retain(t); return 0;
+}
+void athena_texture3d_target_end(AthenaTexture3D *t,int commit) {
+    if(!t||!t->writing) return;
+    athena_texture3d_backend_target_end(t->backend,commit); t->writing=0;
+    /* Bump the binding revision: a recapture must never reuse a stale pass. */
+    t->stamp=++texture_stamp; athena_texture3d_release(t);
+}
 int athena_texture3d_load(const char *path,AthenaTexture3DFilter filter,AthenaTexture3D **out) {
     return athena_texture3d_load_ex(path,filter,ATHENA_TEXTURE3D_CLAMP,out);
 }
@@ -91,8 +114,9 @@ void athena_texture3d_release(AthenaTexture3D *t) {
 void athena_texture3d_view(const AthenaTexture3D *t,AthenaTexture3DPixels *out) { *out=t->view; }
 int athena_texture3d_bind(AthenaTexture3D *t,AthenaTexture3DBinding *out) {
     if(!t||!out) return ATHENA_MODEL3D_EINVAL;
+    if(t->writing) { athena_model3d_set_detail("cannot sample a render target during its capture"); return ATHENA_MODEL3D_EINVAL; }
     if(!t->backend) {
-        t->backend=athena_texture3d_backend_create(&t->view);
+        t->backend=t->target?athena_texture3d_backend_create_target(&t->view):athena_texture3d_backend_create(&t->view);
         if(!t->backend) return ATHENA_MODEL3D_ENOMEM;
     }
     return athena_texture3d_backend_bind(t->backend,out);

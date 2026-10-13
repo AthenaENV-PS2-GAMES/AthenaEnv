@@ -13,11 +13,12 @@ typedef enum { ATHENA_MODEL3D_OK=0, ATHENA_MODEL3D_EINVAL=-1,
 typedef struct AthenaMesh3D AthenaMesh3D;
 typedef struct AthenaInstance3D AthenaInstance3D;
 typedef enum { ATHENA_MATERIAL3D_UNLIT=0, ATHENA_MATERIAL3D_DIFFUSE=1 } AthenaMaterial3DShading;
-/* Immutable descriptor copied into the mesh. Opaque linear RGBA in [0,1];
+/* Immutable descriptor copied into the mesh. Linear RGBA in [0,1];
  * base_color multiplies vertex colors once at creation. Mesh retains texture.
  * alpha_mask (glTF alphaMode MASK): pixels whose alpha (texture alpha times
  * vertex alpha) is below alpha_cutoff are discarded by the GS alpha test,
- * depth included; the rest stay opaque. No blending, no sorting needed. */
+ * depth included; the rest stay opaque by default. Render3D.withBlend
+ * enables blended passes; draw order is caller-owned. */
 typedef struct {
     AthenaMaterial3DShading shading; float base_color[4]; AthenaTexture3D *texture;
     int alpha_mask; float alpha_cutoff; /* cutoff in [0,1], 0.5 by default */

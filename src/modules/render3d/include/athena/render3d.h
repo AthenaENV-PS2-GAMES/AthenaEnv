@@ -4,6 +4,17 @@
 #include <athena/camera3d.h>
 #include <athena/lights.h>
 typedef struct AthenaBatch3D AthenaBatch3D;
+/* Scoped blended draws: keep depth testing, disable depth writes. Order is
+ * caller-owned. Modes -1 opaque, 0 darken, 1 alpha, 2 additive. Changing
+ * mode inside a group is rejected; all GS overrides are restored on close. */
+int athena_render3d_set_blend(int mode);
+int athena_render3d_get_blend(void);
+/* Silhouette capture scope; only synchronous Render3D/Scene3D draws inside.
+ * White opaque geometry on transparent CT32, ignoring material/tint/fog.
+ * Targets may not nest or start inside a group. No screen changes/2D draws.
+ * end restores framebuffer, viewport and GS state; commit=0 invalidates output. */
+int athena_render3d_capture_begin(AthenaTexture3D *target);
+void athena_render3d_capture_end(int commit);
 typedef struct {
     /* submitted includes culled objects; triangles counts output sent to VU1.
      * draw_passes counts accepted objects; pipeline_passes counts the GS/VU1

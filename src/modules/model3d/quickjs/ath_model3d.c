@@ -430,6 +430,19 @@ static JSValue create_instance(JSContext *ctx,JSValueConst self,int argc,JSValue
     if(JS_IsException(obj)) { athena_instance3d_release(i); return obj; }
     JS_SetOpaque(obj,i); return obj;
 }
+AthenaTexture3D *athena_texture3d_from_value(JSContext *ctx,JSValueConst value) { return get_texture(ctx,value); }
+static JSValue texture_target(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,2,3,"Texture.renderTarget")) return JS_EXCEPTION;
+    float width,height,filter=1;
+    if(!athena_js_float(ctx,argv[0],&width,"width")||!athena_js_float(ctx,argv[1],&height,"height")) return JS_EXCEPTION;
+    if(argc==3&&!athena_js_float(ctx,argv[2],&filter,"filter")) return JS_EXCEPTION;
+    if(width<64||width>512||height<64||height>512||width!=(int)width||height!=(int)height||(filter!=0&&filter!=1))
+        return JS_ThrowRangeError(ctx,"render target sizes must be powers of two in 64..512; filter 0 or 1");
+    AthenaTexture3D *t=NULL;
+    int code=athena_texture3d_create_target((uint32_t)width,(uint32_t)height,(int)filter,&t);
+    return code<0?throw_result(ctx,code):wrap_texture(ctx,t);
+}
 static JSValue texture_pixels(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
     if(!athena_js_argc(ctx,argc,1,1,"Texture.fromPixels")||!JS_IsObject(argv[0]))
@@ -644,6 +657,7 @@ static int init(JSContext *ctx,JSModuleDef *m) {
     JSValue tp=JS_NewObject(ctx),tc=JS_NewCFunction2(ctx,forbidden_ctor,"Texture",0,JS_CFUNC_constructor,0);
     if(JS_IsException(tp)||JS_IsException(tc)) { JS_FreeValue(ctx,tp); JS_FreeValue(ctx,tc); return -1; }
     JS_SetPropertyFunctionList(ctx,tp,texture_methods,countof(texture_methods));
+    JS_SetPropertyStr(ctx,tc,"renderTarget",JS_NewCFunction(ctx,texture_target,"renderTarget",2));
     JS_SetPropertyStr(ctx,tc,"fromPixels",JS_NewCFunction(ctx,texture_pixels,"fromPixels",1));
     JS_SetPropertyStr(ctx,tc,"load",JS_NewCFunction(ctx,texture_load,"load",1));
     JS_SetPropertyStr(ctx,tc,"loadMemory",JS_NewCFunction(ctx,texture_load_memory,"loadMemory",1));

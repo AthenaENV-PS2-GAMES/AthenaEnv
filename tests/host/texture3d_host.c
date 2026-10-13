@@ -34,13 +34,24 @@ int athena_texture3d_decode_memory(const void *data,size_t size,uint32_t **p,uin
     for(uint32_t i=0;i<(*w)*(*h);i++) (*p)[i]=0x80ffffffu;
     return 0;
 }
+typedef struct { AthenaTexture3DPixels view; int target,valid; } HostBackend;
 void *athena_texture3d_backend_create(const AthenaTexture3DPixels *p) {
-    AthenaTexture3DPixels *copy=malloc(sizeof(*copy));
-    if(copy) { *copy=*p; texture3d_host_created++; } return copy;
+    HostBackend *copy=calloc(1,sizeof(*copy));
+    if(copy) { copy->view=*p; texture3d_host_created++; } return copy;
 }
-int athena_texture3d_backend_bind(void *p,AthenaTexture3DBinding *b) {
-    const AthenaTexture3DPixels *view=p;
-    b->tex0=0x1000+view->width; b->tex1=view->filter; b->clamp=view->height; return 0;
+void *athena_texture3d_backend_create_target(const AthenaTexture3DPixels *p) {
+    HostBackend *b=athena_texture3d_backend_create(p); if(b) b->target=1; return b;
+}
+int athena_texture3d_backend_target_begin(void *p,AthenaTexture3DTarget *out) {
+    HostBackend *b=p; if(!b||!b->target) return -1;
+    b->valid=0; *out=(AthenaTexture3DTarget){8192,b->view.width,b->view.height,b->view.width/64}; return 0;
+}
+void athena_texture3d_backend_target_end(void *p,int commit) { ((HostBackend *)p)->valid=!!commit; }
+int athena_texture3d_backend_bind(void *p,AthenaTexture3DBinding *out) {
+    HostBackend *b=p;
+    if(b->target&&!b->valid) return -1;
+    const AthenaTexture3DPixels *view=&b->view;
+    out->tex0=0x1000+view->width; out->tex1=view->filter; out->clamp=view->height; return 0;
 }
 void athena_texture3d_backend_destroy(void *p,void *pixels) { if(p) { texture3d_host_destroyed++; free(p); } free(pixels); }
 void athena_texture3d_collect(int force) { (void)force; }

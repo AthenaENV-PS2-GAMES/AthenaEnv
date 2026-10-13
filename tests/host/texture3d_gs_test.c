@@ -41,6 +41,7 @@ int graphics_surface_bind_sync(GSSURFACE *s) {
     if(s->Width==1) assert(s->Mem[0]==0x800000ff);
     /* 1x1 upload still reads a complete aligned QW; padding must be live. */
     assert(!((uintptr_t)s->Mem&127));
+    if(s->PageAligned) assert(!s->Mem&&!s->Clut&&s->PSM==GS_PSM_CT32);
     if(s->Width==1) assert(s->Mem[1]==0&&s->Mem[3]==0);
     if(s->Clut) assert(!((uintptr_t)s->Clut&127)&&s->ClutPSM==GS_PSM_CT32);
     if(fail_upload) return GRAPHICS_BIND_ERROR;
@@ -174,5 +175,29 @@ int main(void) {
     indexed_test(17,GS_PSM_T8); indexed_test(256,GS_PSM_T8);
     indexed_test(257,GS_PSM_CT32);
     indexed_oom_test(1); indexed_oom_test(2);
+    /* Dynamic render targets allocate page-aligned CT32 without a CPU
+     * upload or palette; reset/aborted capture cannot expose stale VRAM. */
+    AthenaTexture3DTarget info;
+    assert(athena_texture3d_create_target(63,64,1,&texture)==ATHENA_MODEL3D_EINVAL);
+    assert(athena_texture3d_create_target(128,96,1,&texture)==ATHENA_MODEL3D_EINVAL);
+    assert(!athena_texture3d_create_target(64,64,1,&texture));
+    assert(athena_texture3d_bind(texture,&binding)==ATHENA_MODEL3D_EINVAL);
+    assert(!athena_texture3d_target_begin(texture,&info));
+    assert(info.address%8192==0&&info.width==64&&info.height==64&&resident->PageAligned);
+    assert(athena_texture3d_target_begin(texture,&info)==ATHENA_MODEL3D_EINVAL);
+    assert(athena_texture3d_bind(texture,&binding)==ATHENA_MODEL3D_EINVAL);
+    graphics_wait_idle(); athena_texture3d_target_end(texture,1);
+    assert(!athena_texture3d_bind(texture,&binding));
+    athena_texture3d_view(texture,&p); assert(!p.pixels&&!p.pixel_count);
+    graphics_wait_idle(); resident->locked=false;resident->Vram=0;
+    assert(athena_texture3d_bind(texture,&binding)==ATHENA_MODEL3D_EINVAL);
+    assert(!athena_texture3d_target_begin(texture,&info));athena_texture3d_target_end(texture,0);
+    assert(athena_texture3d_bind(texture,&binding)==ATHENA_MODEL3D_EINVAL);
+    fail_upload=1;resident->locked=false;resident->Vram=0;
+    assert(athena_texture3d_target_begin(texture,&info)==ATHENA_MODEL3D_EVRAM);fail_upload=0;
+    assert(!athena_texture3d_target_begin(texture,&info));
+    /* Capture retains the resource even if its JS owner disposes it. */
+    athena_texture3d_release(texture);graphics_wait_idle();athena_texture3d_target_end(texture,1);
+    athena_model3d_module_shutdown();
     puts("3D GS texture upload, FINISH ordering, reset and release tests passed"); return 0;
 }

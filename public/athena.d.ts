@@ -794,12 +794,16 @@ declare namespace Model3D {
     const UV_LIMIT: number;
     const UNLIT: 0; const DIFFUSE: 1;
     class Texture {
+        /** GPU-owned CT32 target. Width/height powers of two in 64..512,
+         * default linear filter. Capture before sampling and recapture after
+         * Screen.setMode(). No CPU pixels; cannot sample while capturing. */
+        static renderTarget(width: number, height: number, filter?: 0 | 1): Texture;
         private constructor();
         static readonly NEAREST: 0; static readonly LINEAR: 1;
         /** Addressing per axis: CLAMP (to edge, the default), REPEAT on both
          * axes, or REPEAT_U / REPEAT_V on one. */
         static readonly CLAMP: 0; static readonly REPEAT_U: 1; static readonly REPEAT_V: 2; static readonly REPEAT: 3;
-        /** Copies 0xAABBGGRR pixels; alpha (0..255) matters only to alphaCutoff materials. Power-of-two sizes 1..512;
+        /** Copies 0xAABBGGRR pixels; alpha (0..255) is used by alphaCutoff and Render3D.withBlend. Power-of-two sizes 1..512;
          * no mipmaps. Honors subarray(); main thread only. */
         static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1; wrap?: 0 | 1 | 2 | 3}): Texture;
         /** Synchronous decoding. RGB/RGBA, 16-bit and 4/8-bit palette images
@@ -823,7 +827,7 @@ declare namespace Model3D {
         /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
         shading?: 0 | 1;
         /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
-         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff. */
+         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff and Render3D.withBlend. */
         baseColor?: Float32Array;
         texture?: Texture;
         /** Alpha mask (glTF alphaMode MASK): pixels whose alpha (texture
@@ -1021,6 +1025,19 @@ declare namespace Render3D {
      * returns or throws; fn's result is returned. Inside fn, draw only 3D:
      * no 2D drawing, flip or camera change. Groups do not nest. */
     function group<R>(fn: () => R): R;
+    /** Synchronous scope for blended 3D draws, depth tested without depth writes.
+     * -1 opaque, 0 darken (use black), 1 alpha, 2 additive. Restores state on
+     * return/throw; scopes may nest, but cannot start inside group(). Draw
+     * opaque receivers first. No sorting; callback must draw synchronously. */
+    function withBlend<R>(mode: -1 | 0 | 1 | 2, fn: () => R): R;
+    /** Captures opaque white geometry over transparent black in a GPU target.
+     * Uses the camera passed to each draw, including skin/morph deformation;
+     * ignores source texture, RGBA, lighting, fog and tint. No depth buffer.
+     * Only synchronous Render3D/Scene3D draws in fn; no screen changes, 2D or
+     * promises. Cannot nest/start in group(). Restores state on return/throw;
+     * an exception invalidates the target until the next successful capture.
+     * Draw opaque receivers afterwards, then project the captured texture. */
+    function captureSilhouette<R>(target: Model3D.Texture, fn: () => R): R;
     class Batch {
         constructor();
         readonly size: number;
@@ -7841,6 +7858,65 @@ declare namespace SaveGame {
     function encode(data: unknown, options?: { compress?: boolean }): ArrayBuffer;
     function decode(bytes: ArrayBuffer): any;
     function crc32(bytes: Uint8Array): number;
+}
+
+
+/* === Module: Shadows (shadows) === */
+/* Optional module, not in the default build: node tools/modules.js configure --modules=shadows,... */
+/** Static and captured texture shadow decals. Render opaque receivers first.
+ * Textures use Model3D.Texture, independently of Image.
+ * Position/scale accept xyz objects or arrays; rotation is a normalized xyzw
+ * quaternion. Properties return copies; assigning TRS replaces setTransform. */
+declare namespace Shadows {
+    const SHADOW_BLEND_DARKEN: 0;
+    const SHADOW_BLEND_ALPHA: 1;
+    const SHADOW_BLEND_ADD: 2;
+    type Vec3 = {x: number; y: number; z: number} | [number, number, number] | Float32Array;
+    type Quaternion = {x: number; y: number; z: number; w: number} | [number, number, number, number] | Float32Array;
+    /** GPU silhouette texture owner. Keep this alive while a projector uses
+     * its texture; dispose the projector before the map. */
+    class ShadowMap {
+        constructor(width?: number, height?: number, filter?: 0 | 1);
+        readonly texture: Model3D.Texture;
+        /** Independent light camera; match its aspect to width/height. The
+         * callback receives that camera for Scene3D/animated caster draws.
+         * Materials and camera objects are never modified by capture. */
+        capture(camera: Camera3D.Camera, caster: Model3D.Instance): undefined;
+        capture<R>(camera: Camera3D.Camera, caster: (camera: Camera3D.Camera) => R): R;
+        dispose(): void;
+    }
+    class Projector {
+        /** Omitted texture creates a soft circular blob owned by the projector.
+         * Supplied textures are borrowed: keep the handle live until dispose(). */
+        constructor(texture?: Model3D.Texture);
+        position: Vec3;
+        rotation: Quaternion;
+        scale: Vec3;
+        setTransform(matrix: Matrix4): this;
+        setSize(width: number, height: number): this;
+        /** Grid dimensions 2..64; default 2x2, on the local XZ plane. */
+        setGrid(x: number, z: number): this;
+        /** Direction rays travel, normalized; default (0,-1,0). */
+        setLightDir(x: number, y: number, z: number): this;
+        /** Offset opposite lightDir, applied to all nodes; default .01. */
+        setBias(bias: number): this;
+        setLightOffset(distance: number): this;
+        /** Minimum hit normal Y in [-1,1]; -1 disables the filter. */
+        setSlopeLimit(cosine: number): this;
+        /** Linear RGBA in [0,1]; default black with .75 opacity. */
+        setColor(r: number, g: number, b: number, a: number): this;
+        setBlend(mode: 0 | 1 | 2): this;
+        setUVRect(u0: number, v0: number, u1: number, v1: number): this;
+        /** Casts a segment centered on each transformed node along lightDir.
+         * Misses/steep nodes omit incident triangles. The world is borrowed.
+         * Queries run every render; geometry rebuilds only when it changes. */
+        enableRaycast(world: Collision3D.World | null, rayLength?: number, enable?: boolean): this;
+        /** Requires a camera and Screen zbuffering. Depth tests stay enabled,
+         * depth writes disabled; restores GS state. Avoid calling in group().
+         * Returns undefined when no triangle survives terrain projection. */
+        render(camera: Camera3D.Camera, stats?: object | null): Render3D.Stats | undefined;
+        dispose(): void;
+    }
 }
 
 

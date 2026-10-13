@@ -16,7 +16,14 @@ void athena_texture3d_backend_destroy(void *backend,void *pixels);
 /* Frees the deferred releases that are provably idle; force waits for the
  * GS first and frees all of them. */
 void athena_texture3d_collect(int force);
-/* Immutable identity, independent of allocator address reuse; NULL is zero. */
+/* Unique binding revision, independent of allocator address reuse; NULL is zero.
+ * Static textures keep their identity; target capture advances the revision. */
 uint64_t athena_texture3d_stamp(const AthenaTexture3D *texture);
+typedef struct { uint32_t address,width,height,tbw; } AthenaTexture3DTarget;
+void *athena_texture3d_backend_create_target(const AthenaTexture3DPixels *pixels);
+int athena_texture3d_backend_target_begin(void *backend,AthenaTexture3DTarget *out);
+void athena_texture3d_backend_target_end(void *backend,int commit);
+int athena_texture3d_target_begin(AthenaTexture3D *texture,AthenaTexture3DTarget *out);
+void athena_texture3d_target_end(AthenaTexture3D *texture,int commit);
 int athena_texture3d_bind(AthenaTexture3D *texture,AthenaTexture3DBinding *out);
 #endif

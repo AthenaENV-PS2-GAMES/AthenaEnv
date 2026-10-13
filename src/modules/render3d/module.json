@@ -1,9 +1,9 @@
 {
   "id": "render3d",
   "name": "Render3D",
-  "description": "Opaque color and perspective-correct textured rendering, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
+  "description": "Color and perspective-correct textured rendering, GPU silhouette capture and scoped darken/alpha/additive passes without depth writes, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
   "category": "Graphics",
-  "version": "1.8.0",
+  "version": "1.10.0",
   "default": false,
   "sources": [
     "native/render3d.c",

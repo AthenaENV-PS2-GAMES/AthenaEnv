@@ -136,6 +136,33 @@ static JSValue group(JSContext *ctx,JSValueConst self,int argc,JSValueConst *arg
 }
 /* Render3D.frameStats(out?, reset = true): totals of the draws since the
  * last reset, e.g. once per frame after drawing with stats = null. */
+/* Restore the outer mode even when the callback throws. Async callbacks
+ * are unsupported: drawing must happen before the callback returns. */
+static JSValue with_blend(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,2,2,"Render3D.withBlend")) return JS_EXCEPTION;
+    float mode;
+    if(!athena_js_float(ctx,argv[0],&mode,"blend mode")) return JS_EXCEPTION;
+    if(mode < -1 || mode > 2 || mode!=(int)mode)
+        return JS_ThrowRangeError(ctx,"blend mode must be -1, 0, 1 or 2");
+    if(!JS_IsFunction(ctx,argv[1])) return JS_ThrowTypeError(ctx,"withBlend expects a function");
+    int previous=athena_render3d_get_blend();
+    if(athena_render3d_set_blend((int)mode)<0)
+        return JS_ThrowTypeError(ctx,"withBlend cannot change mode inside Render3D.group");
+    JSValue result=JS_Call(ctx,argv[1],JS_UNDEFINED,0,NULL);
+    athena_render3d_set_blend(previous);
+    return result;
+}
+static JSValue capture_silhouette(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
+    (void)self;
+    if(!athena_js_argc(ctx,argc,2,2,"Render3D.captureSilhouette")) return JS_EXCEPTION;
+    AthenaTexture3D *t=athena_texture3d_from_value(ctx,argv[0]); if(!t) return JS_EXCEPTION;
+    if(!JS_IsFunction(ctx,argv[1])) return JS_ThrowTypeError(ctx,"captureSilhouette expects a synchronous function");
+    int code=athena_render3d_capture_begin(t);
+    if(code<0) return JS_ThrowInternalError(ctx,"Cannot capture silhouette: target must be a renderTarget, outside group/capture (code %d)",code);
+    JSValue result=JS_Call(ctx,argv[1],JS_UNDEFINED,0,NULL);
+    athena_render3d_capture_end(!JS_IsException(result)); return result;
+}
 static JSValue frame_stats(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
     if(!athena_js_argc(ctx,argc,0,2,"Render3D.frameStats")) return JS_EXCEPTION;
@@ -173,7 +200,7 @@ static const JSCFunctionListEntry methods[]={
     JS_CFUNC_DEF("add",1,add),JS_CFUNC_DEF("clear",0,clear),JS_CFUNC_DEF("draw",1,batch_draw),
     JS_CFUNC_DEF("dispose",0,dispose),JS_CGETSET_DEF("size",size,NULL)};
 static const JSCFunctionListEntry exports[]={JS_CFUNC_DEF("draw",2,draw),JS_CFUNC_DEF("group",1,group),
-    JS_CFUNC_DEF("frameStats",0,frame_stats),JS_CFUNC_DEF("setTint",3,set_tint),JS_CFUNC_DEF("getTint",0,get_tint),
+    JS_CFUNC_DEF("captureSilhouette",2,capture_silhouette),JS_CFUNC_DEF("withBlend",2,with_blend),JS_CFUNC_DEF("frameStats",0,frame_stats),JS_CFUNC_DEF("setTint",3,set_tint),JS_CFUNC_DEF("getTint",0,get_tint),
     JS_PROP_INT32_DEF("CULL_NONE",0,JS_PROP_ENUMERABLE),JS_PROP_INT32_DEF("CULL_BACK",1,JS_PROP_ENUMERABLE),
     JS_PROP_INT32_DEF("CULL_FRONT",-1,JS_PROP_ENUMERABLE)};
 static int init(JSContext *ctx,JSModuleDef *m) {

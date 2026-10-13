@@ -804,9 +804,9 @@
     {
       "id": "model3d",
       "name": "Model3D",
-      "description": "Immutable meshes with copied materials, normals, UVs, procedural skin/morph streams and retained textures. Static OBJ/glTF loading with explicit unsupported-feature errors.",
+      "description": "Immutable meshes with copied materials, normals, UVs, procedural skin/morph streams and retained textures and GPU silhouette targets. Static OBJ/glTF loading with explicit unsupported-feature errors.",
       "category": "Graphics",
-      "version": "1.9.0",
+      "version": "1.10.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -1065,9 +1065,9 @@
     {
       "id": "render3d",
       "name": "Render3D",
-      "description": "Opaque color and perspective-correct textured rendering, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
+      "description": "Color and perspective-correct textured rendering, GPU silhouette capture and scoped darken/alpha/additive passes without depth writes, VU1 skinning with optional textures, Gouraud diffuse lighting, precise native clipping, retained batches and retained DMA geometry.",
       "category": "Graphics",
-      "version": "1.8.0",
+      "version": "1.10.0",
       "required": false,
       "default": false,
       "dependencies": {
@@ -1193,6 +1193,29 @@
       "global_alias": "Screen",
       "api": {
         "native": true,
+        "quickjs": true
+      }
+    },
+    {
+      "id": "shadows",
+      "name": "Shadows",
+      "description": "Static and GPU-captured silhouette shadow projectors with darken, alpha and additive blending, configurable grids and Collision3D terrain raycasts.",
+      "category": "Graphics",
+      "version": "1.0.0",
+      "required": false,
+      "default": false,
+      "dependencies": {
+        "modules": [
+          "render3d",
+          "collision3d",
+          "matrix4"
+        ],
+        "iop": [],
+        "ee_libs": []
+      },
+      "global_alias": "Shadows",
+      "api": {
+        "native": false,
         "quickjs": true
       }
     },

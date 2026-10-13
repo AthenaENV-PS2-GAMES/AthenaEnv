@@ -66,6 +66,19 @@ declare namespace Render3D {
      * returns or throws; fn's result is returned. Inside fn, draw only 3D:
      * no 2D drawing, flip or camera change. Groups do not nest. */
     function group<R>(fn: () => R): R;
+    /** Synchronous scope for blended 3D draws, depth tested without depth writes.
+     * -1 opaque, 0 darken (use black), 1 alpha, 2 additive. Restores state on
+     * return/throw; scopes may nest, but cannot start inside group(). Draw
+     * opaque receivers first. No sorting; callback must draw synchronously. */
+    function withBlend<R>(mode: -1 | 0 | 1 | 2, fn: () => R): R;
+    /** Captures opaque white geometry over transparent black in a GPU target.
+     * Uses the camera passed to each draw, including skin/morph deformation;
+     * ignores source texture, RGBA, lighting, fog and tint. No depth buffer.
+     * Only synchronous Render3D/Scene3D draws in fn; no screen changes, 2D or
+     * promises. Cannot nest/start in group(). Restores state on return/throw;
+     * an exception invalidates the target until the next successful capture.
+     * Draw opaque receivers afterwards, then project the captured texture. */
+    function captureSilhouette<R>(target: Model3D.Texture, fn: () => R): R;
     class Batch {
         constructor();
         readonly size: number;

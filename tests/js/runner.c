@@ -406,6 +406,7 @@ static const struct {
     const char *path;
 } js_modules[] = {
     { "Ease", "../src/modules/ease/js/ease.js" },
+    { "Shadows", "../src/modules/shadows/js/shadows.js" },
     { "Tween", "../src/modules/tween/js/tween.js" },
     { "Loop", "../tests/js/stub/Loop.js" },
     { "Debug", "../src/modules/debug/js/debug.js" },

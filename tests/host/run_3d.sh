@@ -45,7 +45,7 @@ $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/render3d_shade_test" \
     src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/render3d_shade_test"
 for dma_ref in 0 1; do
-$CC $FLAGS -DATHENA_RENDER3D_DMA_REF=$dma_ref -DATHENA_OWL_DIAGNOSTICS=1 $INC -Itests/host/3d_stubs -Wall -Wextra -Werror \
+$CC $FLAGS -DATHENA_RENDER3D_DMA_REF=$dma_ref -DATHENA_OWL_DIAGNOSTICS=1 $INC -Itests/host/3d_stubs -Isrc/modules/graphics/include -Wall -Wextra -Werror \
     -o "$OUT/render3d_packet_test_$dma_ref" tests/host/render3d_packet_test.c \
     src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
     src/modules/camera3d/native/camera3d.c src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c src/modules/lights/native/lights.c src/modules/render3d/native/render3d_shade.c \

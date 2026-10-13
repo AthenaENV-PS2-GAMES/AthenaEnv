@@ -5,10 +5,28 @@
 #include <math.h>
 #include <assert.h>
 #include "render3d_clip.h"
+#include "../../src/modules/model3d/native/texture3d_backend.h"
 /* Draws that skipped the frustum test; read by the Scene3D test. */
 unsigned host_contained_draws;
 /* Same pass key as render3d_gs.c: program, texture and camera. */
 static struct { int open,grouped,program; const void *texture; const AthenaCamera3D *camera; } pass;
+static int host_blend=-1;
+static AthenaTexture3D *host_capture;
+int athena_render3d_capture_begin(AthenaTexture3D *target) {
+    if(host_capture||pass.grouped) return -1;
+    AthenaTexture3DTarget info; int code=athena_texture3d_target_begin(target,&info);
+    if(code<0) return code;
+    host_capture=target; return 0;
+}
+void athena_render3d_capture_end(int commit) {
+    if(!host_capture) return;
+    athena_texture3d_target_end(host_capture,commit); host_capture=NULL;
+}
+int athena_render3d_get_blend(void) { return host_blend; }
+int athena_render3d_set_blend(int mode) {
+    if(mode < -1 || mode > 2 || pass.grouped || host_capture) return -1;
+    pass.open=0; host_blend=mode; return 0;
+}
 int athena_render3d_group_begin(void) {
     if(pass.grouped) return -1;
     pass.grouped=1; return 0;

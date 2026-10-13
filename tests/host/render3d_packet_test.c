@@ -21,6 +21,9 @@ uint32_t athena_test_dma_address(uintptr_t address) {
     return dma_address_count;
 }
 static int flusha_tags,flushe_tags,model_uploads;
+static int expect_silhouette;
+static unsigned silhouette_chunks;
+static int blend_tags;
 static int tint_uploads; static float tint_last[3];
 static int parse_chains,position_chunks,color_chunks,clipped_chunks,clip_mode,normal_chunks,light_uploads,uv_chunks,textured_tags;
 static uint32_t geometry_bytes;
@@ -42,6 +45,9 @@ void set_register_force(int id,uint64_t value) {
     owl_add_cnt_tag(p,0,0); registers[id]=value;
 }
 void graphics_service_init(void) {}
+void graphics_wait_idle(void) { owl_wait_generation(owl_flush_generation()); }
+static unsigned texflushes;
+void flush_gs_texcache(void) { texflushes++; }
 GSCONTEXT *getGSGLOBAL(void) { return &gs; }
 void SyncDCache(void *a,void *b) { (void)a; (void)b; }
 static void parse_chain(owl_qword *p);
@@ -92,7 +98,14 @@ static void parse_chain(owl_qword *p) {
                 unsigned bytes=cmd==0x68?12:cmd==0x64?8:4;assert(count*16==vertices*bytes);
                 if(cmd==0x68||cmd==0x64)for(unsigned i=0;i<count*4;i++)assert(isfinite(payload[i/4].f[i%4]));
                 if(dest==2)position_chunks++;
-                if(cmd==0x6e&&dest==50)color_chunks++;
+                if(cmd==0x6e&&dest==50) {
+                    color_chunks++;
+                    if(expect_silhouette) {
+                        const uint8_t *rgba=(const uint8_t *)payload;
+                        for(unsigned i=0;i<vertices*4;i++) assert(rgba[i]==255);
+                        silhouette_chunks++;
+                    }
+                }
             }
             geometry_bytes+=count*16;
             p+=1+(tag==DMA_REF?0:count);assert(p<=memory+owl_get_controller()->size*2);continue;
@@ -115,6 +128,11 @@ static void parse_chain(owl_qword *p) {
         }
         if(cmd==0x6e && (dest==98||dest==66)) {
             assert(vertices && vertices<=48 && vertices%4==0 && count==vertices/4);
+            if(expect_silhouette) {
+                const uint8_t *rgba=(const uint8_t *)payload;
+                for(unsigned i=0;i<vertices*4;i++) assert(rgba[i]==255);
+                silhouette_chunks++;
+            }
             color_chunks++;
             geometry_bytes+=count*16;
         }
@@ -158,6 +176,8 @@ static void parse_chain(owl_qword *p) {
         if(cmd==0x6c&&dest==0&&(code&(1u<<15))) {
             assert(count==1);
             giftag_t giftag={.data=payload[0].dword[0]}; prim_reg_t prim={.data=giftag.PRIM};
+            if(expect_silhouette) assert(!prim.TME&&!prim.ABE&&!prim.FGE);
+            if(prim.ABE) blend_tags++;
             if(prim.TME) { assert(!prim.FST); textured_tags++; }
         }
         if(cmd==0x6c&&dest==16&&!(code&(1u<<15))) {
@@ -529,6 +549,41 @@ int main(void) {
         owl_wait_generation(owl_flush_generation());
         assert(stats.pipeline_passes==2&&stats.draw_passes==3);
         assert(registers[GS_CACHE_TEST]==123&&!(registers[GS_CACHE_TEX0]&(1ull<<34)));
+        /* Shadow passes take texture alpha, keep depth testing, mask depth
+         * writes, and restore ALPHA/TEX0/TEST/ZBUF in both GS contexts. */
+        AthenaMaterial3D shadow_material; athena_material3d_default(&shadow_material);
+        AthenaMesh3DView masked_view; athena_mesh3d_view(masked[0],&masked_view);
+        shadow_material.texture=masked_view.material.texture;
+        AthenaGeometry3D shadow_geometry={.positions=tri,.vertex_count=3,.texcoords=uv,.texcoord_count=3,.material=&shadow_material};
+        AthenaMesh3D *shadow_mesh=NULL; assert(!athena_mesh3d_create(&shadow_geometry,&shadow_mesh));
+        registers[GS_CACHE_ZBUF+1]=0; /* Writing depth was enabled in context 2. */
+        for(int context=0;context<2;context++) for(int mode=0;mode<3;mode++) {
+            gs.PrimContext=context;
+            registers[GS_CACHE_ALPHA+context]=999;
+            uint64_t old_z=registers[GS_CACHE_ZBUF+context];
+            uint64_t old_tex=registers[GS_CACHE_TEX0+context];
+            uint64_t old_test=registers[GS_CACHE_TEST+context];
+            int before=blend_tags;
+            assert(!athena_render3d_set_blend(mode));
+            assert(!athena_render3d_group_begin());
+            assert(athena_render3d_set_blend(-1)==-1);
+            assert(!athena_render3d_draw_mesh(shadow_mesh,&identity,&camera,NULL,ATHENA_RENDER3D_CULL_NONE,&stats));
+            assert(registers[GS_CACHE_ZBUF+context]&(1ull<<32));
+            assert(registers[GS_CACHE_TEST+context]&(1ull<<16));
+            assert(registers[GS_CACHE_TEX0+context]&(1ull<<34));
+            assert(registers[GS_CACHE_ALPHA+context]==(uint64_t)(mode==2?72:68));
+            athena_render3d_group_end();
+            owl_wait_generation(owl_flush_generation());
+            assert(blend_tags>before);
+            assert(registers[GS_CACHE_ALPHA+context]==999);
+            assert(registers[GS_CACHE_ZBUF+context]==old_z);
+            assert(registers[GS_CACHE_TEST+context]==old_test);
+            assert(registers[GS_CACHE_TEX0+context]==old_tex);
+            assert(!athena_render3d_set_blend(-1));
+        }
+        athena_mesh3d_release(shadow_mesh);
+        gs.PrimContext=0;
+        assert(athena_render3d_set_blend(3)==-1);
         athena_mesh3d_release(masked[0]); athena_mesh3d_release(masked[1]);
         /* Invalid cutoffs are rejected by material validation. */
         AthenaMaterial3D bad; athena_material3d_default(&bad); bad.alpha_mask=1; bad.alpha_cutoff=1.5f;
@@ -737,6 +792,22 @@ int main(void) {
             }
             athena_render3d_group_end();owl_wait_generation(owl_flush_generation());
         }
+        /* Indexed static/textured/skinned/morphed casters use the same
+         * deformation, with no source material or DMA references to scratch. */
+        AthenaTexture3D *silhouette_target=NULL;
+        assert(!athena_texture3d_create_target(256,256,1,&silhouette_target));
+        unsigned capture_chunks=silhouette_chunks;
+        assert(!athena_render3d_capture_begin(silhouette_target));
+        expect_silhouette=1; AthenaRender3DStats captured={0};
+        if(variant==2) {
+            AthenaMatrix4 palette;ath_matrix4_identity(&palette);
+            assert(!athena_render3d_draw_skinned_contained(&v,&palette,1,&camera,NULL,0,&captured));
+        } else if(variant==3) {
+            float weights[]={.2f,.4f,-.3f,.1f};assert(!athena_render3d_draw_morph(&v,&identity,weights,&camera,NULL,0,&captured));
+        } else assert(!athena_render3d_draw_mesh(m,&identity,&camera,NULL,0,&captured));
+        athena_render3d_capture_end(1);expect_silhouette=0;
+        assert(silhouette_chunks>capture_chunks);
+        assert(!athena_texture3d_upload(silhouette_target));athena_texture3d_release(silhouette_target);
         stats=(AthenaRender3DStats){0};geometry_bytes=0;unsigned before=indexed_chunks,config_before=indexed_config_uploads;
         if(variant==2) {
             AthenaMatrix4 palette;ath_matrix4_identity(&palette);
@@ -753,6 +824,48 @@ int main(void) {
         assert(stats.geometry_bytes==padded*stride+batches*48&&geometry_bytes==stats.geometry_bytes);
         athena_render3d_module_shutdown();
     }
+    /* Capture isolates viewport/framebuffer state and uses opaque white
+     * copies, independent of the original mesh color/tint/material. */
+    indexed_mode=0;
+    float caster_positions[]={-.5f,-.5f,0,.5f,-.5f,0,0,.5f,0};
+    float black[]={0,0,0,0,0,0,0,0,0,0,0,0};
+    AthenaGeometry3D caster_geometry={.positions=caster_positions,.vertex_count=3,.colors=black,.color_count=3};
+    AthenaMesh3D *caster=NULL; assert(!athena_mesh3d_create(&caster_geometry,&caster));
+    AthenaTexture3D *target=NULL;
+    assert(!athena_texture3d_create_target(128,64,ATHENA_TEXTURE3D_LINEAR,&target));
+    assert(athena_texture3d_upload(target)<0); /* no captured image yet */
+    AthenaMatrix4 caster_matrix;ath_matrix4_identity(&caster_matrix);
+    athena_camera3d_init(&camera); assert(athena_camera3d_set_projection(&camera,60,2,.1f,100));
+    unsigned capture_flushes=texflushes;
+    for(int context=0;context<2;context++) {
+        gs.ZBuffering=context==0;
+        gs.PrimContext=context; gs.Interlace=GS_INTERLACED;gs.Field=GS_FRAME;
+        GSCONTEXT saved=gs; uint64_t saved_registers[35]; memcpy(saved_registers,registers,sizeof(registers));
+        assert(!athena_render3d_set_tint(0,0,0));
+        assert(!athena_render3d_set_blend(2));
+        assert(!athena_render3d_capture_begin(target));
+        assert(gs.Width==128&&gs.Height==64&&!gs.Interlace&&gs.PSM==GS_PSM_CT32);
+        assert(athena_render3d_capture_begin(target)<0);
+        assert(athena_render3d_set_blend(1)<0);
+        assert(athena_texture3d_upload(target)<0); /* feedback read is forbidden */
+        assert(registers[GS_CACHE_ZBUF+context]&(1ull<<32));
+        unsigned chunks_before=silhouette_chunks;
+        expect_silhouette=1;stats=(AthenaRender3DStats){0};
+        assert(!athena_render3d_draw_mesh(caster,&caster_matrix,&camera,NULL,0,&stats));
+        athena_render3d_capture_end(1);expect_silhouette=0;
+        assert(silhouette_chunks>chunks_before&&tint_last[0]==255&&tint_last[1]==255);
+        assert(!memcmp(&saved,&gs,sizeof(gs)));
+        const int restored[]={GS_CACHE_FRAME,GS_CACHE_XYOFFSET,GS_CACHE_SCISSOR,GS_CACHE_TEST,GS_CACHE_ZBUF,GS_CACHE_FBA};
+        for(unsigned i=0;i<sizeof(restored)/sizeof(restored[0]);i++) assert(registers[restored[i]+context]==saved_registers[restored[i]+context]);
+        assert(athena_render3d_get_blend()==2);
+        assert(!athena_texture3d_upload(target));
+        assert(!athena_render3d_capture_begin(target));athena_render3d_capture_end(0);
+        assert(athena_texture3d_upload(target)<0); /* exception/abort invalidates output */
+    }
+    assert(texflushes-capture_flushes==4);
+    assert(!athena_render3d_set_blend(-1));assert(!athena_render3d_set_tint(1,1,1));
+    assert(!athena_render3d_group_begin());assert(athena_render3d_capture_begin(target)<0);athena_render3d_group_end();
+    athena_texture3d_release(target);athena_mesh3d_release(caster);athena_render3d_module_shutdown();
     memset(dma_addresses,0,sizeof(dma_addresses)); /* Do not hide stream leaks from LSan. */
     printf("3D packets and cross-channel DMA lifetime tests passed (DMA_REF=%d)\n",ATHENA_RENDER3D_DMA_REF);
     return 0;

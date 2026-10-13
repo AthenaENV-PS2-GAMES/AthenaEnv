@@ -1,9 +1,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <malloc.h>
 #include <athena/float_bits.h>
 #include <athena/render3d.h>
 #include <athena/graphics.h>
+#include <athena/graphics/sync.h>
 #include <athena/graphics/owl_packet.h>
 #include <athena/graphics/mpg_manager.h>
 #include "render3d_clip.h"
@@ -74,6 +76,22 @@ static void inline_point_lights(owl_packet *p,const AthenaLightsView *lights) {
 }
 /* dma: the mesh whose immutable streams the chunks reference in place (REF
  * tags), or NULL to copy them into the packet. */
+static int blend_mode=-1;
+static struct { AthenaTexture3D *texture; GSCONTEXT saved; int blend;
+    uint64_t frame,xyoffset,scissor,test,zbuf,fba; } capture;
+static AthenaColor3D *silhouette_colors;
+static uint32_t silhouette_capacity;
+static int silhouette_view(const AthenaMesh3DView *source,AthenaMesh3DView *out) {
+    uint32_t count=athena_mesh3d_stream_count(source)+4;
+    if(count>silhouette_capacity) {
+        AthenaColor3D *colors=memalign(16,count*sizeof(*colors));
+        if(!colors) return -2;
+        memset(colors,255,count*sizeof(*colors));
+        free(silhouette_colors); silhouette_colors=colors; silhouette_capacity=count;
+    }
+    *out=*source; out->colors=silhouette_colors;
+    athena_material3d_default(&out->material); return 0;
+}
 typedef struct { int address,context,textured; AthenaRender3DCull cull; AthenaRender3DStats *stats; float color_scale; int fog;
     AthenaMesh3D *dma; } Submission;
 /* Meshes referenced by DMA chains not yet read, oldest first: each is
@@ -141,7 +159,7 @@ static void submit_chunk(const void *positions,const AthenaColor3D *colors,uint3
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,qwc);
     /* After the query, which may have flushed: this chunk's generation. */
     if(keep) dma_retain(submission->dma);
-    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.FGE=submission->fog?1:0,.CTXT=submission->context};
+    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.ABE=blend_mode>=0,.FGE=submission->fog?1:0,.CTXT=submission->context};
     giftag_t tag={.EOP=1,.PRE=1,.PRIM=prim.data,.NREG=3};
     owl_add_unpack_data_cnt(p,26,1,0);
     owl_add_float(p,submission->color_scale); owl_add_uint(p,pretransformed); owl_add_uint(p,normals!=NULL); owl_add_float(p,submission->cull);
@@ -165,7 +183,7 @@ static void submit_morph_chunk(const AthenaMesh3DView *m,uint32_t first,uint32_t
     uint32_t padded=(count+3)&~3u;
     size_t qwc=8+5+padded*(12+4+(lit?12:0)+(submission->textured?8:0)+morph->count*12)/16;
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,qwc);
-    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.FGE=submission->fog?1:0,.CTXT=submission->context};
+    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.ABE=blend_mode>=0,.FGE=submission->fog?1:0,.CTXT=submission->context};
     giftag_t tag={.EOP=1,.PRE=1,.PRIM=prim.data,.NREG=3};
     owl_add_unpack_data_cnt(p,26,1,0);
     owl_add_float(p,submission->color_scale); owl_add_uint(p,0); owl_add_uint(p,lit); owl_add_float(p,submission->cull);
@@ -207,7 +225,7 @@ static void submit_indexed(const AthenaMesh3DView *v,uint32_t batch,int lit,int 
     size_t qwc=9+(lit?1:0)+(submission->textured?1:0)+(skin?2:0)+targets+(keep?0:padded*stride/16+3);
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,qwc);
     if(keep)dma_retain(submission->dma);
-    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.FGE=submission->fog?1:0,.CTXT=submission->context};
+    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.ABE=blend_mode>=0,.FGE=submission->fog?1:0,.CTXT=submission->context};
     giftag_t tag={.EOP=1,.PRE=1,.PRIM=prim.data,.NREG=3};
     owl_add_unpack_data_cnt(p,0,1,1);owl_add_ulong(p,tag.data);owl_add_ulong(p,register_list(submission->fog));
     owl_add_unpack_data_cnt(p,1,1,1);owl_add_uint(p,count);owl_add_uint(p,0);owl_add_uint(p,0);owl_add_uint(p,0);
@@ -262,7 +280,8 @@ static struct {
     int open,grouped,address,context;
     vu_mpg **program; uint64_t texture_stamp,camera_stamp;
     /* Alpha test: 0 off, else 1 + AREF (0..128) of an alpha-mask material. */
-    int alpha;
+    int alpha,blend;
+    int blend_reg; uint64_t saved_blend;
     int test_reg,zbuf_reg,tex0_reg,tex1_reg,clamp_reg;
     uint64_t saved_test,saved_zbuf,saved_tex0,saved_tex1,saved_clamp;
     /* Fog parameters in VU memory (vu1/include/fog.i) and the GS FOGCOL
@@ -310,7 +329,7 @@ static int fog_prepare(const AthenaLightsView *lights,const GSCONTEXT *gs) {
  * VU memory for this pass: draws of different tints never inherit each other's. Every program
  * multiplies the final vertex RGB (after lighting) by quad 16. */
 static void upload_tint(int textured) {
-    float tint[3]; athena_render3d_get_tint(tint);
+    float tint[3]={1,1,1}; if(!capture.texture) athena_render3d_get_tint(tint);
     float scale=textured?128.0f:255.0f;
     float rgb[4] __attribute__((aligned(16)))={tint[0]*scale,tint[1]*scale,tint[2]*scale,0};
     if(pass.rgb_valid&&!memcmp(pass.rgb,rgb,sizeof(rgb))) return;
@@ -324,6 +343,7 @@ static void pass_close(void) {
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,1);
     owl_add_cnt_tag(p,0,owl_vif_code_double(VIF_CODE(0,0,VIF_FLUSHA,0),VIF_CODE(0,0,VIF_NOP,0)));
     set_register(pass.test_reg,pass.saved_test); set_register(pass.zbuf_reg,pass.saved_zbuf);
+    if(pass.blend>=0) set_register(pass.blend_reg,pass.saved_blend);
     if(pass.texture_stamp) {
         set_register(pass.tex0_reg,pass.saved_tex0); set_register(pass.tex1_reg,pass.saved_tex1);
         set_register(pass.clamp_reg,pass.saved_clamp);
@@ -379,20 +399,85 @@ static int pass_open(vu_mpg **program,const AthenaTexture3D *texture,const Athen
         /* Force the pass state, then restore through the cache. TileMap may
          * write texture registers directly without updating the shared cache. */
         /* TCC: alpha-mask passes take the texture alpha (MODULATE by the
-         * vertex alpha, 0x80 neutral); opaque passes keep RGB only. */
-        set_register_force(pass.tex0_reg,binding->tex0|(alpha?1ull<<34:0));
+         * vertex alpha, 0x80 neutral); blended passes need it too.
+         * Opaque passes keep RGB only. */
+        set_register_force(pass.tex0_reg,binding->tex0|((alpha||blend_mode>=0)?1ull<<34:0));
         set_register_force(pass.tex1_reg,binding->tex1);
         set_register_force(pass.clamp_reg,binding->clamp);
     }
     /* Alpha mask: ATST GEQUAL (5) against AREF, AFAIL KEEP (neither colour
      * nor depth written for discarded pixels). */
     set_register(pass.test_reg,alpha?GS_SETREG_TEST(1,5,alpha-1,0,0,0,1,DEPTH_GEQUAL):
-        GS_SETREG_TEST(0,1,0x80,0,0,0,1,DEPTH_GEQUAL));
-    set_register(pass.zbuf_reg,pass.saved_zbuf&~(1ull<<32));
+        GS_SETREG_TEST(0,1,0x80,0,0,0,1,capture.texture?1:DEPTH_GEQUAL));
+    set_register(pass.zbuf_reg,(blend_mode>=0||capture.texture)?pass.saved_zbuf|(1ull<<32):pass.saved_zbuf&~(1ull<<32));
+    pass.blend=blend_mode;
+    if(blend_mode>=0) {
+        pass.blend_reg=GS_CACHE_ALPHA+gs->PrimContext;
+        pass.saved_blend=get_register(pass.blend_reg);
+        /* (Cs-Cd)*As+Cd for darken/alpha; Cs*As+Cd for add.
+         * ALPHA fields A,B,C,D; D selects RGB, not an alpha source. */
+        set_register(pass.blend_reg,(uint64_t)(blend_mode==2?2:1)<<2 | 1ull<<6);
+    }
     pass.open=1; pass.address=address; pass.context=gs->PrimContext; pass.fog_valid=0; pass.lights_valid=0; pass.rgb_valid=0;
     pass.program=program; pass.camera_stamp=camera->stamp;
     pass.texture_stamp=athena_texture3d_stamp(texture); pass.alpha=alpha;
     stats->pipeline_passes++; return 0;
+}
+int athena_render3d_capture_begin(AthenaTexture3D *texture) {
+    if(capture.texture||pass.grouped||!texture) return -1;
+    graphics_service_init(); GSCONTEXT *gs=getGSGLOBAL();
+    if(!gs||owl_get_controller()->size<=12) return -2;
+    pass_close();
+    AthenaTexture3DTarget target;
+    int code=athena_texture3d_target_begin(texture,&target); if(code<0) return code;
+    capture.texture=texture; capture.saved=*gs; capture.blend=blend_mode;
+    int ctx=gs->PrimContext;
+    capture.frame=get_register(GS_CACHE_FRAME+ctx); capture.xyoffset=get_register(GS_CACHE_XYOFFSET+ctx);
+    capture.scissor=get_register(GS_CACHE_SCISSOR+ctx); capture.test=get_register(GS_CACHE_TEST+ctx);
+    capture.zbuf=get_register(GS_CACHE_ZBUF+ctx); capture.fba=get_register(GS_CACHE_FBA+ctx);
+    gs->Width=target.width; gs->Height=target.height; gs->Interlace=0; gs->Field=0;
+    gs->PSM=GS_PSM_CT32; gs->PSMZ=GS_ZBUF_16S; gs->ZBuffering=1;
+    gs->OffsetX=(2048-target.width/2)*16; gs->OffsetY=(2048-target.height/2)*16;
+    blend_mode=-1;
+    set_register(GS_CACHE_FRAME+ctx,GS_SETREG_FRAME_1(target.address/8192,target.tbw,GS_PSM_CT32,0));
+    set_register(GS_CACHE_XYOFFSET+ctx,GS_SETREG_XYOFFSET(gs->OffsetX,gs->OffsetY));
+    set_register(GS_CACHE_SCISSOR+ctx,GS_SETREG_SCISSOR_1(0,target.width-1,0,target.height-1));
+    set_register(GS_CACHE_ZBUF+ctx,capture.zbuf|(1ull<<32));
+    set_register(GS_CACHE_FBA+ctx,0);
+    /* Clear without touching depth. PATH1 was drained by target_begin. */
+    owl_packet *p=owl_query_packet(CHANNEL_VIF1,11);
+    owl_add_cnt_tag(p,10,0);
+    owl_add_uint(p,VIF_CODE(0,0,VIF_NOP,0)); owl_add_uint(p,VIF_CODE(0,0,VIF_NOP,0));
+    owl_add_uint(p,VIF_CODE(0,0,VIF_NOP,0)); owl_add_uint(p,VIF_CODE(9,0,VIF_DIRECT,0));
+    owl_add_tag(p,GIF_AD,VU_GS_GIFTAG(8,1,0,0,0,0,1));
+    owl_add_tag(p,GS_TEST_1+ctx,GS_SETREG_TEST(0,1,0,0,0,0,1,1));
+    owl_add_tag(p,GS_XYOFFSET_1+ctx,GS_SETREG_XYOFFSET(0,0));
+    owl_add_tag(p,GS_RGBAQ,0);
+    prim_reg_t prim={.PRIM=6,.CTXT=ctx}; owl_add_tag(p,GS_PRIM,prim.data);
+    owl_add_tag(p,GS_XYZ2,GS_SETREG_XYZ(0,0,0));
+    owl_add_tag(p,GS_XYZ2,GS_SETREG_XYZ(target.width*16,target.height*16,0));
+    owl_add_tag(p,GS_TEST_1+ctx,capture.test);
+    owl_add_tag(p,GS_XYOFFSET_1+ctx,get_register(GS_CACHE_XYOFFSET+ctx));
+    return 0;
+}
+void athena_render3d_capture_end(int commit) {
+    if(!capture.texture) return;
+    athena_render3d_group_end();
+    /* Drain PATH1 before restoring the framebuffer and flushing texture cache. */
+    graphics_wait_idle();
+    GSCONTEXT *gs=getGSGLOBAL(); int ctx=capture.saved.PrimContext;
+    set_register(GS_CACHE_FRAME+ctx,capture.frame); set_register(GS_CACHE_XYOFFSET+ctx,capture.xyoffset);
+    set_register(GS_CACHE_SCISSOR+ctx,capture.scissor); set_register(GS_CACHE_TEST+ctx,capture.test);
+    set_register(GS_CACHE_ZBUF+ctx,capture.zbuf); set_register(GS_CACHE_FBA+ctx,capture.fba);
+    *gs=capture.saved; blend_mode=capture.blend;
+    flush_gs_texcache();
+    AthenaTexture3D *texture=capture.texture; capture.texture=NULL;
+    athena_texture3d_target_end(texture,commit);
+}
+int athena_render3d_get_blend(void) { return blend_mode; }
+int athena_render3d_set_blend(int mode) {
+    if(mode < -1 || mode > 2 || pass.grouped || capture.texture) return -1;
+    pass_close(); blend_mode=mode; return 0;
 }
 int athena_render3d_group_begin(void) {
     if(pass.grouped) return -1;
@@ -435,6 +520,11 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *model,
     dma_drain(0);
     if(!view||!model||!camera||!stats||(cull!=0&&cull!=1&&cull!=-1)) { athena_render3d_set_error_detail("invalid mesh, matrix, camera or cull mode"); return -1; }
     if(!athena_camera3d_update(camera)) { athena_render3d_set_error_detail("camera matrices are not finite"); return -1; }
+    AthenaMesh3DView silhouette;
+    if(capture.texture) {
+        int code=silhouette_view(view,&silhouette); if(code<0) return code;
+        view=&silhouette; lights=NULL; dma=NULL; /* transient white colors always copied */
+    }
     const AthenaMesh3DView *mesh=view; /* Borrowed and immutable for this draw. */
     stats->submitted_objects++;
     graphics_service_init();
@@ -480,7 +570,7 @@ static int draw_view(const AthenaMesh3DView *view,const AthenaMatrix4 *model,
     vu_mpg **selected=indexed?(morph?&indexed_morph_program:&indexed_program):morph?&morph_program:near?&near_program:texture?&texture_program:vu_diffuse?&diffuse_program:&program;
     int alpha=mesh->material.alpha_mask?1+(int)(mesh->material.alpha_cutoff*128+.5f):0;
     int same=pass.open&&pass.program==selected&&pass.texture_stamp==athena_texture3d_stamp(texture)&&pass.camera_stamp==camera->stamp&&
-        pass.context==gs->PrimContext&&pass.alpha==alpha;
+        pass.context==gs->PrimContext&&pass.alpha==alpha&&pass.blend==blend_mode;
     /* Close before binding: a first bind may wait for idle and upload. */
     if(pass.open&&!same) pass_close();
     if(!same) {
@@ -573,7 +663,7 @@ static void submit_skinned_chunk(const AthenaMesh3DView *v,uint32_t first,uint32
     uint32_t vertex_bytes=36+(submission->textured?8:0);
     size_t qwc=11+(submission->textured?1:0)+padded*vertex_bytes/16;
     owl_packet *p=owl_query_packet(CHANNEL_VIF1,qwc);
-    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.FGE=submission->fog?1:0,.CTXT=submission->context};
+    prim_reg_t prim={.PRIM=GS_PRIM_PRIM_TRIANGLE,.IIP=1,.TME=submission->textured,.ABE=blend_mode>=0,.FGE=submission->fog?1:0,.CTXT=submission->context};
     giftag_t tag={.EOP=1,.PRE=1,.PRIM=prim.data,.NREG=3};
     owl_add_unpack_data_cnt(p,26,1,0);
     owl_add_float(p,submission->textured?128:255); owl_add_uint(p,0); owl_add_uint(p,submission->textured); owl_add_float(p,submission->cull);
@@ -600,6 +690,11 @@ int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *v,const Athen
         (v->material.texture&&!v->texcoords)||!joint_count||joint_count>ATHENA_RENDER3D_SKIN_JOINTS||v->joint_count>joint_count) {
         athena_render3d_set_error_detail("VU1 skinning needs joints, weights, normals, texture UVs and at most 24 joints"); return -1;
     }
+    AthenaMesh3DView silhouette;
+    if(capture.texture) {
+        int code=silhouette_view(v,&silhouette); if(code<0) return code;
+        v=&silhouette; lights=NULL;
+    }
     if(!athena_camera3d_update(camera)) { athena_render3d_set_error_detail("camera matrices are not finite"); return -1; }
     for(uint32_t j=0;j<joint_count;j++) for(int k=0;k<16;k++) if(!athena_float_isfinite(palette[j].value[k])) {
         athena_render3d_set_error_detail("joint palette is not finite"); return -1;
@@ -623,7 +718,7 @@ int athena_render3d_draw_skinned_contained(const AthenaMesh3DView *v,const Athen
     int alpha=v->material.alpha_mask?1+(int)(v->material.alpha_cutoff*128+.5f):0;
     AthenaTexture3D *texture=v->material.texture;
     int same=pass.open&&pass.program==selected&&pass.texture_stamp==athena_texture3d_stamp(texture)&&pass.camera_stamp==camera->stamp&&pass.context==gs->PrimContext&&
-        pass.alpha==alpha;
+        pass.alpha==alpha&&pass.blend==blend_mode;
     if(pass.open&&!same) pass_close();
     if(!same) {
         if(!*selected) {
@@ -690,7 +785,10 @@ int athena_render3d_draw(AthenaInstance3D *instance,AthenaCamera3D *camera,
     return athena_render3d_draw_lit(instance,camera,NULL,cull,stats);
 }
 void athena_render3d_module_shutdown(void) {
+    athena_render3d_capture_end(0);
     athena_render3d_group_end();
+    free(silhouette_colors); silhouette_colors=NULL; silhouette_capacity=0;
+    blend_mode=-1;
     athena_render3d_frame_stats(NULL,1);
     owl_wait_generation(owl_flush_generation());
     dma_drain(1); free(retained); retained=NULL; retained_capacity=0;

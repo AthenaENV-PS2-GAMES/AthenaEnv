@@ -11,12 +11,16 @@ declare namespace Model3D {
     const UV_LIMIT: number;
     const UNLIT: 0; const DIFFUSE: 1;
     class Texture {
+        /** GPU-owned CT32 target. Width/height powers of two in 64..512,
+         * default linear filter. Capture before sampling and recapture after
+         * Screen.setMode(). No CPU pixels; cannot sample while capturing. */
+        static renderTarget(width: number, height: number, filter?: 0 | 1): Texture;
         private constructor();
         static readonly NEAREST: 0; static readonly LINEAR: 1;
         /** Addressing per axis: CLAMP (to edge, the default), REPEAT on both
          * axes, or REPEAT_U / REPEAT_V on one. */
         static readonly CLAMP: 0; static readonly REPEAT_U: 1; static readonly REPEAT_V: 2; static readonly REPEAT: 3;
-        /** Copies 0xAABBGGRR pixels; alpha (0..255) matters only to alphaCutoff materials. Power-of-two sizes 1..512;
+        /** Copies 0xAABBGGRR pixels; alpha (0..255) is used by alphaCutoff and Render3D.withBlend. Power-of-two sizes 1..512;
          * no mipmaps. Honors subarray(); main thread only. */
         static fromPixels(pixels: {width: number; height: number; pixels: Uint32Array; filter?: 0 | 1; wrap?: 0 | 1 | 2 | 3}): Texture;
         /** Synchronous decoding. RGB/RGBA, 16-bit and 4/8-bit palette images
@@ -40,7 +44,7 @@ declare namespace Model3D {
         /** Defaults to UNLIT. DIFFUSE uses world ambient/directional lights. */
         shading?: 0 | 1;
         /** Four finite linear RGBA values in [0,1], multiplied by vertex colors
-         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff. */
+         * and stored as RGBA8. Defaults to white; alpha is used by alphaCutoff and Render3D.withBlend. */
         baseColor?: Float32Array;
         texture?: Texture;
         /** Alpha mask (glTF alphaMode MASK): pixels whose alpha (texture

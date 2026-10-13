@@ -72,7 +72,7 @@ done:
     athena_image_buffer_release(&buffer); return result;
 }
 /* The surface first: the texture manager only ever sees &backend->surface. */
-typedef struct { GSSURFACE surface; AthenaTexture3DWrap wrap; void *indexed; } Backend;
+typedef struct { GSSURFACE surface; AthenaTexture3DWrap wrap; void *indexed; int target,valid; } Backend;
 /* Keep the canonical CT32 view, but upload an exact indexed copy when the
  * combined texture/CLUT allocation is smaller. Alpha participates in identity.
  * Allocation failure is harmless: the borrowed CT32 surface remains usable. */
@@ -109,7 +109,7 @@ static void index_surface(Backend *b,const AthenaTexture3DPixels *p) {
     b->surface.Clut=clut; b->surface.ClutPSM=GS_PSM_CT32; b->surface.PSM=psm;
 }
 void *athena_texture3d_backend_create(const AthenaTexture3DPixels *p) {
-    Backend *b=malloc(sizeof(*b)); if(!b) return NULL;
+    Backend *b=calloc(1,sizeof(*b)); if(!b) return NULL;
     GSSURFACE *s=&b->surface;
     if(graphics_surface_init(s)<0) { free(b); return NULL; }
     s->Width=p->width; s->Height=p->height; s->PSM=GS_PSM_CT32;
@@ -119,8 +119,37 @@ void *athena_texture3d_backend_create(const AthenaTexture3DPixels *p) {
     index_surface(b,p);
     return b;
 }
+void *athena_texture3d_backend_create_target(const AthenaTexture3DPixels *p) {
+    Backend *b=calloc(1,sizeof(*b)); if(!b) return NULL;
+    GSSURFACE *s=&b->surface;
+    if(graphics_surface_init(s)<0) { free(b); return NULL; }
+    s->Width=p->width; s->Height=p->height; s->PSM=GS_PSM_CT32;
+    s->Filter=p->filter==ATHENA_TEXTURE3D_LINEAR?GS_FILTER_LINEAR:GS_FILTER_NEAREST;
+    s->PageAligned=1; b->target=1; b->wrap=ATHENA_TEXTURE3D_CLAMP;
+    return b;
+}
+int athena_texture3d_backend_target_begin(void *backend,AthenaTexture3DTarget *out) {
+    Backend *b=backend;
+    if(!b||!b->target||!out) return ATHENA_MODEL3D_EINVAL;
+    GSSURFACE *s=&b->surface;
+    graphics_wait_idle(); athena_texture3d_collect(0);
+    b->valid=0;
+    if(!graphics_surface_is_locked(s)&&
+        (graphics_surface_bind_sync(s)==GRAPHICS_BIND_ERROR||!graphics_surface_lock(s))) return ATHENA_MODEL3D_EVRAM;
+    if(s->Vram%8192) return ATHENA_MODEL3D_EVRAM;
+    *out=(AthenaTexture3DTarget){s->Vram,s->Width,s->Height,s->TBW}; return 0;
+}
+void athena_texture3d_backend_target_end(void *backend,int commit) {
+    Backend *b=backend; if(b&&b->target) b->valid=!!commit;
+}
 int athena_texture3d_backend_bind(void *backend,AthenaTexture3DBinding *out) {
-    GSSURFACE *s=&((Backend *)backend)->surface; AthenaTexture3DWrap wrap=((Backend *)backend)->wrap;
+    Backend *b=backend;
+    GSSURFACE *s=&b->surface; AthenaTexture3DWrap wrap=b->wrap;
+    /* A video mode reset drops residency; never upload stale/absent CPU pixels. */
+    if(b->target&&(!b->valid||!graphics_surface_is_locked(s))) {
+        b->valid=0; athena_model3d_set_detail("render target needs a successful silhouette capture after creation, abort or video-mode reset");
+        return ATHENA_MODEL3D_EINVAL;
+    }
     athena_texture3d_collect(0); /* reclaim idle releases; nothing to do when none */
     if(!graphics_surface_is_locked(s)) {
         /* Do not reuse/evict a VRAM block while queued draws still sample it.
