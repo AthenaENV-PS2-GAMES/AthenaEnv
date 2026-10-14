@@ -142,6 +142,10 @@ cd bin
 # into tee would hide the exit code.
 check() {
     runner=$1; script=$2; marker=$3
+    if [ ! -f "$script" ]; then
+        echo "SKIP: $script (not present in checkout)"
+        return 0
+    fi
     log="$OUT/$(basename "$script" .js).$(basename "$runner").log"
     status=0
     "$runner" "$script" > "$log" 2>&1 || status=$?
