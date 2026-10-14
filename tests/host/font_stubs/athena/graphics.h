@@ -23,7 +23,6 @@ extern GSCONTEXT *gsGlobal;
 #define GS_TEX0_1 6
 #define GS_TEX1_1 20
 #define GS_UV 3
-#define GS_XYZ2 5
 #define GS_PRIM_PRIM_SPRITE 6
 #define GIF_NOP 15
 #define NO_CUSTOM_DATA 0
