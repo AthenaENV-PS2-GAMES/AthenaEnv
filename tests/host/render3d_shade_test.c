@@ -127,10 +127,6 @@ int main(void) {
     material.shading=ATHENA_MATERIAL3D_UNLIT;
     assert(!athena_mesh3d_create(&geometry,&mesh)); athena_mesh3d_release(mesh);
     material.shading=ATHENA_MATERIAL3D_DIFFUSE;
-    assert(!athena_mesh3d_load_with_material("bin/models/lit_cube.glb",&material,&mesh));
-    athena_mesh3d_view(mesh,&model); assert(model.vertex_count==36&&model.normals);
-    assert(model.normals[0].z==-1&&model.normals[6].z==1);
-    athena_mesh3d_release(mesh);
     assert(!athena_mesh3d_load_with_material("tests/host/3d/triangle.obj",&material,&mesh));
     athena_mesh3d_view(mesh,&model); assert(model.normals); athena_mesh3d_release(mesh);
     athena_lights_destroy(lights);

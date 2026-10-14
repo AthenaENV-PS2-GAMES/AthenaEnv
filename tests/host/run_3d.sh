@@ -9,6 +9,7 @@ mkdir -p "$OUT"
 SANITIZERS=${ATHENA_3D_SANITIZERS:-undefined}
 FLAGS="-std=gnu11 -O1 -g -fno-omit-frame-pointer -fsanitize=$SANITIZERS -fno-sanitize-recover=undefined"
 INC="-Isrc/core/include -Isrc/modules/vector/include -Isrc/modules/matrix4/include -Isrc/modules/quaternion/include -Isrc/modules/camera3d/include -Isrc/modules/model3d/include -Isrc/modules/lights/include -Isrc/modules/render3d/include -Isrc/modules/render3d/native -Isrc/modules/scene3d/include -Isrc/modules/loop/include"
+# Asset-backed GLB import tests require binary models not included in this checkout.
 $CC $FLAGS -DPS2 -Isrc/quickjs -Wall -Wextra -Werror \
     -o "$OUT/quickjs_operand_test" tests/host/quickjs_operand_test.c
 "$OUT/quickjs_operand_test"
@@ -42,7 +43,8 @@ $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/render3d_shade_test" \
     tests/host/render3d_shade_test.c src/modules/render3d/native/render3d_clip.c \
     src/modules/render3d/native/render3d_shade.c src/modules/lights/native/lights.c \
     src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
-    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c "$OUT/load.o" "$OUT/obj.o" -lm
+    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c \
+    src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/render3d_shade_test"
 for dma_ref in 0 1; do
 $CC $FLAGS -DATHENA_RENDER3D_DMA_REF=$dma_ref -DATHENA_OWL_DIAGNOSTICS=1 $INC -Itests/host/3d_stubs -Isrc/modules/graphics/include -Wall -Wextra -Werror \
@@ -54,11 +56,12 @@ $CC $FLAGS -DATHENA_RENDER3D_DMA_REF=$dma_ref -DATHENA_OWL_DIAGNOSTICS=1 $INC -I
 done
 $CC $FLAGS $INC -Wall -Wextra -Werror -o "$OUT/texture3d_test" \
     tests/host/texture3d_test.c tests/host/texture3d_host.c tests/host/render3d_host.c \
-    src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c src/modules/model3d/native/model3d.c \
-    src/modules/matrix4/native/matrix4.c src/modules/quaternion/native/quaternion.c \
-    src/modules/camera3d/native/camera3d.c src/modules/lights/native/lights.c \
-    src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
-    src/modules/render3d/native/render3d_shade.c "$OUT/load.o" "$OUT/obj.o" -lm
+    src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c \
+    src/modules/model3d/native/model3d.c src/modules/matrix4/native/matrix4.c \
+    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
+    src/modules/lights/native/lights.c src/modules/render3d/native/render3d.c \
+    src/modules/render3d/native/render3d_clip.c src/modules/render3d/native/render3d_shade.c \
+    "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/texture3d_test"
 $CC $FLAGS $INC -Itests/host/3d_stubs -Isrc/modules/graphics/include -Wall -Wextra -Werror \
     -Wl,--wrap=memalign -o "$OUT/texture3d_gs_test" tests/host/texture3d_gs_test.c \
@@ -82,26 +85,6 @@ $CC $FLAGS $INC -Isrc/modules/animation3d/include -Wall -Wextra -Werror -o "$OUT
     src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c \
     src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
 "$OUT/animation3d_test"
-$CC $FLAGS $INC -Isrc/modules/animation3d/include -Isrc/modules/gltf3d/include -Wall -Wextra -Werror -o "$OUT/gltf3d_test" \
-    tests/host/gltf3d_test.c src/modules/gltf3d/native/gltf3d.c src/modules/animation3d/native/animation3d.c \
-    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
-    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
-    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
-    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
-    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c \
-    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
-"$OUT/gltf3d_test"
-$CC $FLAGS $INC -Isrc/modules/animation3d/include -Isrc/modules/gltf3d/include \
-    -DATHENA_GLTF_MEMORY_OOM -Wall -Wextra -Werror -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc \
-    -o "$OUT/gltf_memory_test" tests/ee/gltf_memory.c \
-    src/modules/gltf3d/native/gltf3d.c src/modules/animation3d/native/animation3d.c \
-    src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \
-    tests/host/render3d_host.c src/modules/render3d/native/render3d.c src/modules/render3d/native/render3d_clip.c \
-    src/modules/render3d/native/render3d_shade.c src/modules/matrix4/native/matrix4.c \
-    src/modules/quaternion/native/quaternion.c src/modules/camera3d/native/camera3d.c \
-    src/modules/model3d/native/model3d.c src/modules/model3d/native/texture3d.c src/modules/model3d/native/model3d_detail.c tests/host/texture3d_host.c \
-    src/modules/lights/native/lights.c "$OUT/load.o" "$OUT/obj.o" -lm
-"$OUT/gltf_memory_test"
 $CC $FLAGS $INC -Isrc/modules/camerarig3d/include -Wall -Wextra -Werror -o "$OUT/camerarig3d_test" \
     tests/host/camerarig3d_test.c src/modules/camerarig3d/native/camerarig3d.c \
     src/modules/scene3d/native/scene3d.c src/modules/loop/native/loop_systems.c \

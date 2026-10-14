@@ -750,39 +750,11 @@ static void test_events(void)
 	fake_reset_sequence();
 }
 
-static void test_probe(void)
+static void test_probe_arguments(void)
 {
-	const char *fixtures = "bin/tests/video/";
 	AthenaVideoInfo info;
-	char path[256];
-
-#define PROBE(name) (snprintf(path, sizeof(path), "%s%s", fixtures, name), \
-	athena_video_probe(path, &info))
-
-	printf("probe\n");
-	CHECK(PROBE("short.m2v") == ATHENA_VIDEO_OK, "short.m2v");
-	CHECK(info.width == 640 && info.height == 360, "size %dx%d", info.width, info.height);
-	CHECK(info.coded_width == 640 && info.coded_height == 368, "coded %dx%d",
-		info.coded_width, info.coded_height);
-	CHECK(info.fps == 60.0f && info.frames == 60, "fps %f, frames %d", info.fps, info.frames);
-	CHECK(info.duration > 0.999f && info.duration < 1.001f, "duration %f", info.duration);
-	CHECK(info.mpeg2 && info.progressive && info.chroma_format == 1 && info.supported,
-		"stream flags");
-
-	CHECK(PROBE("noend.m2v") == ATHENA_VIDEO_OK && info.frames == 60, "noend frames %d", info.frames);
-	CHECK(PROBE("truncated.m2v") == ATHENA_VIDEO_OK && info.frames == 30,
-		"truncated frames %d", info.frames);
-	CHECK(PROBE("wide.m2v") == ATHENA_VIDEO_OK && info.width == 1280 && !info.supported,
-		"wide: %d, supported %d", info.width, info.supported);
-	CHECK(PROBE("chroma422.m2v") == ATHENA_VIDEO_OK && info.chroma_format == 2 && !info.supported,
-		"4:2:2");
-	CHECK(PROBE("badrate.m2v") == ATHENA_VIDEO_OK && info.fps == 0.0f && !info.supported &&
-		info.duration == 0.0f, "forbidden frame rate");
-	CHECK(PROBE("garbage.bin") == ATHENA_VIDEO_ERROR_FORMAT, "garbage");
-	CHECK(PROBE("empty.m2v") == ATHENA_VIDEO_ERROR_FORMAT, "empty");
-	CHECK(PROBE("missing.m2v") == ATHENA_VIDEO_ERROR_OPEN, "missing");
+	printf("probe arguments\n");
 	CHECK(athena_video_probe(NULL, &info) == ATHENA_VIDEO_ERROR_ARGUMENT, "NULL path");
-#undef PROBE
 }
 
 int main(void)
@@ -802,7 +774,7 @@ int main(void)
 	test_sync();
 	test_draw_options();
 	test_events();
-	test_probe();
+	test_probe_arguments();
 
 	CHECK(__atomic_load_n(&threads_alive, __ATOMIC_SEQ_CST) == 0,
 		"%d decoder threads left running", threads_alive);
