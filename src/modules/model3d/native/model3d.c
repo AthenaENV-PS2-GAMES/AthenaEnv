@@ -6,6 +6,11 @@
 #include <athena/model3d.h>
 #if defined(__mips__)
 #include <kernel.h>
+
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_GEOMETRY
+#include <athena/memory_tags.h>
+#endif
 #endif
 struct AthenaMesh3D {
     uint64_t refs;
@@ -522,6 +527,10 @@ void athena_mesh3d_release(AthenaMesh3D *m) {
         free(m->joints); free(m->weights); free(m->weights8);
         free(m->target_positions); free(m->target_normals); free(m->deform_reuse);free(m->indices);free(m->chunks);free(m->chunk_indices); free(m);
     }
+}
+int athena_mesh3d_pin_canonical(const AthenaMesh3D *m) {
+    if(!m) return ATHENA_MODEL3D_EINVAL;
+    return m->material.texture?athena_texture3d_pin_canonical(m->material.texture):0;
 }
 void athena_mesh3d_view(const AthenaMesh3D *m,AthenaMesh3DView *out) {
     *out=(AthenaMesh3DView){.positions=m->positions,.colors=m->colors,.vertex_count=m->count,

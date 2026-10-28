@@ -212,6 +212,11 @@ void athena_model3d_detail_context(const char *format,...) __attribute__((format
 void athena_mesh3d_retain(AthenaMesh3D *mesh);
 void athena_mesh3d_release(AthenaMesh3D *mesh);
 void athena_mesh3d_view(const AthenaMesh3D *mesh,AthenaMesh3DView *out);
+/* Phase 5C.5D. Fallible export guard for the mesh's material texture: athena_texture3d_pin_canonical() on it (0 when the mesh
+ * has none). A mesh built from a script texture may hold a texture whose canonical RGBA was released (opt-in compaction);
+ * view().material.texture is then only safe for info()/bind and try_view(). After this returns 0 the legacy view() on that
+ * texture is infallible and stable until the final release. ENOMEM leaves the mesh and texture unchanged. Main thread. */
+int athena_mesh3d_pin_canonical(const AthenaMesh3D *mesh);
 /* Render3D DMA ownership: the streams of a mesh are written back to RAM at
  * creation and may be read in place by DMA. Returns 1 the first time a
  * generation (owl_flush_generation()) claims the mesh, so the renderer

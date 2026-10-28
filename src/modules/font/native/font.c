@@ -5,6 +5,11 @@
 
 #include "fntsys.h"
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_FONT
+#include <athena/memory_tags.h>
+#endif
+
 Coords athena_font_calc_dimensions(GSFONT *gs_font, float scale, const char *str);
 
 static AthenaFont *font_new(void) {

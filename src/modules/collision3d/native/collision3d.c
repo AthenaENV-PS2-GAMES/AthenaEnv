@@ -107,7 +107,7 @@ static int soup_node(Soup *s,AthenaNode3D *n,const AthenaMatrix4 *parent) {
     AthenaMatrix4 local,world;
     if(athena_node3d_local(n,&local)<0) return ATHENA_COLLISION3D_EINVAL;
     if(parent) ath_matrix4_multiply(&world,parent,&local); else world=local;
-    const AthenaMesh3D *mesh=athena_node3d_mesh(n);
+    const AthenaMesh3D *mesh=athena_node3d_mesh_borrow(n); /* geometry only: no pixels, no pin */
     if(mesh) {
         AthenaMesh3DView v; athena_mesh3d_view(mesh,&v);
         uint32_t count=v.vertex_count/3;

@@ -11,6 +11,7 @@ include Makefile.const
 #   DEBUG=1           Debug build (bin/<name>_debug.elf, not stripped).
 #   EE_SIO=1          printf over EE SIO.
 #   RENDER3D_DMA_REF=0 Copy immutable geometry into DMA packets (A/B baseline).
+#   TEXTURE3D_COMPACT_CANONICAL=1 Release canonical RGBA of bound opted-in T4/T8 Texture3D (opt-in, default 0).
 #   OWL_PACKET_QWORDS=4096 Double the shared DMA ring (default 2048 quadwords).
 #   OWL_DIAGNOSTICS=1 Enable packet occupancy/flush/wait counters for profiling.
 #
@@ -64,6 +65,18 @@ endif
 endif
 EE_CFLAGS += -DATHENA_RENDER3D_DMA_REF=$(RENDER3D_DMA_REF)
 OWL_PACKET_QWORDS ?= 2048
+# Opt-in (default 0): release the canonical RGBA copy of bound T4/T8 Texture3D that opted in (Phase 5C.5B).
+TEXTURE3D_COMPACT_CANONICAL ?= 0
+ifneq ($(filter $(TEXTURE3D_COMPACT_CANONICAL),0 1),$(TEXTURE3D_COMPACT_CANONICAL))
+  $(error TEXTURE3D_COMPACT_CANONICAL must be 0 or 1)
+endif
+EE_CFLAGS += -DATHENA_TEXTURE3D_COMPACT_CANONICAL=$(TEXTURE3D_COMPACT_CANONICAL)
+
+MEMORY_DIAGNOSTICS ?= 0
+ifneq ($(filter $(MEMORY_DIAGNOSTICS),0 1),$(MEMORY_DIAGNOSTICS))
+  $(error MEMORY_DIAGNOSTICS must be 0 or 1)
+endif
+EE_CFLAGS += -DATHENA_MEMORY_DIAGNOSTICS=$(MEMORY_DIAGNOSTICS)
 OWL_DIAGNOSTICS ?= 0
 ifneq ($(words $(OWL_PACKET_QWORDS)),1)
   $(error OWL_PACKET_QWORDS must be 2048, 4096 or 8192)
@@ -78,6 +91,9 @@ endif
 endif
 EE_CFLAGS += -DATHENA_OWL_PACKET_QWORDS=$(OWL_PACKET_QWORDS) -DATHENA_OWL_DIAGNOSTICS=$(OWL_DIAGNOSTICS)
 BUILD_TAG = $(RUNTIME)
+ifeq ($(MEMORY_DIAGNOSTICS),1)
+  BUILD_TAG := $(BUILD_TAG)-memstats
+endif
 ifeq ($(MODEL3D_INDEXED),0)
   BUILD_TAG := $(BUILD_TAG)-soup
 endif

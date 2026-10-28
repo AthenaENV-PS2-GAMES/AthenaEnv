@@ -23,9 +23,9 @@ static const char *decode_message(int result) {
 }
 static int decode_settle(JSContext *ctx,AthenaJob *job,AthenaJobState state,int result,void *user,JSValue *outcome,bool *failed) {
     DecodeUser *u=user;
-    uint32_t width=0,height=0; AthenaTexture3D *texture=NULL; int code=0;
-    uint32_t *pixels=state==ATHENA_JOB_DONE?athena_texture_decode_take(job,&width,&height):NULL;
-    if(pixels) { code=athena_texture3d_adopt(pixels,width,height,u->filter,u->wrap,&texture); if(code<0) free(pixels); }
+    uint32_t width=0,height=0; AthenaTexture3D *texture=NULL; int code=0; AthenaTexture3DIndexed *indexed=NULL;
+    uint32_t *pixels=state==ATHENA_JOB_DONE?athena_texture_decode_take_indexed(job,&indexed,&width,&height):NULL;
+    if(pixels) { code=athena_texture3d_adopt_indexed(pixels,indexed,width,height,u->filter,u->wrap,&texture); if(code<0) { free(pixels); athena_texture3d_indexed_free(indexed); } else athena_texture3d_allow_compaction(texture); }
     if(!texture) {
         char message[384];
         snprintf(message,sizeof(message),"Assets3D texture: %s '%s'",state==ATHENA_JOB_CANCELLED?"cancelled decoding":

@@ -23,6 +23,12 @@
 #include <athena/memory.h>
 #include <athena/debug.h>
 #include <athena/system.h>
+#include <athena/config.h>
+#if ATHENA_MODULE_GRAPHICS
+#include <athena/memory_retirement.h>
+#include <athena/graphics/texture_manager.h>
+#include <athena/graphics/sync.h>
+#endif
 
 static int athena_system_require_argc(JSContext *ctx, int argc, int expected, const char *name) {
     if (argc != expected) {
@@ -410,6 +416,10 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
     if (!athena_system_require_argc(ctx, argc, 0, "System.getMemoryStats")) return JS_EXCEPTION;
     AthenaMemoryStats memory;
     get_memory_stats(&memory);
+    JSMemoryUsage usage;
+    JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &usage);
+    AthenaMemoryDiagnostics diagnostic;
+    get_memory_diagnostics(&diagnostic);
     JSValue info = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, info, "core", JS_NewUint32(ctx, (uint32_t)get_binary_size()));
     JS_SetPropertyStr(ctx, info, "nativeStack", JS_NewUint32(ctx, (uint32_t)get_stack_size()));
@@ -417,7 +427,7 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
     JS_SetPropertyStr(ctx, info, "allocsPeak", JS_NewInt64(ctx, (int64_t)memory.allocs_peak));
     JS_SetPropertyStr(ctx, info, "allocationFailures",
         JS_NewInt64(ctx, (int64_t)memory.allocation_failures));
-    JS_SetPropertyStr(ctx, info, "used", JS_NewUint32(ctx, (uint32_t)get_used_memory()));
+    JS_SetPropertyStr(ctx, info, "used", JS_NewUint32(ctx, (uint32_t)(get_binary_size()+get_stack_size()+memory.allocs_size)));
     JS_SetPropertyStr(ctx, info, "heapReserved", JS_NewInt64(ctx, (int64_t)memory.heap_reserved));
     JS_SetPropertyStr(ctx, info, "heapAllocated", JS_NewInt64(ctx, (int64_t)memory.heap_allocated));
     JS_SetPropertyStr(ctx, info, "heapOverhead", JS_NewInt64(ctx,
@@ -428,15 +438,104 @@ static JSValue athena_system_get_memory_stats(JSContext *ctx, JSValue this_val, 
     JS_SetPropertyStr(ctx, info, "heapTopFree", JS_NewInt64(ctx, (int64_t)memory.heap_top_free));
     JS_SetPropertyStr(ctx, info, "heapNonTopFree", JS_NewInt64(ctx, (int64_t)memory.heap_non_top_free));
     {
-        JSMemoryUsage usage;
-        JS_ComputeMemoryUsage(JS_GetRuntime(ctx), &usage);
         /* QuickJS adds an estimated 8-byte header per block. */
         JS_SetPropertyStr(ctx, info, "jsHeap",
             JS_NewInt64(ctx, usage.malloc_size - 8 * usage.malloc_count));
         JS_SetPropertyStr(ctx, info, "jsLimit", JS_NewInt64(ctx, usage.malloc_limit));
         JS_SetPropertyStr(ctx, info, "jsObjects", JS_NewInt64(ctx, usage.obj_count));
     }
+    JS_SetPropertyStr(ctx,info,"linkedImageSpan",JS_NewInt64(ctx,memory.linked_image_span));
+    JS_SetPropertyStr(ctx,info,"heapStart",JS_NewInt64(ctx,memory.heap_start));
+    JS_SetPropertyStr(ctx,info,"heapBreak",JS_NewInt64(ctx,memory.heap_break));
+    JS_SetPropertyStr(ctx,info,"heapLimit",JS_NewInt64(ctx,memory.heap_limit));
+    JS_SetPropertyStr(ctx,info,"heapCapacity",JS_NewInt64(ctx,memory.heap_capacity));
+    JS_SetPropertyStr(ctx,info,"heapUncommitted",JS_NewInt64(ctx,memory.heap_uncommitted));
+    JS_SetPropertyStr(ctx,info,"physicalEE",JS_NewUint32(ctx,GetMemorySize()));
+    JS_SetPropertyStr(ctx,info,"jsMallocSize",JS_NewInt64(ctx,usage.malloc_size));
+    JS_SetPropertyStr(ctx,info,"jsMallocCount",JS_NewInt64(ctx,usage.malloc_count));
+    JS_SetPropertyStr(ctx,info,"jsMemoryUsedEstimate",JS_NewInt64(ctx,usage.memory_used_size));
+    JSValue detail=JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx,detail,"enabled",JS_NewBool(ctx,diagnostic.enabled));
+    JS_SetPropertyStr(ctx,detail,"capacity",JS_NewInt64(ctx,diagnostic.capacity));
+    JS_SetPropertyStr(ctx,detail,"metadataBytes",JS_NewInt64(ctx,diagnostic.metadata_bytes));
+    JS_SetPropertyStr(ctx,detail,"unmatchedFreeCalls",JS_NewInt64(ctx,diagnostic.unmatched_free_calls));
+    JS_SetPropertyStr(ctx,detail,"unmatchedFreeUsable",JS_NewInt64(ctx,diagnostic.unmatched_free_usable));
+    JS_SetPropertyStr(ctx,detail,"droppedRecords",JS_NewInt64(ctx,diagnostic.dropped_records));
+    static const char *names[]={"other","image","texture","geometry","font","audio","workerStack","staging","graphics"};
+    JSValue categories=JS_NewObject(ctx);
+    for(unsigned i=0;i<ATHENA_MEM_CATEGORY_COUNT;i++) {
+        const AthenaMemoryCategoryStats *c=&diagnostic.categories[i];
+        JSValue item=JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx,item,"requested",JS_NewInt64(ctx,c->requested));
+        JS_SetPropertyStr(ctx,item,"usable",JS_NewInt64(ctx,c->usable));
+        JS_SetPropertyStr(ctx,item,"peakRequested",JS_NewInt64(ctx,c->peak_requested));
+        JS_SetPropertyStr(ctx,item,"peakUsable",JS_NewInt64(ctx,c->peak_usable));
+        JS_SetPropertyStr(ctx,item,"blocks",JS_NewInt64(ctx,c->blocks));
+        JS_SetPropertyStr(ctx,categories,names[i],item);
+    }
+    size_t recorded=0;
+    for(unsigned i=0;i<ATHENA_MEM_CATEGORY_COUNT;i++) recorded+=diagnostic.categories[i].usable;
+    JS_SetPropertyStr(ctx,detail,"counterConsistent",JS_NewBool(ctx,diagnostic.enabled && !diagnostic.dropped_records && recorded==memory.allocs_size));
+    JS_SetPropertyStr(ctx,detail,"recordedUsable",JS_NewInt64(ctx,recorded));
+    JS_SetPropertyStr(ctx,detail,"usableCounterDifference",JS_NewInt64(ctx,(int64_t)memory.allocs_size-(int64_t)recorded));
+    JS_SetPropertyStr(ctx,detail,"categories",categories);
+    JS_SetPropertyStr(ctx,info,"tracking",detail);
     return info;
+}
+
+static JSValue athena_system_get_graphics_memory_stats(JSContext *ctx,JSValue this_val,int argc,JSValueConst *argv) {
+    (void)this_val; (void)argv;
+    if(!athena_system_require_argc(ctx,argc,0,"System.getGraphicsMemoryStats")) return JS_EXCEPTION;
+#if ATHENA_MODULE_GRAPHICS
+    AthenaVramStats v; texture_manager_stats_read(&v);
+    owl_generation_stats g; owl_generation_stats_read(&g);
+    owl_packet_stats o; owl_packet_stats_read(&o);
+    AthenaTextureRetirementStats t={0}; AthenaMeshRetirementStats m={0};
+#if ATHENA_MODULE_MODEL3D
+    athena_texture3d_retirement_stats(&t);
+#endif
+#if ATHENA_MODULE_RENDER3D
+    athena_render3d_retirement_stats(&m);
+#endif
+    JSValue info=JS_NewObject(ctx);
+#define FIELD(name,value) JS_SetPropertyStr(ctx,info,name,JS_NewInt64(ctx,(int64_t)(value)))
+    FIELD("initialized",v.initialized); FIELD("total",v.total); FIELD("used",v.used); FIELD("free",v.free);
+    FIELD("locked",v.locked); FIELD("framebuffer",v.framebuffer); FIELD("depth",v.depth);
+    FIELD("texture",v.texture); FIELD("clut",v.clut); FIELD("targetEstimate",v.target);
+    FIELD("largestBlock",v.largest_block); FIELD("largestPageBlock",v.largest_page_block);
+    FIELD("freeIntervals",v.free_intervals); FIELD("nodes",v.nodes);
+    FIELD("diagnosticsEnabled",v.diagnostics_enabled); FIELD("peakUsed",v.peak_used);
+    FIELD("evictions",v.evictions); FIELD("allocationFailures",v.allocation_failures);
+    FIELD("queueCancellations",v.queue_cancellations); FIELD("linearRetirements",v.linear_retirements);
+    FIELD("macroblockRetirements",v.macroblock_retirements); FIELD("queuedUploads",v.queued_uploads);
+    FIELD("residentPendingSurfaces",v.pending_surfaces); FIELD("residentPendingCpuPayload",v.pending_cpu_payload);
+    FIELD("authoredGeneration",g.authored_generation); FIELD("authoredQwords",g.authored_qwords);
+    FIELD("pendingChannels",g.pending_channels); FIELD("owlDiagnosticsEnabled",ATHENA_OWL_DIAGNOSTICS);
+    FIELD("owlDmaWaitCalls",o.dma_wait_calls); FIELD("owlFenceWaitCalls",o.fence_waits);
+    FIELD("owlSubmitWaitCalls",o.submit_waits); FIELD("owlReuseWaitCalls",o.reuse_waits);
+    FIELD("owlFlushes",o.flushes); FIELD("owlPeakHalfQwords",o.peak_half_qwords);
+    FIELD("gsIdleCalls",graphics_idle_count()); FIELD("finishedFrames",graphics_finished_frames());
+    FIELD("textureRetirementResources",t.resources); FIELD("textureRetirementCpuPayload",t.cpu_payload);
+    FIELD("textureRetirementReady",t.ready_resources); FIELD("meshRetirementReferences",m.references);
+    FIELD("meshPendingReferences",m.pending_references); FIELD("meshRetirementCapacity",m.capacity_bytes);
+#undef FIELD
+    JS_SetPropertyStr(ctx,info,"fragmentation",JS_NewFloat64(ctx,v.free?1.0-(double)v.largest_block/v.free:0));
+    JSValue intervals=JS_NewArray(ctx);
+    for(unsigned i=0;i<v.interval_count;i++) {
+        JSValue interval=JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx,interval,"start",JS_NewUint32(ctx,v.intervals[i].start));
+        JS_SetPropertyStr(ctx,interval,"size",JS_NewUint32(ctx,v.intervals[i].size));
+        JS_SetPropertyUint32(ctx,intervals,i,interval);
+    }
+    JS_SetPropertyStr(ctx,info,"intervals",intervals);
+    JS_SetPropertyStr(ctx,info,"intervalsTruncated",JS_NewBool(ctx,v.free_intervals>v.interval_count));
+    JSValue generations=JS_NewArray(ctx);
+    for(unsigned i=0;i<CHANNEL_SIZE;i++) JS_SetPropertyUint32(ctx,generations,i,JS_NewInt64(ctx,g.pending[i]));
+    JS_SetPropertyStr(ctx,info,"pendingGenerations",generations);
+    return info;
+#else
+    return JS_NULL;
+#endif
 }
 
 static JSValue athena_system_get_ticks(JSContext *ctx, JSValue this_val, int argc, JSValueConst *argv) {
@@ -502,6 +601,7 @@ static const JSCFunctionListEntry system_module_funcs[] = {
     JS_CFUNC_DEF("getGPUInfo", 0, athena_system_get_gpu_info),
     JS_CFUNC_DEF("getTemperature", 0, athena_system_get_temperature),
     JS_CFUNC_DEF("getMemoryStats", 0, athena_system_get_memory_stats),
+    JS_CFUNC_DEF("getGraphicsMemoryStats", 0, athena_system_get_graphics_memory_stats),
     JS_CFUNC_DEF("setNativeMemoryHeadroom", 1, athena_system_set_native_memory_headroom),
     JS_CFUNC_DEF("setDarkMode", 1, athena_system_set_dark_mode),
     JS_CFUNC_DEF("getTicks", 0, athena_system_get_ticks),

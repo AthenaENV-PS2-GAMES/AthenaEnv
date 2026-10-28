@@ -84,7 +84,7 @@ static JSValue shape_result(JSContext *ctx,int id,const char *name) {
 /* addMesh(mesh, transform?, options?) */
 static JSValue world_add_mesh(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,3,"World.addMesh")) return JS_EXCEPTION;
-    AthenaMesh3D *mesh=athena_mesh3d_from_value(ctx,argv[0]); if(!mesh) return JS_EXCEPTION;
+    AthenaMesh3D *mesh=athena_mesh3d_from_value_borrow(ctx,argv[0]); if(!mesh) return JS_EXCEPTION;
     AthenaMatrix4 *m=NULL;
     if(argc>1&&!JS_IsUndefined(argv[1])&&!JS_IsNull(argv[1])&&!(m=athena_matrix4_from_value(ctx,argv[1]))) return JS_EXCEPTION;
     uint32_t layer=1; if(!option_bits(ctx,argc>2?argv[2]:JS_UNDEFINED,"layer",&layer)) return JS_EXCEPTION;

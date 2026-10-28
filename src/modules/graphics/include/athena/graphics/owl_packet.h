@@ -79,7 +79,15 @@ typedef struct {
     uint64_t queries,flushes,capacity_flushes,channel_flushes;
     uint64_t submit_waits,reuse_waits,fence_waits,submitted_qwords;
     size_t peak_half_qwords;
+    uint64_t dma_wait_calls;
 } owl_packet_stats;
+typedef struct {
+    uint64_t authored_generation;
+    uint64_t pending[CHANNEL_SIZE];
+    unsigned pending_channels;
+    size_t authored_qwords;
+} owl_generation_stats;
+void owl_generation_stats_read(owl_generation_stats *out);
 void owl_packet_stats_reset(void);
 void owl_packet_stats_read(owl_packet_stats *out);
 

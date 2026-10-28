@@ -9,6 +9,11 @@
 #define CGLTF_IMPLEMENTATION
 #include "cgltf/cgltf.h"
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_GEOMETRY
+#include <athena/memory_tags.h>
+#endif
+
 #define REJECT(code,...) do { athena_model3d_set_detail(__VA_ARGS__); result=(code); goto done; } while(0)
 
 /* Static subset: triangles, quads and convex polygons (fan triangulated),

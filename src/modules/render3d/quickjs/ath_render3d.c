@@ -30,7 +30,7 @@ static JSValue dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *a
 static JSValue add(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Batch.add")) return JS_EXCEPTION;
     AthenaBatch3D *b=get_batch(ctx,self);
-    AthenaInstance3D *i=athena_instance3d_from_value(ctx,argv[0]);
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,argv[0]);
     if(!b||!i) return JS_EXCEPTION;
     int code=athena_batch3d_add(b,i);
     if(code==-2) return JS_ThrowOutOfMemory(ctx);
@@ -95,7 +95,7 @@ static JSValue draw(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv
     (void)self;
     if(!athena_js_argc(ctx,argc,2,5,"Render3D.draw")) return JS_EXCEPTION;
     AthenaRender3DCull cull; if(!cull_option(ctx,argc,argv,&cull)) return JS_EXCEPTION;
-    AthenaInstance3D *i=athena_instance3d_from_value(ctx,argv[0]);
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,argv[0]);
     AthenaCamera3D *c=athena_camera3d_from_value(ctx,argv[1]); if(!i||!c) return JS_EXCEPTION;
     AthenaLights *lights=NULL;
     if(argc>=4&&!JS_IsUndefined(argv[3])) { lights=athena_lights_from_value(ctx,argv[3]); if(!lights) return JS_EXCEPTION; }
@@ -156,7 +156,7 @@ static JSValue with_blend(JSContext *ctx,JSValueConst self,int argc,JSValueConst
 static JSValue capture_silhouette(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
     if(!athena_js_argc(ctx,argc,2,2,"Render3D.captureSilhouette")) return JS_EXCEPTION;
-    AthenaTexture3D *t=athena_texture3d_from_value(ctx,argv[0]); if(!t) return JS_EXCEPTION;
+    AthenaTexture3D *t=athena_texture3d_from_value_borrow(ctx,argv[0]); if(!t) return JS_EXCEPTION;
     if(!JS_IsFunction(ctx,argv[1])) return JS_ThrowTypeError(ctx,"captureSilhouette expects a synchronous function");
     int code=athena_render3d_capture_begin(t);
     if(code<0) return JS_ThrowInternalError(ctx,"Cannot capture silhouette: target must be a renderTarget, outside group/capture (code %d)",code);

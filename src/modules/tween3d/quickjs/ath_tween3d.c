@@ -39,7 +39,7 @@ static void *resolve_target(JSContext *ctx,JSValueConst v,AthenaTween3DTarget *k
     void *target;
     if((target=athena_node3d_from_value(ctx,v))) { *kind=ATHENA_TWEEN3D_NODE; return target; }
     JS_FreeValue(ctx,JS_GetException(ctx));
-    if((target=athena_instance3d_from_value(ctx,v))) { *kind=ATHENA_TWEEN3D_INSTANCE; return target; }
+    if((target=athena_instance3d_from_value_borrow(ctx,v))) { *kind=ATHENA_TWEEN3D_INSTANCE; return target; }
     JS_FreeValue(ctx,JS_GetException(ctx));
     if((target=athena_camera3d_from_value(ctx,v))) { *kind=ATHENA_TWEEN3D_CAMERA; return target; }
     JS_FreeValue(ctx,JS_GetException(ctx));

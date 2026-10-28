@@ -2,6 +2,7 @@
 #define ATHENA_MEMORY_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 
 extern char __start;
@@ -18,9 +19,36 @@ typedef struct {
     size_t heap_free;             /* bytes in free chunks */
     size_t heap_free_chunks;
     size_t heap_top_free;         /* releasable top chunk */
+    size_t physical_ee, linked_image_span;
+    uintptr_t heap_start, heap_break, heap_limit;
+    size_t heap_capacity, heap_uncommitted;
     size_t heap_non_top_free;     /* free bytes outside top chunk */
 } AthenaMemoryStats;
 
+/* Optional bounded attribution; totals are subsets of allocs_size. */
+#ifndef ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_DIAGNOSTICS 0
+#endif
+typedef enum {
+    ATHENA_MEM_OTHER, ATHENA_MEM_IMAGE, ATHENA_MEM_TEXTURE,
+    ATHENA_MEM_GEOMETRY, ATHENA_MEM_FONT, ATHENA_MEM_AUDIO,
+    ATHENA_MEM_STACK, ATHENA_MEM_STAGING, ATHENA_MEM_GRAPHICS,
+    ATHENA_MEM_CATEGORY_COUNT
+} AthenaMemoryCategory;
+typedef struct {
+    size_t requested, usable, peak_requested, peak_usable, blocks;
+} AthenaMemoryCategoryStats;
+typedef struct {
+    int enabled;
+    size_t capacity, metadata_bytes, dropped_records;
+    size_t unmatched_free_calls, unmatched_free_usable;
+    AthenaMemoryCategoryStats categories[ATHENA_MEM_CATEGORY_COUNT];
+} AthenaMemoryDiagnostics;
+void get_memory_diagnostics(AthenaMemoryDiagnostics *out);
+void *athena_malloc_tagged(size_t size, AthenaMemoryCategory category);
+void *athena_calloc_tagged(size_t count, size_t size, AthenaMemoryCategory category);
+void *athena_memalign_tagged(size_t alignment, size_t size, AthenaMemoryCategory category);
+void *athena_realloc_tagged(void *ptr, size_t size, AthenaMemoryCategory category);
 void init_memory_manager();
 void get_memory_stats(AthenaMemoryStats *stats);
 

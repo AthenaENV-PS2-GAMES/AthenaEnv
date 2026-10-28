@@ -5,6 +5,11 @@
 
 #include <athena/image.h>
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_IMAGE
+#include <athena/memory_tags.h>
+#endif
+
 static GSSURFACE *image_alloc_surface(bool delayed)
 {
 	GSSURFACE *surface = malloc(sizeof(*surface));
@@ -550,9 +555,8 @@ bool athena_image_optimize(AthenaImage *image)
 	if (graphics_surface_is_locked(image->surface))
 		return false;
 
-	graphics_surface_release(image->surface);
 	athena_texture_optimize(image->surface);
-	return true;
+	return image->surface->PSM == GS_PSM_CT16S;
 }
 
 bool athena_image_copy_vram_block(AthenaImage *source, int source_x,

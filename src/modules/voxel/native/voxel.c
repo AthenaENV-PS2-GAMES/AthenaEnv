@@ -101,7 +101,7 @@ int athena_voxel_set_style(AthenaVoxelWorld *w,const AthenaVoxelStyle *s) {
         !athena_float_isfinite(s->ambient_occlusion)||s->ambient_occlusion<0||s->ambient_occlusion>1||
         (s->shading!=ATHENA_MATERIAL3D_UNLIT&&s->shading!=ATHENA_MATERIAL3D_DIFFUSE)) return ATHENA_VOXEL_EINVAL;
     if(s->atlas) {
-        AthenaTexture3DPixels px; athena_texture3d_view(s->atlas,&px);
+        AthenaTexture3DInfo px; athena_texture3d_info(s->atlas,&px);
         if(!s->tile_size||px.width%s->tile_size||px.height%s->tile_size) return ATHENA_VOXEL_EINVAL;
         if(s->meshing==ATHENA_VOXEL_MESH_GREEDY) return ATHENA_VOXEL_EINVAL; /* atlas tiles cannot repeat */
     }
@@ -368,7 +368,7 @@ static int mesh_naive(AthenaVoxelWorld *w,Chunk *c,const Padded *pd,const int32_
     for(int f=0;f<6;f++) for(int k=0;k<3;k++)
         off[f][k]=FACE[f][k][0]*stride[0]+FACE[f][k][1]*stride[1]+FACE[f][k][2]*stride[2];
     uint32_t cols=0,rows=0;
-    if(w->style.atlas) { AthenaTexture3DPixels px; athena_texture3d_view(w->style.atlas,&px); cols=px.width/w->style.tile_size; rows=px.height/w->style.tile_size; }
+    if(w->style.atlas) { AthenaTexture3DInfo px; athena_texture3d_info(w->style.atlas,&px); cols=px.width/w->style.tile_size; rows=px.height/w->style.tile_size; }
     for(int32_t y=lo[1];y<hi[1];y++) for(int32_t z=lo[2];z<hi[2];z++) {
         const uint8_t *row=&pd->b[((y-lo[1]+1)*P+(z-lo[2]+1))*P+1];
         for(int32_t x=lo[0];x<hi[0];x++) {

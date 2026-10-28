@@ -225,13 +225,13 @@ static JSValue js_extrude(JSContext *ctx,JSValueConst self,int argc,JSValueConst
 static JSValue js_merge(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Builder.merge")) return JS_EXCEPTION;
     AthenaMeshBuilder *b=get_builder(ctx,self); if(!b) return JS_EXCEPTION;
-    AthenaInstance3D *instance=athena_instance3d_from_value(ctx,argv[0]);
+    AthenaInstance3D *instance=athena_instance3d_from_value_borrow(ctx,argv[0]);
     if(instance) {
         AthenaMatrix4 model=*athena_instance3d_transform(instance);
         return done(ctx,self,athena_meshbuilder_merge(b,athena_instance3d_mesh(instance),&model),"Builder.merge");
     }
     JS_FreeValue(ctx,JS_GetException(ctx));
-    AthenaMesh3D *mesh=athena_mesh3d_from_value(ctx,argv[0]);
+    AthenaMesh3D *mesh=athena_mesh3d_from_value_borrow(ctx,argv[0]);
     if(!mesh) { JS_FreeValue(ctx,JS_GetException(ctx)); return JS_ThrowTypeError(ctx,"Builder.merge expects a Model3D.Mesh or Instance"); }
     return done(ctx,self,athena_meshbuilder_merge(b,mesh,NULL),"Builder.merge");
 }
@@ -250,7 +250,7 @@ static JSValue js_counts(JSContext *ctx,JSValueConst self,int magic) {
 static JSValue js_build(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,0,1,"Builder.build")) return JS_EXCEPTION;
     AthenaMaterial3D material;
-    if(!athena_model3d_js_material(ctx,argc?argv[0]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
+    if(!athena_model3d_js_material_borrow(ctx,argc?argv[0]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
     AthenaMeshBuilder *b=get_builder(ctx,self);
     if(!b) { athena_texture3d_release(material.texture); return JS_EXCEPTION; }
     uint32_t parts=athena_meshbuilder_part_count(b);

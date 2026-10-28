@@ -15,6 +15,11 @@
 
 #include <athena/graphics/texture_manager.h>
 #include <athena/graphics/sync.h>
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_GRAPHICS
+#include <athena/memory_tags.h>
+#endif
+
 
 static const u64 BLACK_RGBAQ   = GS_SETREG_RGBAQ(0x00,0x00,0x00,0x80,0x00);
 
@@ -140,11 +145,18 @@ void athena_texture_optimize(GSSURFACE *Texture)
 	uint8_t  *pixels24;
 
 	// Only 24bit to 16bit supported
-	if (Texture->PSM != GS_PSM_CT24)
+	if (!Texture || !Texture->Mem || Texture->PSM != GS_PSM_CT24 ||
+		graphics_surface_is_locked(Texture))
 		return;
 
-	size = Texture->Width * Texture->Height * 2;
+	uint32_t payload = athena_surface_size(Texture->Width, Texture->Height, GS_PSM_CT16S);
+	if (payload == UINT32_MAX)
+		return;
+	size = ((size_t)payload + 15) & ~(size_t)15;
 	pixels16 = (uint16_t*)memalign(128, size);
+	if (!pixels16)
+		return;
+	memset(pixels16, 0, size);
 	pixels24 = (uint8_t *)Texture->Mem;
 
 	for(y=0; y < Texture->Height; y++) {
@@ -155,6 +167,7 @@ void athena_texture_optimize(GSSURFACE *Texture)
 		}
 	}
 
+	graphics_surface_release(Texture);
 	free(Texture->Mem);
 	Texture->Mem = (void*)pixels16;
 	Texture->PSM = GS_PSM_CT16S;
@@ -162,30 +175,40 @@ void athena_texture_optimize(GSSURFACE *Texture)
 
 uint32_t athena_surface_size(int width, int height, int psm)
 {
+	/* CPU payload, not GS block/page storage. CT24 uploads packed RGB. */
+	uint64_t pixels, bytes;
+	if (width <= 0 || height <= 0)
+		return UINT32_MAX;
+	pixels = (uint64_t)width * (uint64_t)height;
 	switch (psm) {
 		case GS_PSM_CT32:  
-		case GS_PSM_CT24:
 		case GS_PSMZ_32:  
 		case GS_PSMZ_24:
-			return (width*height*4);
+			bytes = pixels * 4; break;
+		case GS_PSM_CT24:
+			bytes = pixels * 3; break;
 		case GS_PSM_CT16:  
 		case GS_PSM_CT16S:
 		case GS_PSMZ_16:  
 		case GS_PSMZ_16S:
-			return (width*height*2);
+			bytes = pixels * 2; break;
 		case GS_PSM_T8:    
-			return (width*height  );
+			bytes = pixels; break;
 		case GS_PSM_T4:    
-			return (width*height/2);
+			bytes = (pixels + 1) / 2; break;
+		default:
+			return UINT32_MAX;
 	}
-
-	return UINT32_MAX;
+	return bytes < UINT32_MAX ? (uint32_t)bytes : UINT32_MAX;
 }
 
 uint32_t athena_vram_surface_size(int width, int height, int psm)
 {
 	int widthBlocks, heightBlocks;
 	int widthAlign, heightAlign;
+	/* Match the engine's screen dimension ceiling before signed rounding. */
+	if (width <= 0 || height <= 0 || width > 2048 || height > 2048)
+		return UINT32_MAX;
 
 	// Calculate the number of blocks width and height
 	// A block is 256 bytes in size
@@ -340,6 +363,8 @@ int graphics_surface_bind(GSSURFACE *surface, bool async)
 		return GRAPHICS_BIND_ERROR;
 
 	graphics_service_init();
+	if (!graphics_service_initialized || !gsGlobal)
+		return GRAPHICS_BIND_ERROR;
 	result = texture_manager_bind(gsGlobal, surface, async);
 	return result;
 }
@@ -715,6 +740,7 @@ uint64_t get_register(int reg_id) {
 }
 
 #include "page_clear.h"
+
 
 void page_clear(Color color) {
     owl_page_clear(gsGlobal, color,
@@ -1372,6 +1398,8 @@ GSCONTEXT *temp_init_global()
     int i = 0;
 
 	GSCONTEXT *gsGlobal = calloc(1,sizeof(GSCONTEXT));
+	if (!gsGlobal)
+		return NULL;
 
 	/* Generic Values */
 	gsGlobal->Aspect = GS_ASPECT_4_3;
@@ -1526,7 +1554,8 @@ int setVideoMode(s16 mode, int width, int height, int psm, s16 interlace, s16 fi
 	dbgprintf("\nGraphics: created video surface of (%d, %d)\n",
 		gsGlobal->Width, gsGlobal->Height);
 
-	texture_manager_init(gsGlobal);
+	if (texture_manager_init(gsGlobal) < 0)
+		return -1;
 
 	if (setup_buffer_textures() < 0)
 		return -1;
@@ -1565,10 +1594,14 @@ void init_graphics() {
     sema.max_count = 1;
     sema.option = 0;
     vsync_sema_id = CreateSema(&sema);
+	if (vsync_sema_id < 0)
+		goto fail;
 
 	owl_init(owl_packet_buffer, OWL_PACKET_BUFFER_SIZE);
 
 	gsGlobal = temp_init_global();
+	if (!gsGlobal)
+		goto fail;
 
 	//gsGlobal->OffsetX = (int)((2048.0f-(gsGlobal->Width/2)) * 16.0f);
 	//gsGlobal->OffsetY = (int)((2048.0f-(gsGlobal->Height/2)) * 16.0f);
@@ -1585,11 +1618,11 @@ void init_graphics() {
 	dbgprintf("\nGraphics: created %ix%i video surface\n",
 		gsGlobal->Width, gsGlobal->Height);
 
-	texture_manager_init(gsGlobal);
+	if (texture_manager_init(gsGlobal) < 0)
+		goto fail;
 
 	if (setup_buffer_textures() < 0) {
-		graphics_service_initialized = false;
-		return;
+		goto fail;
 	}
 
 	init_screen(gsGlobal);
@@ -1613,6 +1646,17 @@ void init_graphics() {
     	clearScreen(BLACK_RGBAQ);	
 		flipScreen();
 	}
+	return;
+fail:
+	texture_manager_shutdown();
+	if (vsync_sema_id >= 0) {
+		DeleteSema(vsync_sema_id);
+		vsync_sema_id = -1;
+	}
+	free(gsGlobal);
+	gsGlobal = NULL;
+	flipScreen = NULL;
+	graphics_service_initialized = false;
 }
 
 void graphics_service_init()

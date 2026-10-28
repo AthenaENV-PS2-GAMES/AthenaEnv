@@ -137,13 +137,13 @@ static JSValue js_normals(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     const AthenaMesh3D *mesh=NULL;
     /* An Instance (with its own transform), else a Mesh: the failed lookup's
      * TypeError is discarded. */
-    AthenaInstance3D *instance=athena_instance3d_from_value(ctx,argv[0]);
+    AthenaInstance3D *instance=athena_instance3d_from_value_borrow(ctx,argv[0]);
     if(instance) {
         mesh=athena_instance3d_mesh(instance);
         if(!has_model) { model=*athena_instance3d_transform(instance); has_model=1; }
     } else {
         JS_FreeValue(ctx,JS_GetException(ctx));
-        mesh=athena_mesh3d_from_value(ctx,argv[0]);
+        mesh=athena_mesh3d_from_value_borrow(ctx,argv[0]);
         if(!mesh) { JS_FreeValue(ctx,JS_GetException(ctx)); return JS_ThrowTypeError(ctx,"Debug3D.normals expects a Model3D.Instance or Mesh"); }
     }
     return result(ctx,athena_debug3d_normals(mesh,has_model?&model:NULL,length,color,seconds));

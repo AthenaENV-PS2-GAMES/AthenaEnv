@@ -36,7 +36,7 @@ static JSValue ctor(JSContext *ctx,JSValueConst target,int argc,JSValueConst *ar
         JSValue mesh=JS_GetPropertyStr(ctx,item,"mesh");
         float until=0; int ok=!JS_IsException(mesh)&&athena_js_option_float(ctx,item,"until",&until);
         levels[i].mesh=NULL; levels[i].until=until;
-        if(ok&&!JS_IsNull(mesh)&&!JS_IsUndefined(mesh)) ok=(levels[i].mesh=athena_mesh3d_from_value(ctx,mesh))!=NULL;
+        if(ok&&!JS_IsNull(mesh)&&!JS_IsUndefined(mesh)) ok=(levels[i].mesh=athena_mesh3d_from_value_borrow(ctx,mesh))!=NULL;
         /* Later getters may dispose earlier mesh wrappers or trigger GC. */
         if(ok) { athena_mesh3d_retain(levels[i].mesh); retained++; }
         JS_FreeValue(ctx,mesh); JS_FreeValue(ctx,item);

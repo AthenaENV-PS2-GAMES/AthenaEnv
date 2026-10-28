@@ -92,6 +92,9 @@ struct gsSurface
 	uint8_t PageAligned;
 	uint8_t Macroblock;	///< Data is in 16x16 macroblock format (for MPEG)
 	uint32_t Mask;      ///< Framebuffer Mask
+	/* Last OWL chain borrowing Mem/Clut. UINT64_MAX denotes standalone GIF
+	 * upload; only the texture manager writes this internal ownership ticket. */
+	uint64_t UploadGeneration;
 };
 typedef struct gsSurface GSSURFACE;
 
@@ -118,6 +121,8 @@ void athena_set_tw_th(const GSSURFACE *Texture, int *tw, int *th);
 
 void athena_texture_optimize(GSSURFACE *Texture);
 
+/* CPU payload bytes: CT24 is packed RGB (3 B/pixel). DMA owners must allocate
+ * and initialize a full final QW. GS allocation uses athena_vram_surface_size. */
 uint32_t athena_surface_size(int width, int height, int psm);
 
 uint32_t athena_vram_surface_size(int width, int height, int psm);

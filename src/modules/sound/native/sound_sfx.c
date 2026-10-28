@@ -18,6 +18,11 @@
 
 #include "sound_internal.h"
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_AUDIO
+#include <athena/memory_tags.h>
+#endif
+
 /* Header written by adpenc in front of the SPU2 ADPCM blocks. */
 typedef struct {
     char magic[4]; /* "APCM" */

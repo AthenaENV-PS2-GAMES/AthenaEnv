@@ -4,6 +4,11 @@
 
 #include <athena/file_job.h>
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_STAGING
+#include <athena/memory_tags.h>
+#endif
+
 /* Whole-file reads on the job pool (athena/file_job.h). */
 
 typedef struct {

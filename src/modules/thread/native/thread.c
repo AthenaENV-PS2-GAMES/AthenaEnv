@@ -1,3 +1,6 @@
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#include <athena/memory.h>
+#endif
 #include <kernel.h>
 #include <malloc.h>
 #include <stdlib.h>
@@ -123,7 +126,11 @@ AthenaThread *athena_thread_core_create(const char *name, AthenaThreadFunc func,
         snprintf(thread->name, sizeof(thread->name), "Athena: Worker thread");
     }
 
+    #if ATHENA_MEMORY_DIAGNOSTICS
+    thread->stack = athena_memalign_tagged(128, stack_size, ATHENA_MEM_STACK);
+#else
     thread->stack = memalign(128, stack_size);
+#endif
     if (!thread->stack) {
         free(thread);
         return NULL;

@@ -27,10 +27,29 @@ extern "C" {
 /// Quadwords texture_manager_add_mark() writes.
 #define TEXTURE_MARK_QWC 4
 
+/* Main-thread, observational snapshot. Intervals never imply future success:
+ * metadata OOM can still fail a fit. No eviction, collection or DMA wait. */
+#define ATHENA_VRAM_INTERVALS 32
+typedef struct { unsigned start, size; } AthenaVramInterval;
+typedef struct {
+    unsigned initialized, total, used, free, locked;
+    unsigned framebuffer, depth, texture, clut, target;
+    unsigned largest_block, largest_page_block, free_intervals, interval_count;
+    unsigned nodes, peak_used, diagnostics_enabled;
+    uint64_t evictions, allocation_failures, queue_cancellations;
+    uint64_t linear_retirements, macroblock_retirements;
+    unsigned queued_uploads, pending_surfaces;
+    size_t pending_cpu_payload;
+    AthenaVramInterval intervals[ATHENA_VRAM_INTERVALS];
+} AthenaVramStats;
+void texture_manager_stats_read(AthenaVramStats *out);
+
 void texture_upload(GSCONTEXT *gsGlobal, GSSURFACE *Texture);
 
 /// Initialize the texture manager
-void texture_manager_init(GSCONTEXT *gsGlobal);
+int texture_manager_init(GSCONTEXT *gsGlobal);
+/* Internal initialization rollback; caller must have no pending GS work. */
+void texture_manager_shutdown(void);
 
 /// Bind a texture to VRAM, will automatically transfer the texture.
 int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async);

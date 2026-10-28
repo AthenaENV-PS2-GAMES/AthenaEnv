@@ -57,7 +57,7 @@ static JSValue load_source(JSContext *ctx,JSValueConst self,int argc,JSValueCons
     if(!JS_IsString(argv[index])) return JS_ThrowTypeError(ctx,"%s expects a path/origin string",name);
     int override=argc>=index+2&&!JS_IsUndefined(argv[index+1]);
     AthenaMaterial3D material;
-    if(!athena_model3d_js_material(ctx,override?argv[index+1]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
+    if(!athena_model3d_js_material_borrow(ctx,override?argv[index+1]:JS_UNDEFINED,&material)) return JS_EXCEPTION;
     size_t length=0; const char *path=JS_ToCStringLen(ctx,&length,argv[index]);
     if(!path) { athena_texture3d_release(material.texture); return JS_EXCEPTION; }
     if(!length||strlen(path)!=length) {

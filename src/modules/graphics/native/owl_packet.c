@@ -76,6 +76,7 @@ void owl_flush_packet() {
 #endif
     if(pending_generation[controller.channel]) OWL_COUNT(submit_waits);
 
+    OWL_COUNT(dma_wait_calls);
     dmaKit_wait(controller.channel, 0);
     pending_generation[controller.channel] = 0;
 
@@ -94,6 +95,7 @@ void owl_flush_packet() {
     if (previous != CHANNEL_SIZE && pending_generation[previous] &&
         pending_generation[previous] == buffer_generation[controller.context]) {
         OWL_COUNT(reuse_waits);
+        OWL_COUNT(dma_wait_calls);
         dmaKit_wait(previous, 0);
         pending_generation[previous] = 0;
     }
@@ -122,6 +124,7 @@ void owl_wait_generation(uint64_t generation) {
     for (int channel=0; channel<CHANNEL_SIZE; channel++) {
         if (pending_generation[channel] && pending_generation[channel] <= generation) {
             OWL_COUNT(fence_waits);
+            OWL_COUNT(dma_wait_calls);
             dmaKit_wait(channel, 0);
             pending_generation[channel]=0;
         }
@@ -197,4 +200,15 @@ void vu1_set_double_buffer_settings(uint32_t base, uint32_t offset)
     //owl_add_tag(internal_packet, (VIF_CODE(0, 0, VIF_NOP, 0) | (uint64_t)VIF_CODE(0, 0, VIF_NOP, 0) << 32),
     //                DMA_TAG(0, 0, DMA_END, 0, 0 , 0));
 
+}
+
+void owl_generation_stats_read(owl_generation_stats *out) {
+    if(!out) return;
+    memset(out,0,sizeof(*out));
+    out->authored_generation=flush_generation;
+    out->authored_qwords=controller.alloc;
+    for(unsigned i=0;i<CHANNEL_SIZE;i++) {
+        out->pending[i]=pending_generation[i];
+        if(pending_generation[i]) out->pending_channels++;
+    }
 }

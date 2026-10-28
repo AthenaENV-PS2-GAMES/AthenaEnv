@@ -17,6 +17,11 @@
 
 #include "sound_internal.h"
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_AUDIO
+#include <athena/memory_tags.h>
+#endif
+
 /*
  * One stream plays at a time, through two threads:
  *

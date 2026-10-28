@@ -26,7 +26,22 @@ void athena_node3d_release(AthenaNode3D *node);
 /* Retains mesh; NULL removes it. Instances keep their own transforms and are
  * not scene nodes: a node draws its mesh with its world transform. */
 int athena_node3d_set_mesh(AthenaNode3D *node,AthenaMesh3D *mesh);
+/* Native export of a node's mesh (Phase 5C.5E). A mesh built from a script texture opted in to canonical compaction
+ * (ATHENA_TEXTURE3D_COMPACT_CANONICAL=1) may hold a texture whose canonical RGBA was released after its first bind, and the
+ * infallible athena_texture3d_view() could not rebuild it under memory pressure. Three forms:
+ *   athena_node3d_mesh        the historical name, now the SAFE form: when the mesh has a texture its canonical RGBA is present and
+ *                             pinned on return (view().material.texture + view() valid and address-stable until the final release
+ *                             of that texture, as before compaction existed). NULL for a NULL node, a node without mesh, or when the
+ *                             pin failed with ENOMEM (nothing exported, state unchanged, retry allowed). Legacy callers cannot tell
+ *                             the last case from "no mesh"; new code should use athena_node3d_mesh_pin.
+ *   athena_node3d_mesh_pin    same, with a status: 0 (*out = the borrowed mesh, or NULL when the node has none), EINVAL, ENOMEM
+ *                             (*out = NULL). Pins only this node's mesh texture, never the graph.
+ *   athena_node3d_mesh_borrow compaction-aware: no pixel work, never fails. The texture may have no canonical RGBA; read pixels only
+ *                             after athena_texture3d_pin_canonical() or through athena_texture3d_try_view().
+ * Returned pointers are borrowed (valid while the node keeps this mesh). Main thread. */
 const AthenaMesh3D *athena_node3d_mesh(const AthenaNode3D *node);
+const AthenaMesh3D *athena_node3d_mesh_borrow(const AthenaNode3D *node);
+int athena_node3d_mesh_pin(const AthenaNode3D *node,const AthenaMesh3D **out);
 int athena_node3d_set_position(AthenaNode3D *node,float x,float y,float z);
 int athena_node3d_set_scale(AthenaNode3D *node,float x,float y,float z);
 int athena_node3d_set_rotation(AthenaNode3D *node,float x,float y,float z,float w);

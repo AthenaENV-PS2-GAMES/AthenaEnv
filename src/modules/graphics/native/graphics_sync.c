@@ -4,7 +4,16 @@
 #include <athena/graphics/sync.h>
 static bool finish_pending;
 static uint32_t finished_frames,idle_count;
-void graphics_frame_finished(void) { finished_frames++; }
+/* Optional backend: graphics-only builds must not pull Model3D into the link.
+ * Called on the main thread, only after an existing frame FINISH was waited. */
+extern void athena_render3d_collect_frame(void) __attribute__((weak));
+extern void athena_texture3d_collect_frame(void) __attribute__((weak));
+void graphics_frame_finished(void) {
+    finished_frames++;
+    /* Mesh references first: a released mesh may queue its texture. */
+    if(athena_render3d_collect_frame) athena_render3d_collect_frame();
+    if(athena_texture3d_collect_frame) athena_texture3d_collect_frame();
+}
 uint32_t graphics_finished_frames(void) { return finished_frames; }
 uint32_t graphics_idle_count(void) { return idle_count; }
 void graphics_finish_wait(void) {

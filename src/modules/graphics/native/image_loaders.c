@@ -12,6 +12,11 @@
 
 #include <athena/graphics.h>
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_IMAGE
+#include <athena/memory_tags.h>
+#endif
+
 
 struct gsBitMapFileHeader
 {

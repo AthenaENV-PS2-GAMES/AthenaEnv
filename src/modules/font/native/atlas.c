@@ -9,9 +9,16 @@
 #include "atlas.h"
 #include <athena/graphics.h>
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_FONT
+#include <athena/memory_tags.h>
+#endif
+
 static inline struct atlas_allocation_t *allocNew(int x, int y, size_t width, size_t height)
 {
     struct atlas_allocation_t *al = (struct atlas_allocation_t *)malloc(sizeof(struct atlas_allocation_t));
+	if (!al)
+		return NULL;
 
     al->x = x;
     al->y = y;
@@ -56,15 +63,21 @@ static inline struct atlas_allocation_t *allocPlace(struct atlas_allocation_t *a
         // extra space
         size_t dx = alloc->w - width;
         size_t dy = alloc->h - height;
+        struct atlas_allocation_t *leaf1, *leaf2;
 
         // make the wider piece also longer - less wasted space
         if (dx < dy) {
-            alloc->leaf1 = allocNew(alloc->x + width, alloc->y, dx, height);
-            alloc->leaf2 = allocNew(alloc->x, alloc->y + height, alloc->w, dy);
+            leaf1 = allocNew(alloc->x + width, alloc->y, dx, height);
+            if (!leaf1) return NULL;
+            leaf2 = allocNew(alloc->x, alloc->y + height, alloc->w, dy);
         } else {
-            alloc->leaf1 = allocNew(alloc->x, alloc->y + height, width, dy);
-            alloc->leaf2 = allocNew(alloc->x + width, alloc->y, dx, alloc->h);
+            leaf1 = allocNew(alloc->x, alloc->y + height, width, dy);
+            if (!leaf1) return NULL;
+            leaf2 = allocNew(alloc->x + width, alloc->y, dx, alloc->h);
         }
+        if (!leaf2) { free(leaf1); return NULL; }
+        alloc->leaf1 = leaf1;
+        alloc->leaf2 = leaf2;
 
         return alloc;
     } else {
@@ -84,8 +97,15 @@ static inline struct atlas_allocation_t *allocPlace(struct atlas_allocation_t *a
 atlas_t *atlasNew(size_t width, size_t height, u8 psm)
 {
     atlas_t *atlas = (atlas_t *)malloc(sizeof(atlas_t));
+    if (!atlas)
+        return NULL;
+    if (graphics_surface_init(&atlas->surface) < 0) {
+        free(atlas);
+        return NULL;
+    }
 
     atlas->allocation = allocNew(0, 0, width, height);
+    if (!atlas->allocation) { free(atlas); return NULL; }
 
     atlas->surface.Width = width;
     atlas->surface.Height = height;
@@ -96,9 +116,16 @@ atlas_t *atlasNew(size_t width, size_t height, u8 psm)
     atlas->surface.Filter = GS_FILTER_LINEAR;
 
     size_t txtsize = athena_vram_surface_size(width, height, psm);
+    if (txtsize == UINT32_MAX || !txtsize) {
+        allocFree(atlas->allocation); free(atlas); return NULL;
+    }
     atlas->surface.PSM = psm;
     atlas->surface.Mem = (u32 *)memalign(128, txtsize);
+    if (!atlas->surface.Mem) {
+        allocFree(atlas->allocation); free(atlas); return NULL;
+    }
     atlas->surface.Vram = 0;
+    atlas->surface.UploadGeneration = 0;
 
     // defaults to no clut
     atlas->surface.ClutPSM = 0;
@@ -134,7 +161,7 @@ static size_t pixelSize(u8 psm)
         case GS_PSM_CT32:
             return 4;
         case GS_PSM_CT24:
-            return 4;
+            return 3;
         case GS_PSM_CT16:
             return 2;
         case GS_PSM_CT16S:
@@ -180,9 +207,8 @@ struct atlas_allocation_t *atlasPlace(atlas_t *atlas, size_t width, size_t heigh
     if (!al)
         return NULL;
 
-    atlasCopyData(atlas, al, width, height, surface);
-
     texture_manager_invalidate(&atlas->surface);
+    atlasCopyData(atlas, al, width, height, surface);
 
     return al;
 }

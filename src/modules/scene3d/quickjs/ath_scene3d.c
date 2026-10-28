@@ -98,7 +98,7 @@ static JSValue node_ctor(JSContext *ctx,JSValueConst target,int argc,JSValueCons
      * dispose the argument. Revalidate its handle after every such getter. */
     JSValue obj=new_with_proto(ctx,target,node_id); if(JS_IsException(obj)) return obj;
     AthenaMesh3D *mesh=NULL;
-    if(argc==1&&!JS_IsUndefined(argv[0])&&!(mesh=athena_mesh3d_from_value(ctx,argv[0]))) {
+    if(argc==1&&!JS_IsUndefined(argv[0])&&!(mesh=athena_mesh3d_from_value_borrow(ctx,argv[0]))) {
         JS_FreeValue(ctx,obj); return JS_EXCEPTION;
     }
     AthenaNode3D *n=athena_node3d_create();
@@ -214,12 +214,12 @@ static JSValue scene_detach(JSContext *ctx,JSValueConst self,int argc,JSValueCon
 static JSValue node_set_mesh(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,1,1,"Node.setMesh")) return JS_EXCEPTION;
     AthenaMesh3D *mesh=NULL;
-    if(!JS_IsNull(argv[0])&&!(mesh=athena_mesh3d_from_value(ctx,argv[0]))) return JS_EXCEPTION;
+    if(!JS_IsNull(argv[0])&&!(mesh=athena_mesh3d_from_value_borrow(ctx,argv[0]))) return JS_EXCEPTION;
     AthenaNode3D *n=get_node(ctx,self); if(!n) return JS_EXCEPTION;
     athena_node3d_set_mesh(n,mesh); return JS_DupValue(ctx,self);
 }
 static JSValue node_has_mesh(JSContext *ctx,JSValueConst self) {
-    AthenaNode3D *n=get_node(ctx,self); return n?JS_NewBool(ctx,athena_node3d_mesh(n)!=NULL):JS_EXCEPTION;
+    AthenaNode3D *n=get_node(ctx,self); return n?JS_NewBool(ctx,athena_node3d_mesh_borrow(n)!=NULL):JS_EXCEPTION;
 }
 static JSValue node_set_vector(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic) {
     int count=magic==3?4:3;
@@ -297,7 +297,7 @@ static JSValue node_get_weights(JSContext *ctx,JSValueConst self,int argc,JSValu
     if(!athena_js_argc(ctx,argc,0,0,"Node.getWeights")) return JS_EXCEPTION;
     AthenaNode3D *n=get_node(ctx,self); if(!n) return JS_EXCEPTION;
     float w[ATHENA_MODEL3D_MAX_TARGETS]; athena_node3d_get_weights(n,w);
-    uint32_t count=athena_mesh3d_target_count(athena_node3d_mesh(n));
+    uint32_t count=athena_mesh3d_target_count(athena_node3d_mesh_borrow(n));
     JSValue a=JS_NewArray(ctx); if(JS_IsException(a)) return a;
     for(uint32_t i=0;i<count;i++) if(JS_SetPropertyUint32(ctx,a,i,JS_NewFloat64(ctx,w[i]))<0) { JS_FreeValue(ctx,a); return JS_EXCEPTION; }
     return a;

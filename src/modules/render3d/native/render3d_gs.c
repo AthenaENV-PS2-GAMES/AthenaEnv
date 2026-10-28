@@ -1,3 +1,4 @@
+#include <athena/memory_retirement.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
@@ -10,6 +11,11 @@
 #include <athena/graphics/mpg_manager.h>
 #include "render3d_clip.h"
 #include "../../model3d/native/texture3d_backend.h"
+
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_GEOMETRY
+#include <athena/memory_tags.h>
+#endif
 register_vu_program(VU1Draw3DCS);
 register_vu_program(VU1Draw3DDiffuse);
 register_vu_program(VU1Draw3DTexture);
@@ -99,13 +105,30 @@ typedef struct { int address,context,textured; AthenaRender3DCull cull; AthenaRe
  * owl_generation_read() proves that chain consumed. */
 static struct { AthenaMesh3D *mesh; uint64_t generation; } *retained;
 static uint32_t retained_head,retained_count,retained_capacity;
-static void dma_drain(int all) {
-    if(all&&retained_count) owl_wait_generation(retained[retained_head+retained_count-1].generation);
-    while(retained_count&&owl_generation_read(retained[retained_head].generation)) {
+/* Releases consumed heads in FIFO order, visiting at most `budget` entries
+ * (UINT32_MAX: unbounded). An unready head stops the walk and still counts as
+ * a visit; later entries are never examined past it. */
+static void dma_collect(uint32_t budget) {
+    while(budget&&retained_count) {
+        budget--;
+        if(!owl_generation_read(retained[retained_head].generation)) break;
         athena_mesh3d_release(retained[retained_head].mesh);
         retained_head++; retained_count--;
     }
     if(!retained_count) retained_head=0;
+}
+static void dma_drain(int all) {
+    if(all&&retained_count) owl_wait_generation(retained[retained_head+retained_count-1].generation);
+    dma_collect(UINT32_MAX);
+}
+/* Completed-frame hook (graphics_frame_finished, after the existing FINISH
+ * wait; no new fence). Same owl_generation_read predicate as dma_drain, at
+ * most eight entries visited per frame, so a long queue drains over several
+ * frames and an idle scene still releases consumed meshes. Releasing a mesh
+ * may hand its texture to Texture3D Pending; that collector runs after this. */
+#define RENDER3D_FRAME_COLLECT_BUDGET 8u
+void athena_render3d_collect_frame(void) {
+    if(retained_count) dma_collect(RENDER3D_FRAME_COLLECT_BUDGET);
 }
 /* Room for one more entry, before a packet query: 0 (no memory) means the
  * chunk is copied instead. Afterwards dma_retain() cannot fail. */
@@ -801,4 +824,13 @@ void athena_render3d_module_shutdown(void) {
     if(indexed_program) {vu_mpg_unload(indexed_program);indexed_program=NULL;}
     if(indexed_skin_program) {vu_mpg_unload(indexed_skin_program);indexed_skin_program=NULL;}
     if(indexed_morph_program) {vu_mpg_unload(indexed_morph_program);indexed_morph_program=NULL;}
+}
+
+void athena_render3d_retirement_stats(AthenaMeshRetirementStats *out) {
+    if(!out) return;
+    memset(out,0,sizeof(*out));
+    out->references=retained_count;
+    out->capacity_bytes=retained_capacity*sizeof(*retained);
+    for(unsigned i=0;i<retained_count;i++)
+        if(!owl_generation_read(retained[retained_head+i].generation)) out->pending_references++;
 }

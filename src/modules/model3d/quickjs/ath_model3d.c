@@ -15,10 +15,25 @@ static AthenaMesh3D *get_mesh(JSContext *ctx,JSValueConst v) {
     if(!m) JS_ThrowTypeError(ctx,"Expected a live Model3D.Mesh");
     return m;
 }
-AthenaMesh3D *athena_mesh3d_from_value(JSContext *ctx,JSValueConst v) { return get_mesh(ctx,v); }
-AthenaInstance3D *athena_instance3d_from_value(JSContext *ctx,JSValueConst v) {
+/* Phase 5C.5D export boundary. The *_borrow forms hand a native pointer to the engine's own compaction-aware code
+ * (retain/release, bind, info(), geometry): no pixel access, no allocation, no materialization. The plain forms are
+ * the long-standing public names a foreign native module may call and keep: they additionally make the canonical RGBA
+ * of every texture reachable from the returned pointer present and pinned, so the legacy infallible
+ * athena_texture3d_view() stays valid. Allocation failure becomes a JS exception (NULL / 0 return), nothing exported. */
+AthenaMesh3D *athena_mesh3d_from_value_borrow(JSContext *ctx,JSValueConst v) { return get_mesh(ctx,v); }
+AthenaMesh3D *athena_mesh3d_from_value(JSContext *ctx,JSValueConst v) {
+    AthenaMesh3D *m=get_mesh(ctx,v);
+    if(m&&athena_mesh3d_pin_canonical(m)<0) { JS_ThrowOutOfMemory(ctx); return NULL; }
+    return m;
+}
+AthenaInstance3D *athena_instance3d_from_value_borrow(JSContext *ctx,JSValueConst v) {
     AthenaInstance3D *i=JS_GetOpaque2(ctx,v,instance_id);
     if(!i) JS_ThrowTypeError(ctx,"Expected a live Model3D.Instance");
+    return i;
+}
+AthenaInstance3D *athena_instance3d_from_value(JSContext *ctx,JSValueConst v) {
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,v);
+    if(i&&athena_mesh3d_pin_canonical(athena_instance3d_mesh(i))<0) { JS_ThrowOutOfMemory(ctx); return NULL; }
     return i;
 }
 static void mesh_finalizer(JSRuntime *rt,JSValue v) { (void)rt; athena_mesh3d_release(JS_GetOpaque(v,mesh_id)); }
@@ -192,8 +207,14 @@ done:
     JS_FreeValue(ctx,material);
     athena_texture3d_release(descriptor.texture); return result;
 }
-int athena_model3d_js_material(JSContext *ctx,JSValueConst value,AthenaMaterial3D *out) {
+int athena_model3d_js_material_borrow(JSContext *ctx,JSValueConst value,AthenaMaterial3D *out) {
     return material_option(ctx,value,out);
+}
+int athena_model3d_js_material(JSContext *ctx,JSValueConst value,AthenaMaterial3D *out) {
+    if(!material_option(ctx,value,out)) return 0;
+    if(!out->texture||athena_texture3d_pin_canonical(out->texture)==0) return 1;
+    athena_texture3d_release(out->texture); out->texture=NULL; /* nothing is exported on failure */
+    JS_ThrowOutOfMemory(ctx); return 0;
 }
 static JSValue load(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
@@ -430,7 +451,12 @@ static JSValue create_instance(JSContext *ctx,JSValueConst self,int argc,JSValue
     if(JS_IsException(obj)) { athena_instance3d_release(i); return obj; }
     JS_SetOpaque(obj,i); return obj;
 }
-AthenaTexture3D *athena_texture3d_from_value(JSContext *ctx,JSValueConst value) { return get_texture(ctx,value); }
+AthenaTexture3D *athena_texture3d_from_value_borrow(JSContext *ctx,JSValueConst value) { return get_texture(ctx,value); }
+AthenaTexture3D *athena_texture3d_from_value(JSContext *ctx,JSValueConst value) {
+    AthenaTexture3D *t=get_texture(ctx,value);
+    if(t&&athena_texture3d_pin_canonical(t)<0) { JS_ThrowOutOfMemory(ctx); return NULL; }
+    return t;
+}
 static JSValue texture_target(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     (void)self;
     if(!athena_js_argc(ctx,argc,2,3,"Texture.renderTarget")) return JS_EXCEPTION;
@@ -485,6 +511,7 @@ static JSValue texture_load(JSContext *ctx,JSValueConst self,int argc,JSValueCon
     if(!length||length!=strlen(path)) { JS_FreeCString(ctx,path); return JS_ThrowRangeError(ctx,"Invalid texture path"); }
     athena_model3d_clear_detail();
     AthenaTexture3D *t=NULL; int code=athena_texture3d_load_ex(path,filter,(AthenaTexture3DWrap)wrap,&t);
+    if(code>=0) athena_texture3d_allow_compaction(t); /* script Textures expose only width/height/wrap */
     JSValue result=code<0?throw_load(ctx,code,path):wrap_texture(ctx,t);
     JS_FreeCString(ctx,path); return result;
 }
@@ -503,6 +530,7 @@ static JSValue texture_load_memory(JSContext *ctx,JSValueConst self,int argc,JSV
     AthenaTexture3D *t=NULL;
     int code=input.count?athena_texture3d_load_memory(input.data,input.count,(AthenaTexture3DFilter)filter,(AthenaTexture3DWrap)wrap,&t):ATHENA_MODEL3D_EINVAL;
     JS_FreeValue(ctx,input.backing);
+    if(code>=0) athena_texture3d_allow_compaction(t);
     return code<0?throw_load(ctx,code,"Texture.loadMemory"):wrap_texture(ctx,t);
 }
 static JSValue texture_dispose(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
@@ -511,7 +539,7 @@ static JSValue texture_dispose(JSContext *ctx,JSValueConst self,int argc,JSValue
 }
 static JSValue texture_dimension(JSContext *ctx,JSValueConst self,int magic) {
     AthenaTexture3D *t=get_texture(ctx,self); if(!t) return JS_EXCEPTION;
-    AthenaTexture3DPixels p; athena_texture3d_view(t,&p);
+    AthenaTexture3DInfo p; athena_texture3d_info(t,&p); /* metadata only: never rebuilds canonical RGBA */
     return JS_NewUint32(ctx,magic==2?(uint32_t)p.wrap:magic?p.height:p.width);
 }
 static JSValue texture_upload(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
@@ -538,7 +566,7 @@ static JSValue floats_out(JSContext *ctx,int argc,JSValueConst *argv,const float
 /* magic 0 position (xyz), 1 rotation (xyzw), 2 scale (xyz): as set. */
 static JSValue get_trs(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv,int magic) {
     if(!athena_js_argc(ctx,argc,0,1,"Instance TRS getter")) return JS_EXCEPTION;
-    AthenaInstance3D *i=athena_instance3d_from_value(ctx,self); if(!i) return JS_EXCEPTION;
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,self); if(!i) return JS_EXCEPTION;
     float p[3],sc[3]; AthenaQuaternion q; athena_instance3d_get_trs(i,p,&q,sc);
     const float r[4]={q.x,q.y,q.z,q.w};
     return floats_out(ctx,argc,argv,magic==0?p:magic==1?r:sc,magic==1?4:3,"out");
@@ -568,7 +596,7 @@ static JSValue set_vector(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     if(!athena_js_argc(ctx,argc,n,n,"Instance transform setter")) return JS_EXCEPTION;
     float v[4];
     for(int j=0;j<n;j++) if(!athena_js_float(ctx,argv[j],&v[j],"transform")) return JS_EXCEPTION;
-    AthenaInstance3D *i=athena_instance3d_from_value(ctx,self); if(!i) return JS_EXCEPTION;
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,self); if(!i) return JS_EXCEPTION;
     int ok=magic==0?athena_instance3d_set_position(i,v[0],v[1],v[2]):
         magic==1?athena_instance3d_set_scale(i,v[0],v[1],v[2]):
         magic==2?athena_instance3d_set_euler(i,v[0],v[1],v[2]):
@@ -576,7 +604,7 @@ static JSValue set_vector(JSContext *ctx,JSValueConst self,int argc,JSValueConst
     if(!ok) return JS_ThrowRangeError(ctx,"Invalid transform");
     return JS_DupValue(ctx,self);
 }
-static void *instance_item(JSContext *ctx,JSValueConst v) { return athena_instance3d_from_value(ctx,v); }
+static void *instance_item(JSContext *ctx,JSValueConst v) { return athena_instance3d_from_value_borrow(ctx,v); }
 static void instance_retain(void *i) { athena_instance3d_retain(i); }
 static void instance_release(void *i) { athena_instance3d_release(i); }
 /* Model3D.setPositions/setRotationsEuler(instances, values): xyz per instance
@@ -604,7 +632,7 @@ static JSValue set_many(JSContext *ctx,JSValueConst self,int argc,JSValueConst *
 }
 static JSValue get_matrix(JSContext *ctx,JSValueConst self,int argc,JSValueConst *argv) {
     if(!athena_js_argc(ctx,argc,0,1,"Instance.getTransform")) return JS_EXCEPTION;
-    AthenaInstance3D *i=athena_instance3d_from_value(ctx,self); if(!i) return JS_EXCEPTION;
+    AthenaInstance3D *i=athena_instance3d_from_value_borrow(ctx,self); if(!i) return JS_EXCEPTION;
     const AthenaMatrix4 *m=athena_instance3d_transform(i); if(!m) return JS_ThrowRangeError(ctx,"Transform overflow");
     if(argc) {
         AthenaMatrix4 *out=athena_matrix4_from_value(ctx,argv[0]); if(!out) return JS_EXCEPTION;

@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <string.h>
 #include <math.h>
 
@@ -8,6 +9,11 @@
 
 #include <athena/image.h>
 #include <athena/js/image.h>
+
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_IMAGE
+#include <athena/memory_tags.h>
+#endif
 
 static JSClassID image_class_id;
 
@@ -138,12 +144,17 @@ static int image_set_buffer(JSContext *ctx, AthenaImage *image,
 		return 0;
 	}
 
-	copy = malloc(size);
+	/* The public buffer contains payload only; DMA_REF reads complete QWs. */
+	size_t capacity = ((size_t)size + 15) & ~(size_t)15;
+	copy = memalign(128, capacity);
 	if (!copy) {
 		JS_ThrowOutOfMemory(ctx);
 		return 0;
 	}
+	memset(copy, 0, capacity);
 	memcpy(copy, source, size);
+	/* Retire the previous DMA source before replacing its storage. */
+	graphics_surface_release(image->surface);
 	free(*destination);
 	*destination = copy;
 	return 1;

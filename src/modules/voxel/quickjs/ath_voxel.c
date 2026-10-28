@@ -137,7 +137,7 @@ static JSValue set_style(JSContext *ctx,JSValueConst self,int argc,JSValueConst 
     if(!JS_IsUndefined(v)&&!JS_IsNull(v)) {
         AthenaMaterial3D probe; JSValue holder=JS_NewObject(ctx);
         JS_SetPropertyStr(ctx,holder,"texture",JS_DupValue(ctx,v));
-        int ok=athena_model3d_js_material(ctx,holder,&probe);
+        int ok=athena_model3d_js_material_borrow(ctx,holder,&probe);
         JS_FreeValue(ctx,holder); JS_FreeValue(ctx,v);
         if(!ok) return JS_EXCEPTION;
         s.atlas=probe.texture;   /* a reference we own */

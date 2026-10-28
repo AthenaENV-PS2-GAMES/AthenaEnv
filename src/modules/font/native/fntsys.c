@@ -30,6 +30,11 @@ extern int size_quicksand_regular;
 
 #include FT_FREETYPE_H
 
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_FONT
+#include <athena/memory_tags.h>
+#endif
+
 // freetype vars
 static FT_Library font_library;
 static int font_library_ready;

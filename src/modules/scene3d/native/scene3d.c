@@ -200,7 +200,17 @@ int athena_node3d_set_morph_follower(AthenaNode3D *n,int follow) {
 void athena_node3d_get_weights(const AthenaNode3D *n,float weights[ATHENA_MODEL3D_MAX_TARGETS]) {
     for(uint32_t t=0;t<ATHENA_MODEL3D_MAX_TARGETS;t++) weights[t]=n?n->weights[t]:0;
 }
-const AthenaMesh3D *athena_node3d_mesh(const AthenaNode3D *n) { return n?n->mesh:NULL; }
+const AthenaMesh3D *athena_node3d_mesh_borrow(const AthenaNode3D *n) { return n?n->mesh:NULL; }
+int athena_node3d_mesh_pin(const AthenaNode3D *n,const AthenaMesh3D **out) {
+    if(!out) return ATHENA_SCENE3D_EINVAL;
+    *out=NULL;
+    if(!n) return ATHENA_SCENE3D_EINVAL;
+    if(n->mesh&&athena_mesh3d_pin_canonical(n->mesh)<0) return ATHENA_SCENE3D_ENOMEM;
+    *out=n->mesh; return 0;
+}
+const AthenaMesh3D *athena_node3d_mesh(const AthenaNode3D *n) {
+    const AthenaMesh3D *mesh; return athena_node3d_mesh_pin(n,&mesh)==0?mesh:NULL;
+}
 static int finite3(float x,float y,float z) { return athena_float_isfinite(x)&&athena_float_isfinite(y)&&athena_float_isfinite(z); }
 int athena_node3d_set_position(AthenaNode3D *n,float x,float y,float z) {
     if(!n||!finite3(x,y,z)) return ATHENA_SCENE3D_EINVAL;

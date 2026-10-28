@@ -921,6 +921,10 @@ static int font_module_init(JSContext *ctx, JSModuleDef *module)
     if (!font_system_initialized) {
         /* Glyph proportions follow the video mode, so the GS is set up first. */
         graphics_service_init();
+        if (!getGSGLOBAL()) {
+            JS_ThrowOutOfMemory(ctx);
+            return -1;
+        }
         fntInit();
         font_system_initialized = 1;
     }

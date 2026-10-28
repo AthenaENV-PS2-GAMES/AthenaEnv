@@ -22,6 +22,12 @@
 #include <debug.h>
 
 #include <athena/graphics/texture_manager.h>
+#include <athena/graphics/sync.h>
+
+#if defined(ATHENA_MEMORY_DIAGNOSTICS) && ATHENA_MEMORY_DIAGNOSTICS
+#define ATHENA_MEMORY_CATEGORY ATHENA_MEM_GRAPHICS
+#include <athena/memory_tags.h>
+#endif
 
 #define VIF1_MARK_CLEAN 65535
 
@@ -44,6 +50,17 @@ struct SVramBlock {
 	struct SVramBlock * pPrev;
 
 };
+
+#if ATHENA_MEMORY_DIAGNOSTICS
+static unsigned vram_peak;
+static uint64_t vram_evictions, vram_failures, queue_cancellations;
+static uint64_t linear_retirements, macroblock_retirements;
+#define VRAM_COUNT(field) (++field)
+#define VRAM_PEAK() do { unsigned live=texture_manager_used_memory(); if(live>vram_peak) vram_peak=live; } while(0)
+#else
+#define VRAM_COUNT(field) ((void)0)
+#define VRAM_PEAK() ((void)0)
+#endif
 
 static struct SVramBlock * __head = NULL;
 static int texture_upload_callback_id = -1;
@@ -260,6 +277,9 @@ static void texture_stream_upload(GSSURFACE *tex, bool texture, bool clut,
 			athena_surface_size(tex->Width, tex->Height, tex->PSM)));
 
 	packet = owl_query_packet(CHANNEL_VIF1, size);
+	/* Keep this on the surface: eviction/reset can remove the VRAM block
+	 * before the CPU pixel owner is destroyed. Reserve first (may flush). */
+	tex->UploadGeneration = owl_flush_generation();
 
 	owl_add_cnt_tag(packet, 0, owl_vif_code_double(
 		VIF_CODE(0, 0, VIF_NOP, 0), VIF_CODE(0, 0, VIF_FLUSHA, 0)));
@@ -354,13 +374,15 @@ void add_texture_upload_handler(int (*upload_callback)(int))
 
 void remove_texture_upload_handler()
 {
-	DIntr();
+	if (texture_upload_callback_id < 0)
+		return;
+	int enabled = DIntr();
 
 	DisableIntc(INTC_VIF1);
 
 	RemoveIntcHandler(INTC_VIF1, texture_upload_callback_id);
-
-	EIntr();
+	texture_upload_callback_id = -1;
+	if (enabled) EIntr();
 }
 
 
@@ -397,6 +419,8 @@ _blockCreate(unsigned int start, unsigned int size)
 
 
 	block = malloc(sizeof(struct SVramBlock));
+	if (!block)
+		return NULL;
 	
 	block->iStart = start;
 	block->iSize = size;
@@ -428,12 +452,26 @@ _blockInsertAfter(struct SVramBlock * block, struct SVramBlock * next)
 static inline struct SVramBlock *
 _blockSplitFreeAligned(struct SVramBlock * block, unsigned int size, unsigned int aligned_start)
 {
-	struct SVramBlock * pNewBlock;
+	struct SVramBlock * pNewBlock = NULL;
 	struct SVramBlock * pAlignmentBlock = NULL;
-
-	if (aligned_start > block->iStart) {
-		unsigned int padding = aligned_start - block->iStart;
+	unsigned int padding = aligned_start - block->iStart;
+	if (padding > block->iSize || size > block->iSize - padding)
+		return NULL;
+	/* Prepare both nodes before changing any address, size or link. */
+	if (padding) {
 		pAlignmentBlock = _blockCreate(block->iStart, padding);
+		if (!pAlignmentBlock)
+			return NULL;
+	}
+	if (block->iSize - padding > size) {
+		pNewBlock = _blockCreate(aligned_start + size, block->iSize - padding - size);
+		if (!pNewBlock) {
+			free(pAlignmentBlock);
+			return NULL;
+		}
+	}
+
+	if (pAlignmentBlock) {
 		pAlignmentBlock->pPrev = block->pPrev;
 		pAlignmentBlock->pNext = block;
 		if (block->pPrev != NULL)
@@ -445,11 +483,10 @@ _blockSplitFreeAligned(struct SVramBlock * block, unsigned int size, unsigned in
 		block->iSize -= padding;
 	}
 
-	if (block->iSize > size) {
-		pNewBlock = _blockCreate(block->iStart + size, block->iSize - size);
-		block->iSize = size;
+	if (pNewBlock) {
 		_blockInsertAfter(block, pNewBlock);
 	}
+	block->iSize = size;
 
 	return block;
 }
@@ -475,9 +512,15 @@ static inline struct SVramBlock *
 _blockSplitFree(struct SVramBlock * block, unsigned int size)
 {
 	struct SVramBlock * pNewBlock;
+	if (size > block->iSize)
+		return NULL;
+	if (size == block->iSize)
+		return block;
 
 	// Create second block with leftover size
 	pNewBlock = _blockCreate(block->iStart + size, block->iSize - size);
+	if (!pNewBlock)
+		return NULL;
 	// Shrink first block
 	block->iSize = size;
 	// Insert second block after first block
@@ -581,6 +624,7 @@ _blockAlloc(unsigned int size, bool page_aligned)
 				continue;
 			}
 			if ((block->tex != NULL) && !block->bLocked) {
+				VRAM_COUNT(vram_evictions);
 				block->tex = NULL;
 				block = _blockMergeFree(block);
 				
@@ -616,16 +660,19 @@ _blockAlloc(unsigned int size, bool page_aligned)
 // Public functions
 
 //---------------------------------------------------------------------------
-void texture_manager_init(GSCONTEXT *gsGlobal)
+int texture_manager_init(GSCONTEXT *gsGlobal)
 {
 	struct SVramBlock * block = __head;
+	struct SVramBlock * initial = _blockCreate(0, 4*1024*1024);
+	if (!initial)
+		return -1;
 
 	// Delete all blocks (if present)
 	while(block != NULL)
 		block = _blockRemove(block);
 
 	// Allocate the initial free block
-	__head = _blockCreate(0, 4*1024*1024);
+	__head = initial;
 	texture_upload_queue_top = 0;
 	memset(texture_upload_queue, 0, sizeof(texture_upload_queue));
 
@@ -636,6 +683,19 @@ void texture_manager_init(GSCONTEXT *gsGlobal)
 	}
 
 	async_upload_packet = owl_create_packet(CHANNEL_GIF, owl_packet_size(MAX_TEXTURE_PACKET_SIZE), async_upload_packet_buffer);
+	return 0;
+}
+
+void texture_manager_shutdown(void)
+{
+	/* Initialization only allocated screen metadata (Mem/Clut are NULL).
+	 * Pixel owners are released by their resource managers, not this list. */
+	while (__head)
+		__head = _blockRemove(__head);
+	memset(texture_upload_queue, 0, sizeof(texture_upload_queue));
+	texture_upload_queue_top = 0;
+	remove_texture_upload_handler();
+	async_upload_packet = NULL;
 }
 
 //---------------------------------------------------------------------------
@@ -681,13 +741,17 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		cheight = (tex->PSM == GS_PSM_T8) ? 16 : 2;
 		csize   = athena_vram_surface_size(cwidth, cheight, tex->ClutPSM);
 	}
-	if (tsize == UINT32_MAX || csize == UINT32_MAX)
-		return GRAPHICS_BIND_ERROR;
+	if (tsize == UINT32_MAX || csize == UINT32_MAX) {
+        VRAM_COUNT(vram_failures);
+        return GRAPHICS_BIND_ERROR;
+    }
 
 	if (block == NULL) {
 		block = _blockAlloc(tsize + csize, tex->PageAligned);
-		if (block == NULL)
-			return GRAPHICS_BIND_ERROR;
+		if (block == NULL) {
+            VRAM_COUNT(vram_failures);
+            return GRAPHICS_BIND_ERROR;
+        }
 		block_created = true;
 		block->tex = tex;
 		block->iUseCount = 0;
@@ -721,6 +785,7 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 			if (stream) {
 				/* Sent below, after the CLUT address is known. */
 			} else if (!async) {
+				tex->UploadGeneration = UINT64_MAX;
 				uploaded_bytes += athena_surface_size(tex->Width,
 					tex->Height, tex->PSM);
 				texture_send_macroblock(tex->Mem, tex->Width, tex->Height, tex->Vram, tex->PSM, tex->TBW);
@@ -740,11 +805,14 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		}
 
 		if (tex->Clut) {
-			SyncDCache(tex->Clut, (u8 *)(tex->Clut) + csize);
+			/* VRAM CLUT padding is not part of the CPU palette allocation. */
+			SyncDCache(tex->Clut, (u8 *)(tex->Clut) +
+				athena_surface_size(cwidth, cheight, tex->ClutPSM));
 
 			if (stream) {
 				/* Sent below, with the pixels. */
 			} else if (!async) {
+				tex->UploadGeneration = UINT64_MAX;
 				uploaded_bytes += athena_surface_size(cwidth, cheight,
 					tex->ClutPSM);
 				texture_send(tex->Clut, cwidth, cheight, tex->VramClut,
@@ -757,6 +825,7 @@ int texture_manager_bind(GSCONTEXT *gsGlobal, GSSURFACE *tex, bool async) {
 		}
 	}
 
+	VRAM_PEAK();
 	block->iUseCount++;
 
 	if (stream) {
@@ -914,8 +983,28 @@ unsigned int texture_manager_used_memory()
 	return total;
 }
 
+/* Main-thread retirement. Linear uploads need only their DMA-read ticket.
+ * A marked/started macroblock upload uses standalone PATH3 packets and can
+ * still be sampled by queued GS draws: drain those paths before recycling.
+ * Unmarked queued uploads are cancelled by free without a global wait. */
+static void texture_manager_wait_upload(GSSURFACE *tex)
+{
+	if (!tex || !tex->UploadGeneration)
+		return;
+	if (tex->Macroblock) {
+        VRAM_COUNT(macroblock_retirements);
+		graphics_wait_idle();
+		dmaKit_wait(DMA_CHANNEL_GIF, 0);
+	} else if (!owl_generation_read(tex->UploadGeneration)) {
+        VRAM_COUNT(linear_retirements);
+		owl_wait_generation(tex->UploadGeneration);
+	}
+	tex->UploadGeneration = 0;
+}
+
 void texture_manager_invalidate(GSSURFACE *tex)
 {
+	texture_manager_wait_upload(tex);
 	tex->Vram = 0;
 	tex->VramClut = 0;
 }
@@ -924,14 +1013,21 @@ void texture_manager_invalidate(GSSURFACE *tex)
 void texture_manager_free(GSSURFACE * tex)
 {
 	struct SVramBlock * block;
+	if (!tex)
+		return;
+	texture_manager_wait_upload(tex);
+	/* A surface may already have been evicted: cancel descriptor references
+	 * independently of allocator membership. */
+	for (int i = 0; i < TEXTURE_UPLOAD_QUEUE_SIZE; i++) {
+		if (texture_upload_queue[i] == tex) {
+            VRAM_COUNT(queue_cancellations);
+			texture_upload_queue[i] = NULL;
+        }
+	}
 
 	// Locate texture
 	for (block = __head; block != NULL; block = block->pNext) {
 		if(block->tex == tex) {
-			for (int i = 0; i < TEXTURE_UPLOAD_QUEUE_SIZE; i++) {
-				if (texture_upload_queue[i] == tex)
-					texture_upload_queue[i] = NULL;
-			}
 			// Free block
 			block->tex = NULL;
 			block->bLocked = 0;
@@ -955,6 +1051,9 @@ unsigned int texture_manager_uploaded_memory()
  */
 void texture_manager_add_mark(owl_packet *packet, int texture_id)
 {
+	if ((unsigned)texture_id < TEXTURE_UPLOAD_QUEUE_SIZE &&
+		texture_upload_queue[texture_id])
+		texture_upload_queue[texture_id]->UploadGeneration = owl_flush_generation();
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_NOP, 0));
 	owl_add_uint(packet, VIF_CODE(0, 0, VIF_FLUSH, 0));
@@ -983,4 +1082,69 @@ void texture_manager_nextFrame(GSCONTEXT * gsGlobal)
 			block->iUseCount = 0;
 		}
 	}
+}
+
+void texture_manager_stats_read(AthenaVramStats *out)
+{
+    if(!out) return;
+    memset(out,0,sizeof(*out));
+    out->total=4u*1024u*1024u;
+    out->initialized=__head!=NULL;
+#if ATHENA_MEMORY_DIAGNOSTICS
+    out->diagnostics_enabled=1; out->peak_used=vram_peak;
+    out->evictions=vram_evictions; out->allocation_failures=vram_failures;
+    out->queue_cancellations=queue_cancellations;
+    out->linear_retirements=linear_retirements;
+    out->macroblock_retirements=macroblock_retirements;
+#endif
+    for(struct SVramBlock *b=__head;b;b=b->pNext) {
+        out->nodes++;
+        GSSURFACE *t=b->tex;
+        if(!t) {
+            out->free+=b->iSize; out->free_intervals++;
+            if(b->iSize>out->largest_block) out->largest_block=b->iSize;
+            unsigned pad=align_to_page(b->iStart)-b->iStart;
+            unsigned available=pad<=b->iSize?b->iSize-pad:0;
+            if(available>out->largest_page_block) out->largest_page_block=available;
+            if(out->interval_count<ATHENA_VRAM_INTERVALS)
+                out->intervals[out->interval_count++]=(AthenaVramInterval){b->iStart,b->iSize};
+            continue;
+        }
+        out->used+=b->iSize;
+        if(b->bLocked) out->locked+=b->iSize;
+        if(t==main_screen_buffer[DRAW_BUFFER]||t==main_screen_buffer[DISPLAY_BUFFER])
+            out->framebuffer+=b->iSize;
+        else if(t==main_screen_buffer[DEPTH_BUFFER]) out->depth+=b->iSize;
+        else {
+            unsigned c=0;
+            if(t->Clut) c=athena_vram_surface_size(t->PSM==GS_PSM_T8?16:8,
+                t->PSM==GS_PSM_T8?16:2,t->ClutPSM);
+            /* Allocator size is authoritative even after mutable dimensions. */
+            if(c>b->iSize) c=0;
+            out->clut+=c;
+            if(!t->Mem && t->PageAligned) out->target+=b->iSize-c;
+            else out->texture+=b->iSize-c;
+        }
+        if(t->UploadGeneration && (t->Macroblock||!owl_generation_read(t->UploadGeneration))) {
+            out->pending_surfaces++;
+            void *pointers[2]={t->Mem,t->Clut};
+            for(unsigned i=0;i<2;i++) {
+                if(!pointers[i] || (i && pointers[i]==pointers[0])) continue;
+                int seen=0;
+                for(struct SVramBlock *prior=__head;prior!=b;prior=prior->pNext) {
+                    GSSURFACE *other=prior->tex;
+                    if(other && other->UploadGeneration &&
+                       (other->Macroblock || !owl_generation_read(other->UploadGeneration)) &&
+                       (pointers[i]==other->Mem || pointers[i]==other->Clut)) { seen=1; break; }
+                }
+                if(!seen) out->pending_cpu_payload+=i?athena_surface_size(t->PSM==GS_PSM_T8?16:8,
+                    t->PSM==GS_PSM_T8?16:2,t->ClutPSM):athena_surface_size(t->Width,t->Height,t->PSM);
+            }
+        }
+    }
+    /* IRQ only removes entries; scan without following its borrowed pointer. */
+    int enabled=DIntr();
+    for(unsigned i=0;i<TEXTURE_UPLOAD_QUEUE_SIZE;i++)
+        if(texture_upload_queue[i]) out->queued_uploads++;
+    if(enabled) EIntr();
 }
